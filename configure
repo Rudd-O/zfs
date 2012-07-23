@@ -627,6 +627,7 @@ LIBUUID
 ZLIB
 udevruledir
 udevdir
+dracutdir
 systemddir
 KERNELCPPFLAGS
 KERNELMAKE_PARAMS
@@ -819,6 +820,7 @@ with_linux_obj
 with_spl
 with_spl_obj
 with_systemddir
+with_dracutdir
 with_udevdir
 with_udevruledir
 with_blkid
@@ -1484,6 +1486,7 @@ Optional Packages:
   --with-spl=PATH         Path to spl source
   --with-spl-obj=PATH     Path to spl build objects
   --with-systemddir=DIR   install systemd helpers [[EPREFIX/lib/systemd]]
+  --with-dracutdir=DIR    install dracut helpers [[EPREFIX/lib/dracut]]
   --with-udevdir=DIR      install udev helpers [[EPREFIX/lib/udev]]
   --with-udevruledir=DIR  install udev rules [[UDEVDIR/rules.d]]
   --with-blkid            support blkid caching [default=check]
@@ -16524,6 +16527,18 @@ fi
 
 
 
+# Check whether --with-dracutdir was given.
+if test "${with_dracutdir+set}" = set; then :
+  withval=$with_dracutdir; dracutdir=$withval
+else
+  dracutdir='${exec_prefix}/lib/dracut'
+fi
+
+
+
+
+
+
 # Check whether --with-udevdir was given.
 if test "${with_udevdir+set}" = set; then :
   withval=$with_udevdir; udevdir=$withval
@@ -21699,6 +21714,18 @@ if test "${with_systemddir+set}" = set; then :
   withval=$with_systemddir; systemddir=$withval
 else
   systemddir='${exec_prefix}/lib/systemd'
+fi
+
+
+
+
+
+
+# Check whether --with-dracutdir was given.
+if test "${with_dracutdir+set}" = set; then :
+  withval=$with_dracutdir; dracutdir=$withval
+else
+  dracutdir='${exec_prefix}/lib/dracut'
 fi
 
 
