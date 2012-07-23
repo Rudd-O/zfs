@@ -460,7 +460,7 @@ main(int argc, char **argv)
 	 * The only exception to the above rule is '-o remount,ro'.  This is
 	 * always allowed for non-legacy datasets for rc.sysinit/umountroot
 	 * to safely remount the root filesystem and flush its cache.
-	 * 
+	 *
 	 * I have added an exception for remounting the root file system, as
 	 * many distributions do on boot.  This helps with ZFS-on-root.
 	 */

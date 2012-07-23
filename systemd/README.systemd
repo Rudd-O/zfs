@@ -20,13 +20,13 @@ HOW IT WORKS
 AUTOMATIC MOUNT DEPENDENCY TRACKING
 
 This generator will cooperate with interspersed file system types registered in /etc/fstab like this:
-    
+
     /dev/sda3   /       ext3
     tank/home   /home   zfs  # this works if the file system was set to legacy and registered in /etc/fstab
     /dev/sda4   /home/user      ext4
 
 This generator will operate correctly as well, even if any ZFS file systems were not set to legacy, but rather use the usual mountpoint property; a file system arrangement like this works fine too:
-    
+
     /dev/sda3 is ext3 and is registered on fstab to mount on /
     tank/home is ZFS and its mountpoint property is set to /home
     /dev/sda4 is XFS and is registered on fstab to mount on /home/user
@@ -42,9 +42,9 @@ One caveat: the root file system must be registered as the first line in /etc/fs
 Of course, GRUB2 does not yet have "official" support for ZFS on root, but with the Dracut support here, plus a little bit of trickery in the grub2-mkconfig script or hand-rolling grub.cfg, it can be done just fine.  Look at the patch in the grub2/ subdirectory.
 
 AUTOMATIC MULTIBOOT SUPPORT
-    
+
 This generator also has a very particular feature that is very useful for multi-booting Linux systems.  Suppose you have an arrangement of ZFS file systems in your pool as follows:
-    
+
     tank/RPOOL/fedora-16
     (mounts on / when Fedora 16 boots)
     tank/RPOOL/fedora-16/usr
@@ -83,16 +83,16 @@ TODO:
 
 - support mounting of pools backed by cryptsetup or other storage devices detected late in the boot process; right now it only works with whatever pools are available at VERY EARLY boot time, possibly even before all block devices are set up.  Maybe this is a role that can be fulfilled by the traditional initscript, or a different unit file that uses the logic built-in to the ZFS toolset; plan:
 	create a unit file zfs-late.service
-	
+
 	executes:
 	zpool import -a
 	zfs mount -a
-	
+
 	must run before local-fs.target
-	
+
 	must be wanted by local-fs.target
-	
-	must run after all known early zfs filesystem units have been mounted 
+
+	must run after all known early zfs filesystem units have been mounted
 
 	must run after fedora-storage-init-late.service
 

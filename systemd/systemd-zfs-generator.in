@@ -87,12 +87,12 @@ while read -r name mountpoint canmount ; do
 	if [ "$mountpoint" == "/sysroot" ] ; then continue ; fi
 	if [ "$mountpoint" == "legacy" ] ; then continue ; fi
 	if [ "$mountpoint" == "none" ] ; then continue ; fi
-	
+
 	echo -E "$mountpoint" >> "$gendir"/mountpoints
 done < "$gendir"/listing
 
 # we go through the output of zfs list
-# and generate all the units 
+# and generate all the units
 while read -r name mountpoint canmount ; do
 	if [ $canmount != on ] ; then continue ; fi
 	if [ "$mountpoint" == "/sysroot" ] ; then continue ; fi
