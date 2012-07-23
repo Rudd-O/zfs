@@ -129,11 +129,6 @@ rm -rf $RPM_BUILD_ROOT
 /lib/systemd/systemdescaper
 /lib/systemd/system-generators/systemd-zfs-generator
 
-%files systemd
-%defattr(-,root,root)
-/lib/systemd/systemdescaper
-/lib/systemd/system-generators/systemd-zfs-generator
-
 %post
 [ -x /sbin/chkconfig ] && /sbin/chkconfig --add zfs
 exit 0
