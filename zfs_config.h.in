@@ -105,6 +105,9 @@
 /* check_disk_size_change() is available */
 #undef HAVE_CHECK_DISK_SIZE_CHANGE
 
+/* clear_inode() is available */
+#undef HAVE_CLEAR_INODE
+
 /* super_block uses const struct xattr_hander */
 #undef HAVE_CONST_XATTR_HANDLER
 
@@ -125,6 +128,9 @@
 
 /* d_obtain_alias() is available */
 #undef HAVE_D_OBTAIN_ALIAS
+
+/* eops->encode_fh() wants child and parent inodes */
+#undef HAVE_ENCODE_FH_WITH_INODE
 
 /* sops->evict_inode() exists */
 #undef HAVE_EVICT_INODE
@@ -158,6 +164,9 @@
 
 /* fops->fallocate() exists */
 #undef HAVE_INODE_FALLOCATE
+
+/* iops->truncate_range() exists */
+#undef HAVE_INODE_TRUNCATE_RANGE
 
 /* insert_inode_locked() is available */
 #undef HAVE_INSERT_INODE_LOCKED
