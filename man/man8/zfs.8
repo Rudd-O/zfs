@@ -1,12 +1,32 @@
-'\" te
+'\" t
+.\"
+.\" CDDL HEADER START
+.\"
+.\" The contents of this file are subject to the terms of the
+.\" Common Development and Distribution License (the "License").
+.\" You may not use this file except in compliance with the License.
+.\"
+.\" You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
+.\" or http://www.opensolaris.org/os/licensing.
+.\" See the License for the specific language governing permissions
+.\" and limitations under the License.
+.\"
+.\" When distributing Covered Code, include this CDDL HEADER in each
+.\" file and include the License file at usr/src/OPENSOLARIS.LICENSE.
+.\" If applicable, add the following below this CDDL HEADER, with the
+.\" fields enclosed by brackets "[]" replaced with your own identifying
+.\" information: Portions Copyright [yyyy] [name of copyright owner]
+.\"
+.\" CDDL HEADER END
+.\"
+.\"
 .\" Copyright (c) 2009 Sun Microsystems, Inc. All Rights Reserved.
-.\" The contents of this file are subject to the terms of the Common Development and Distribution License (the "License").  You may not use this file except in compliance with the License. You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE or http://www.opensolaris.org/os/licensing.
-.\"  See the License for the specific language governing permissions and limitations under the License. When distributing Covered Code, include this CDDL HEADER in each file and include the License file at usr/src/OPENSOLARIS.LICENSE.  If applicable, add the following below this CDDL HEADER, with
-.\" the fields enclosed by brackets "[]" replaced with your own identifying information: Portions Copyright [yyyy] [name of copyright owner]
-.\" The contents of this file are subject to the terms of the Common Development and Distribution License (the "License").  You may not use this file except in compliance with the License. You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE or http://www.opensolaris.org/os/licensing.
-.\"  See the License for the specific language governing permissions and limitations under the License. When distributing Covered Code, include this CDDL HEADER in each file and include the License file at usr/src/OPENSOLARIS.LICENSE.  If applicable, add the following below this CDDL HEADER, with
-.\" the fields enclosed by brackets "[]" replaced with your own identifying information: Portions Copyright [yyyy] [name of copyright owner]
-.TH zfs 8 "8 Apr 2011" "ZFS pool 28, filesystem 5" "System Administration Commands"
+.\" Copyright 2011 Joshua M. Clulow <josh@sysmgr.org>
+.\" Copyright (c) 2012 by Delphix. All rights reserved.
+.\" Copyright (c) 2012, Joyent, Inc. All rights reserved.
+.\" Copyright 2012 Nexenta Systems, Inc. All Rights Reserved.
+.\"
+.TH zfs 8 "Jan 10, 2013" "ZFS pool 28, filesystem 5" "System Administration Commands"
 .SH NAME
 zfs \- configures ZFS file systems
 .SH SYNOPSIS
@@ -27,12 +47,12 @@ zfs \- configures ZFS file systems
 
 .LP
 .nf
-\fBzfs\fR \fBdestroy\fR [\fB-rRf\fR] \fIfilesystem\fR|\fIvolume\fR
+\fBzfs\fR \fBdestroy\fR [\fB-fnpRrv\fR] \fIfilesystem\fR|\fIvolume\fR
 .fi
 
 .LP
 .nf
-\fBzfs\fR \fBdestroy\fR [\fB-rRd\fR] \fIsnapshot\fR
+\fBzfs\fR \fBdestroy\fR [\fB-dnpRrv\fR] \fIfilesystem\fR|\fIvolume\fR@\fIsnap\fR[%\fIsnap\fR][,...]
 .fi
 
 .LP
@@ -58,13 +78,13 @@ zfs \- configures ZFS file systems
 
 .LP
 .nf
-\fBzfs\fR \fBrename\fR \fIfilesystem\fR|\fIvolume\fR|\fIsnapshot\fR 
+\fBzfs\fR \fBrename\fR [\fB-f\fR] \fIfilesystem\fR|\fIvolume\fR|\fIsnapshot\fR
      \fIfilesystem\fR|\fIvolume\fR|\fIsnapshot\fR
 .fi
 
 .LP
 .nf
-\fBzfs\fR \fBrename\fR [\fB-p\fR] \fIfilesystem\fR|\fIvolume\fR \fIfilesystem\fR|\fIvolume\fR
+\fBzfs\fR \fBrename\fR [\fB-fp\fR] \fIfilesystem\fR|\fIvolume\fR \fIfilesystem\fR|\fIvolume\fR
 .fi
 
 .LP
@@ -85,8 +105,8 @@ zfs \- configures ZFS file systems
 
 .LP
 .nf
-\fBzfs\fR \fBget\fR [\fB-r\fR|\fB-d\fR \fIdepth\fR][\fB-Hp\fR][\fB-o\fR \fIfield\fR[,...]] [\fB-s\fR \fIsource\fR[,...]]
-     "\fIall\fR" | \fIproperty\fR[,...] \fIfilesystem\fR|\fIvolume\fR|\fIsnapshot\fR ...
+\fBzfs\fR \fBget\fR [\fB-r\fR|\fB-d\fR \fIdepth\fR][\fB-Hp\fR][\fB-o\fR \fIfield\fR[,...]] [\fB-t\fR \fItype\fR[,...]] 
+    [\fB-s\fR \fIsource\fR[,...]] "\fIall\fR" | \fIproperty\fR[,...] \fIfilesystem\fR|\fIvolume\fR|\fIsnapshot\fR ...
 .fi
 
 .LP
@@ -106,14 +126,14 @@ zfs \- configures ZFS file systems
 
 .LP
 .nf
-\fBzfs\fR \fBuserspace\fR [\fB-niHp\fR] [\fB-o\fR \fIfield\fR[,...]] [\fB-sS\fR \fIfield\fR] ...
-     [\fB-t\fR \fItype\fR [,...]] \fIfilesystem\fR|\fIsnapshot\fR
+\fBzfs\fR \fBuserspace\fR [\fB-Hinp\fR] [\fB-o\fR \fIfield\fR[,...]] [\fB-s\fR \fIfield\fR] ...
+    [\fB-S\fR \fIfield\fR] ... [\fB-t\fR \fItype\fR[,...]] \fIfilesystem\fR|\fIsnapshot\fR
 .fi
 
 .LP
 .nf
-\fBzfs\fR \fBgroupspace\fR [\fB-niHp\fR] [\fB-o\fR \fIfield\fR[,...]] [\fB-sS\fR \fIfield\fR] ...
-     [\fB-t\fR \fItype\fR [,...]] \fIfilesystem\fR|\fIsnapshot\fR
+\fBzfs\fR \fBgroupspace\fR [\fB-Hinp\fR] [\fB-o\fR \fIfield\fR[,...]] [\fB-s\fR \fIfield\fR] ...
+    [\fB-S\fR \fIfield\fR] ... [\fB-t\fR \fItype\fR[,...]] \fIfilesystem\fR|\fIsnapshot\fR
 .fi
 
 .LP
@@ -143,7 +163,7 @@ zfs \- configures ZFS file systems
 
 .LP
 .nf
-\fBzfs\fR \fBsend\fR [\fB-vRDp\fR] [\fB-\fR[\fBiI\fR] \fIsnapshot\fR] \fIsnapshot\fR
+\fBzfs\fR \fBsend\fR [\fB-DnPpRv\fR] [\fB-\fR[\fBiI\fR] \fIsnapshot\fR] \fIsnapshot\fR
 .fi
 
 .LP
@@ -153,7 +173,7 @@ zfs \- configures ZFS file systems
 
 .LP
 .nf
-\fBzfs\fR \fBreceive | recv\fR [\fB-vnFu\fR] \fB-d\fR \fIfilesystem\fR
+\fBzfs\fR \fBreceive | recv\fR [\fB-vnFu\fR] [\fB-d\fR|\fB-e\fR] \fIfilesystem\fR
 .fi
 
 .LP
@@ -217,6 +237,10 @@ zfs \- configures ZFS file systems
 .nf
 \fBzfs\fR \fBrelease\fR [\fB-r\fR] \fItag\fR \fIsnapshot\fR...
 .fi
+
+.LP
+.nf
+\fBzfs\fR \fBdiff\fR [\fB-FHt\fR] \fIsnapshot\fR \fIsnapshot|filesystem\fR
 
 .SH DESCRIPTION
 .sp
@@ -315,6 +339,10 @@ A file system \fBmountpoint\fR property of \fBnone\fR prevents the file system f
 .sp
 .LP
 If needed, \fBZFS\fR file systems can also be managed with traditional tools (\fBmount\fR, \fBumount\fR, \fB/etc/fstab\fR). If a file system's mount point is set to \fBlegacy\fR, \fBZFS\fR makes no attempt to manage the file system, and the administrator is responsible for mounting and unmounting the file system.
+.SS "Deduplication"
+.sp
+.LP
+Deduplication is the process for removing redundant data at the block-level, reducing the total amount of data stored. If a file system has the \fBdedup\fR property enabled, duplicate data blocks are removed synchronously.  The result is that only unique data is stored and common components are shared among files.
 .SS "Native Properties"
 .sp
 .LP
@@ -378,6 +406,19 @@ The time this dataset was created.
 .ne 2
 .mk
 .na
+\fB\fBclones\fR\fR
+.ad
+.sp .6
+.RS 4n
+For snapshots, this property is a comma-separated list of filesystems or
+volumes which are clones of this snapshot.  The clones' \fBorigin\fR property
+is this snapshot.  If the \fBclones\fR property is not empty, then this
+snapshot can not be destroyed (even with the \fB-r\fR or \fB-f\fR options).
+.RE
+
+.sp
+.ne 2
+.na
 \fB\fBdefer_destroy\fR\fR
 .ad
 .sp .6
@@ -404,7 +445,7 @@ For file systems, indicates whether the file system is currently mounted. This p
 .ad
 .sp .6
 .RS 4n
-For cloned file systems or volumes, the snapshot from which the clone was created. The origin cannot be destroyed (even with the \fB-r\fR or \fB-f\fR options) so long as a clone exists.
+For cloned file systems or volumes, the snapshot from which the clone was created. See also the \fBclones\fR property.
 .RE
 
 .sp
@@ -591,6 +632,36 @@ This property can also be referred to by its shortened column name, \fBvolblock\
 .RE
 
 .sp
+.ne 2
+.na
+\fB\fBwritten\fR\fR
+.ad
+.sp .6
+.RS 4n
+The amount of \fBreferenced\fR space written to this dataset since the
+previous snapshot.
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fBwritten@\fR\fIsnapshot\fR\fR
+.ad
+.sp .6
+.RS 4n
+The amount of \fBreferenced\fR space written to this dataset since the
+specified snapshot.  This is the space that is referenced by this dataset
+but was not referenced by the specified snapshot.
+.sp
+The \fIsnapshot\fR may be specified as a short snapshot name (just the part
+after the \fB@\fR), in which case it will be interpreted as a snapshot in
+the same filesystem as this dataset.
+The \fIsnapshot\fR be a full snapshot name (\fIfilesystem\fR@\fIsnapshot\fR),
+which for clones may be a snapshot in the origin's filesystem (or the origin
+of the origin's filesystem, etc).
+.RE
+
+.sp
 .LP
 The following native properties can be used to change the behavior of a \fBZFS\fR dataset.
 .sp
@@ -690,6 +761,19 @@ Changing this property only affects newly-written data. Therefore, set this prop
 .ne 2
 .mk
 .na
+\fB\fBdedup\fR=\fBon\fR | \fBoff\fR | \fBverify\fR | \fBsha256\fR[,\fBverify\fR]\fR
+.ad
+.sp .6
+.RS 4n
+Controls whether deduplication is in effect for a dataset. The default value is \fBoff\fR. The default checksum used for deduplication is \fBsha256\fR (subject to change). When \fBdedup\fR is enabled, the \fBdedup\fR checksum algorithm overrides the \fBchecksum\fR property. Setting the value to \fBverify\fR is equivalent to specifying \fBsha256,verify\fR.
+.sp
+If the property is set to \fBverify\fR, then, whenever two blocks have the same signature, ZFS will do a byte-for-byte comparison with the existing block to ensure that the contents are identical.
+.RE
+
+.sp
+.ne 2
+.mk
+.na
 \fB\fBdevices\fR=\fBon\fR | \fBoff\fR\fR
 .ad
 .sp .6
@@ -706,6 +790,25 @@ Controls whether device nodes can be opened on this file system. The default val
 .sp .6
 .RS 4n
 Controls whether processes can be executed from within this file system. The default value is \fBon\fR.
+.RE
+
+.sp
+.ne 2
+.mk
+.na
+\fB\fBmlslabel\fR=\fIlabel\fR | \fBnone\fR\fR
+.ad
+.sp .6
+.RS 4n
+The \fBmlslabel\fR property is a sensitivity label that determines if a dataset  can be mounted in a zone on a system with Trusted Extensions enabled. If the labeled dataset matches the labeled zone, the dataset can be mounted  and accessed from the labeled zone.
+.sp
+When the \fBmlslabel\fR property is not set, the default value is \fBnone\fR. Setting the  \fBmlslabel\fR property to \fBnone\fR is equivalent to removing the property.
+.sp
+The \fBmlslabel\fR property can be modified only when Trusted Extensions is enabled and only with appropriate privilege. Rights to modify it cannot be delegated. When changing a label to a higher label or setting the initial dataset label, the \fB{PRIV_FILE_UPGRADE_SL}\fR privilege is required. When changing a label to a lower label or the default (\fBnone\fR), the \fB{PRIV_FILE_DOWNGRADE_SL}\fR privilege is required. Changing the dataset to labels other than the default can be done only when the dataset is not mounted. When a dataset with the default label is mounted into a labeled-zone, the mount operation automatically sets the \fBmlslabel\fR property to the label of that zone.
+.sp
+When Trusted Extensions is \fBnot\fR enabled, only datasets with the default label (\fBnone\fR) can be mounted.
+.sp
+Zones are a Solaris feature and are not relevant on Linux.
 .RE
 
 .sp
@@ -764,7 +867,7 @@ Quotas cannot be set on volumes, as the \fBvolsize\fR property acts as an implic
 .ad
 .sp .6
 .RS 4n
-Limits the amount of space consumed by the specified user. User space consumption is identified by the \fBuserspace@\fR\fIuser\fR property.
+Limits the amount of space consumed by the specified user. Similar to the \fBrefquota\fR property, the \fBuserquota\fR space calculation does not include space that is used by descendent datasets, such as snapshots and clones. User space consumption is identified by the \fBuserspace@\fR\fIuser\fR property.
 .sp
 Enforcement of user quotas may be delayed by several seconds. This delay means that a user might exceed their quota before the system notices that they are over quota and begins to refuse additional writes with the \fBEDQUOT\fR error message . See the \fBzfs userspace\fR subcommand for more information.
 .sp
@@ -920,17 +1023,29 @@ You might want to set \fBshareiscsi=on\fR for a file system so that all \fBZFS\f
 .ne 2
 .mk
 .na
-\fB\fBsharesmb\fR=\fBon\fR | \fBoff\fR | \fIopts\fR\fR
+\fB\fBsharesmb\fR=\fBon\fR | \fBoff\fR
 .ad
 .sp .6
 .RS 4n
-Controls whether the file system is shared by using the Solaris \fBCIFS\fR service, and what options are to be used. A file system with the \fBsharesmb\fR property set to \fBoff\fR is managed through traditional tools such as \fBsharemgr\fR(1M). Otherwise, the file system is automatically shared and unshared with the \fBzfs share\fR and \fBzfs unshare\fR commands. If the property is set to \fBon\fR, the \fBsharemgr\fR(1M) command is invoked with no options. Otherwise, the \fBsharemgr\fR(1M) command is invoked with options equivalent to the contents of this property.
+Controls whether the file system is shared by using \fBSamba USERSHARES\fR, and what options are to be used. Otherwise, the file system is automatically shared and unshared with the \fBzfs share\fR and \fBzfs unshare\fR commands. If the property is set to \fBon\fR, the \fBnet\fR(8) command is invoked to create a \fBUSERSHARE\fR.
 .sp
-Because \fBSMB\fR shares requires a resource name, a unique resource name is constructed from the dataset name. The constructed name is a copy of the dataset name except that the characters in the dataset name, which would be illegal in the resource name, are replaced with underscore (\fB_\fR) characters. A pseudo property "name" is also supported that allows you to replace the data set name with a specified name. The specified name is then used to replace the prefix dataset in the case of inheritance. For example, if the dataset \fBdata/home/john\fR is set to \fBname=john\fR, then \fBdata/home/john\fR has a resource name of \fBjohn\fR. If a child dataset of \fBdata/home/john/backups\fR, it has a resource name of \fBjohn_backups\fR.
+Because \fBSMB\fR shares requires a resource name, a unique resource name is constructed from the dataset name. The constructed name is a copy of the dataset name except that the characters in the dataset name, which would be illegal in the resource name, are replaced with underscore (\fB_\fR) characters. The ZFS On Linux driver does not (yet) support additional options which might be availible in the Solaris version.
 .sp
-When SMB shares are created, the SMB share name appears as an entry in the \fB\&.zfs/shares\fR directory. You can use the \fBls\fR or \fBchmod\fR command to display the share-level ACLs on the entries in this directory.
+If the \fBsharesmb\fR property is set to \fBoff\fR, the file systems are unshared.
 .sp
-When the \fBsharesmb\fR property is changed for a dataset, the dataset and any children inheriting the property are re-shared with the new options, only if the property was previously set to \fBoff\fR, or if they were shared before the property was changed. If the new property is set to \fBoff\fR, the file systems are unshared.
+In Linux, the share is created with the acl "Everyone:F" by default, meaning that everyone have read access. This however isn't the full truth: Any access control on the underlaying filesystem supersedes this.
+.sp
+.ne 2
+.mk
+.na
+\fBMinimal /etc/samba/smb.conf configuration\fR
+.sp
+.in +2
+* Samba will need to listen to 'localhost' (127.0.0.1) for the zfs utilities to communitate with samba.  This is the default behavior for most Linux distributions.
+.sp
+* See the \fBUSERSHARE\fR section of the \fBsmb.conf\fR(5) man page for all configuration options.
+.sp
+.in -2
 .RE
 
 .sp
@@ -971,6 +1086,26 @@ Controls whether the \fB\&.zfs\fR directory is hidden or visible in the root of 
 .sp
 .ne 2
 .mk
+.na
+\fB\fBsync\fR=\fBdefault\fR | \fBalways\fR | \fBdisabled\fR\fR
+.ad
+.sp .6
+.RS 4n
+Controls the behavior of synchronous requests (e.g. fsync, O_DSYNC).
+\fBdefault\fR is the POSIX specified behavior of ensuring all synchronous
+requests are written to stable storage and all devices are flushed to ensure
+data is not cached by device controllers (this is the default). \fBalways\fR
+causes every file system transaction to be written and flushed before its
+system call returns. This has a large performance penalty. \fBdisabled\fR
+disables synchronous requests. File system transactions are only committed to
+stable storage periodically. This option will give the highest performance.
+However, it is very dangerous as ZFS would be ignoring the synchronous
+transaction demands of applications such as databases or NFS.  Administrators
+should only use this option when the risks are understood.
+.RE
+
+.sp
+.ne 2
 .na
 \fB\fBversion\fR=\fB1\fR | \fB2\fR | \fBcurrent\fR\fR
 .ad
@@ -1214,7 +1349,7 @@ Equivalent to \fB-o\fR \fBvolblocksize\fR=\fIblocksize\fR. If this option is spe
 .ne 2
 .mk
 .na
-\fB\fBzfs destroy\fR [\fB-rRf\fR] \fIfilesystem\fR|\fIvolume\fR\fR
+\fBzfs destroy\fR [\fB-fnpRrv\fR] \fIfilesystem\fR|\fIvolume\fR
 .ad
 .sp .6
 .RS 4n
@@ -1252,6 +1387,39 @@ Recursively destroy all dependents, including cloned file systems outside the ta
 Force an unmount of any file systems using the \fBunmount -f\fR command. This option has no effect on non-file systems or unmounted file systems.
 .RE
 
+.sp
+.ne 2
+.na
+\fB\fB-n\fR\fR
+.ad
+.sp .6
+.RS 4n
+Do a dry-run ("No-op") deletion.  No data will be deleted.  This is
+useful in conjunction with the \fB-v\fR or \fB-p\fR flags to determine what
+data would be deleted.
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fB-p\fR\fR
+.ad
+.sp .6
+.RS 4n
+Print machine-parsable verbose information about the deleted data.
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fB-v\fR\fR
+.ad
+.sp .6
+.RS 4n
+Print verbose information about the deleted data.
+.RE
+.sp
+
 Extreme care should be taken when applying either the \fB-r\fR or the \fB-R\fR options, as they can destroy large portions of a pool and cause unexpected behavior for mounted file systems in use.
 .RE
 
@@ -1259,13 +1427,25 @@ Extreme care should be taken when applying either the \fB-r\fR or the \fB-R\fR o
 .ne 2
 .mk
 .na
-\fB\fBzfs destroy\fR [\fB-rRd\fR] \fIsnapshot\fR\fR
+\fBzfs destroy\fR [\fB-dnpRrv\fR] \fIfilesystem\fR|\fIvolume\fR@\fIsnap\fR[%\fIsnap\fR][,...]
 .ad
 .sp .6
 .RS 4n
-The given snapshot is destroyed immediately if and only if the \fBzfs destroy\fR command without the \fB-d\fR option would have destroyed it. Such immediate destruction would occur, for example, if the snapshot had no clones and the user-initiated reference count were zero.
+The given snapshots are destroyed immediately if and only if the \fBzfs destroy\fR command without the \fB-d\fR option would have destroyed it. Such immediate destruction would occur, for example, if the snapshot had no clones and the user-initiated reference count were zero.
 .sp
-If the snapshot does not qualify for immediate destruction, it is marked for deferred destruction. In this state, it exists as a usable, visible snapshot until both of the preconditions listed above are met, at which point it is destroyed.
+If a snapshot does not qualify for immediate destruction, it is marked for deferred destruction. In this state, it exists as a usable, visible snapshot until both of the preconditions listed above are met, at which point it is destroyed.
+.sp
+An inclusive range of snapshots may be specified by separating the
+first and last snapshots with a percent sign.
+The first and/or last snapshots may be left blank, in which case the
+filesystem's oldest or newest snapshot will be implied.
+.sp
+Multiple snapshots
+(or ranges of snapshots) of the same filesystem or volume may be specified
+in a comma-separated list of snapshots.
+Only the snapshot's short name (the
+part after the \fB@\fR) should be specified when using a range or
+comma-separated list to identify multiple snapshots.
 .sp
 .ne 2
 .mk
@@ -1297,6 +1477,44 @@ Destroy (or mark for deferred destruction) all snapshots with this name in desce
 .sp .6
 .RS 4n
 Recursively destroy all dependents.
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fB-n\fR\fR
+.ad
+.sp .6
+.RS 4n
+Do a dry-run ("No-op") deletion.  No data will be deleted.  This is
+useful in conjunction with the \fB-v\fR or \fB-p\fR flags to determine what
+data would be deleted.
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fB-p\fR\fR
+.ad
+.sp .6
+.RS 4n
+Print machine-parsable verbose information about the deleted data.
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fB-v\fR\fR
+.ad
+.sp .6
+.RS 4n
+Print verbose information about the deleted data.
+.RE
+
+.sp
+Extreme care should be taken when applying either the \fB-r\fR or the \fB-f\fR
+options, as they can destroy large portions of a pool and cause unexpected
+behavior for mounted file systems in use.
 .RE
 
 .RE
@@ -1430,7 +1648,7 @@ The snapshot that was cloned, and any snapshots previous to this snapshot, are n
 .ne 2
 .mk
 .na
-\fB\fBzfs rename\fR \fIfilesystem\fR|\fIvolume\fR|\fIsnapshot\fR\fR
+\fB\fBzfs rename\fR [\fB-f\fR] \fIfilesystem\fR|\fIvolume\fR|\fIsnapshot\fR\fR
 .ad
 .br
 .na
@@ -1438,7 +1656,7 @@ The snapshot that was cloned, and any snapshots previous to this snapshot, are n
 .ad
 .br
 .na
-\fB\fBzfs rename\fR [\fB-p\fR] \fIfilesystem\fR|\fIvolume\fR \fIfilesystem\fR|\fIvolume\fR\fR
+\fB\fBzfs rename\fR [\fB-fp\fR] \fIfilesystem\fR|\fIvolume\fR \fIfilesystem\fR|\fIvolume\fR\fR
 .ad
 .sp .6
 .RS 4n
@@ -1452,6 +1670,16 @@ Renames the given dataset. The new target can be located anywhere in the \fBZFS\
 .sp .6
 .RS 4n
 Creates all the nonexistent parent datasets. Datasets created in this manner are automatically mounted according to the \fBmountpoint\fR property inherited from their parent.
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fB-f\fR\fR
+.ad
+.sp .6
+.RS 4n
+Force unmount any filesystems that need to be unmounted in the process.
 .RE
 
 .RE
@@ -1620,7 +1848,7 @@ Sets the property to the given value for each dataset. Only some properties can 
 .ne 2
 .mk
 .na
-\fB\fBzfs get\fR [\fB-r\fR|\fB-d\fR \fIdepth\fR] [\fB-Hp\fR] [\fB-o\fR \fIfield\fR[,...] [\fB-s\fR \fIsource\fR[,...] "\fIall\fR" | \fIproperty\fR[,...] \fIfilesystem\fR|\fIvolume\fR|\fIsnapshot\fR ...\fR
+\fB\fBzfs get\fR [\fB-r\fR|\fB-d\fR \fIdepth\fR] [\fB-Hp\fR] [\fB-o\fR \fIfield\fR[,...] [\fB-t\fR \fItype\fR[,...]] [\fB-s\fR \fIsource\fR[,...] "\fIall\fR" | \fIproperty\fR[,...] \fIfilesystem\fR|\fIvolume\fR|\fIsnapshot\fR ...\fR
 .ad
 .sp .6
 .RS 4n
@@ -1804,11 +2032,16 @@ Upgrade to the specified \fIversion\fR. If the \fB-V\fR flag is not specified, t
 .ne 2
 .mk
 .na
-\fB\fBzfs userspace\fR [\fB-niHp\fR] [\fB-o\fR \fIfield\fR[,...]] [\fB-sS\fR \fIfield\fR]... [\fB-t\fR \fItype\fR [,...]] \fIfilesystem\fR | \fIsnapshot\fR\fR
+\fBzfs\fR \fBuserspace\fR [\fB-Hinp\fR] [\fB-o\fR \fIfield\fR[,...]]
+[\fB-s\fR \fIfield\fR] ...
+[\fB-S\fR \fIfield\fR] ...
+[\fB-t\fR \fItype\fR[,...]] \fIfilesystem\fR|\fIsnapshot\fR
 .ad
 .sp .6
 .RS 4n
-Displays space consumed by, and quotas on, each user in the specified filesystem or snapshot. This corresponds to the \fBuserused@\fR\fIuser\fR and \fBuserquota@\fR\fIuser\fR properties.
+Displays space consumed by, and quotas on, each user in the specified
+filesystem or snapshot. This corresponds to the \fBuserused@\fR\fIuser\fR and
+\fBuserquota@\fR\fIuser\fR properties.
 .sp
 .ne 2
 .mk
@@ -1839,7 +2072,7 @@ Do not print headers, use tab-delimited output.
 .ad
 .sp .6
 .RS 4n
-Use exact (parseable) numeric output.
+Use exact (parsable) numeric output.
 .RE
 
 .sp
@@ -1850,7 +2083,8 @@ Use exact (parseable) numeric output.
 .ad
 .sp .6
 .RS 4n
-Display only the specified fields from the following set, \fBtype,name,used,quota\fR.The default is to display all fields.
+Display only the specified fields from the following
+set: \fBtype, name, used, quota\fR. The default is to display all fields.
 .RE
 
 .sp
@@ -1861,7 +2095,9 @@ Display only the specified fields from the following set, \fBtype,name,used,quot
 .ad
 .sp .6
 .RS 4n
-Sort output by this field. The \fIs\fR and \fIS\fR flags may be specified multiple times to sort first by one field, then by another. The default is \fB-s type\fR \fB-s name\fR.
+Sort output by this field. The \fIs\fR and \fIS\fR flags may be specified
+multiple times to sort first by one field, then by another. The default is
+\fB-s type\fR \fB-s name\fR.
 .RE
 
 .sp
@@ -1883,11 +2119,10 @@ Sort by this field in reverse order. See \fB-s\fR.
 .ad
 .sp .6
 .RS 4n
-Print only the specified types from the following set, \fBall,posixuser,smbuser,posixgroup,smbgroup\fR.
-.sp
-The default is \fB-t posixuser,smbuser\fR
-.sp
-The default can be changed to include group types.
+Print only the specified types from the following
+set: \fBall, posixuser, smbuser, posixgroup, smbgroup\fR. The default
+is \fB-t posixuser,smbuser\fR. The default can be changed to include group
+types.
 .RE
 
 .sp
@@ -1898,7 +2133,14 @@ The default can be changed to include group types.
 .ad
 .sp .6
 .RS 4n
-Translate SID to POSIX ID. The POSIX ID may be ephemeral if no mapping exists. Normal POSIX interfaces (for example, \fBstat\fR(2), \fBls\fR \fB-l\fR) perform this translation, so the \fB-i\fR option allows the output from \fBzfs userspace\fR to be compared directly with those utilities. However, \fB-i\fR may lead to confusion if some files were created by an SMB user before a SMB-to-POSIX name mapping was established. In such a case, some files are owned by the SMB entity and some by the POSIX entity. However, the \fB-i\fR option will report that the POSIX entity has the total usage and quota for both.
+Translate SID to POSIX ID. The POSIX ID may be ephemeral if no mapping exists.
+Normal POSIX interfaces (for example, \fBstat\fR(2), \fBls\fR \fB-l\fR) perform
+this translation, so the \fB-i\fR option allows the output from \fBzfs
+userspace\fR to be compared directly with those utilities. However, \fB-i\fR
+may lead to confusion if some files were created by an SMB user before a
+SMB-to-POSIX name mapping was established. In such a case, some files will be owned
+by the SMB entity and some by the POSIX entity. However, the \fB-i\fR option
+will report that the POSIX entity has the total usage and quota for both.
 .RE
 
 .RE
@@ -1907,19 +2149,16 @@ Translate SID to POSIX ID. The POSIX ID may be ephemeral if no mapping exists. N
 .ne 2
 .mk
 .na
-\fB\fBzfs groupspace\fR [\fB-niHp\fR] [\fB-o\fR \fIfield\fR[,...]] [\fB-sS\fR \fIfield\fR]... [\fB-t\fR \fItype\fR [,...]] \fIfilesystem\fR | \fIsnapshot\fR\fR
+\fBzfs\fR \fBgroupspace\fR [\fB-Hinp\fR] [\fB-o\fR \fIfield\fR[,...]]
+[\fB-s\fR \fIfield\fR] ...
+[\fB-S\fR \fIfield\fR] ...
+[\fB-t\fR \fItype\fR[,...]] \fIfilesystem\fR|\fIsnapshot\fR
 .ad
 .sp .6
 .RS 4n
-Displays space consumed by, and quotas on, each group in the specified filesystem or snapshot. This subcommand is identical to \fBzfs userspace\fR, except that the default types to display are \fB-t posixgroup,smbgroup\fR.
-.sp
-.in +2
-.nf
--
-.fi
-.in -2
-.sp
-
+Displays space consumed by, and quotas on, each group in the specified
+filesystem or snapshot. This subcommand is identical to \fBzfs userspace\fR,
+except that the default types to display are \fB-t posixgroup,smbgroup\fR.
 .RE
 
 .sp
@@ -1950,7 +2189,9 @@ Mounts \fBZFS\fR file systems. Invoked automatically as part of the boot process
 .ad
 .sp .6
 .RS 4n
-An optional, comma-separated list of mount options to use temporarily for the duration of the mount. See the "Temporary Mount Point Properties" section for details.
+An optional, comma-separated list of mount options to use temporarily for the
+duration of the mount. See the "Temporary Mount Point Properties" section for
+details.
 .RE
 
 .sp
@@ -1983,7 +2224,8 @@ Report mount progress.
 .ad
 .sp .6
 .RS 4n
-Mount all available \fBZFS\fR file systems. Invoked automatically as part of the boot process. 
+Mount all available \fBZFS\fR file systems. Invoked automatically as part of
+the boot process.
 .RE
 
 .sp
@@ -2113,7 +2355,7 @@ Unshare the specified filesystem. The command can also be given a path to a \fBZ
 .ne 2
 .mk
 .na
-\fB\fBzfs send\fR [\fB-vRDp\fR] [\fB-\fR[\fBiI\fR] \fIsnapshot\fR] \fIsnapshot\fR\fR
+\fBzfs send\fR [\fB-DnPpRv\fR] [\fB-\fR[\fBiI\fR] \fIsnapshot\fR] \fIsnapshot\fR
 .ad
 .sp .6
 .RS 4n
@@ -2146,17 +2388,6 @@ Generate a stream package that sends all intermediary snapshots from the first s
 .ne 2
 .mk
 .na
-\fB\fB-v\fR\fR
-.ad
-.sp .6
-.RS 4n
-Print verbose information about the stream package generated.
-.RE
-
-.sp
-.ne 2
-.mk
-.na
 \fB\fB-R\fR\fR
 .ad
 .sp .6
@@ -2174,9 +2405,7 @@ If the \fB-i\fR or \fB-I\fR flags are used in conjunction with the \fB-R\fR flag
 .ad
 .sp .6
 .RS 4n
-This option will cause dedup processing to be performed on the data being written to a send stream.  Dedup processing is optional because it isn't always appropriate (some kinds of data have very little duplication) and it has significant costs:  the checksumming required to detect duplicate blocks is CPU-intensive and the data that must be maintained while the stream is being processed can occupy a very large amount of memory.
-.sp
-Duplicate blocks are detected by calculating a cryptographically strong checksum on each data block.  Blocks that have the same checksum are presumed to be identical.  The checksum type used at this time is SHA256.  However, the stream format contains a field which identifies the checksum type, permitting other checksums to be used in the future.
+Generate a deduplicated stream. Blocks which would have been sent multiple times in the send stream will only be sent once. The receiving system must also support this feature to recieve a deduplicated stream.  This flag can be used regardless of the dataset's dedup  property, but performance will be much better if the filesystem uses a dedup-capable checksum (eg.  sha256).
 .RE
 
 .sp
@@ -2187,7 +2416,41 @@ Duplicate blocks are detected by calculating a cryptographically strong checksum
 .ad
 .sp .6
 .RS 4n
-Include properties in the send stream without the -R option.
+Include the dataset's properties in the stream.  This flag is implicit when -R is specified.  The receiving system must also support this feature.
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fB-n\fR\fR
+.ad
+.sp .6
+.RS 4n
+Do a dry-run ("No-op") send.  Do not generate any actual send data.  This is
+useful in conjunction with the \fB-v\fR or \fB-P\fR flags to determine what
+data will be sent.
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fB-P\fR\fR
+.ad
+.sp .6
+.RS 4n
+Print machine-parsable verbose information about the stream package generated.
+.RE
+
+.sp
+.ne 2
+.mk
+.na
+\fB\fB-v\fR\fR
+.ad
+.sp .6
+.RS 4n
+Print verbose information about the stream package generated.  This information
+includes a per-second report of how much data has been sent.
 .RE
 
 The format of the stream is committed. You will be able to receive your streams on future versions of \fBZFS\fR.
@@ -2201,7 +2464,7 @@ The format of the stream is committed. You will be able to receive your streams 
 .ad
 .br
 .na
-\fB\fBzfs receive\fR [\fB-vnFu\fR] \fB-d\fR \fIfilesystem\fR\fR
+\fB\fBzfs receive\fR [\fB-vnFu\fR] [\fB-d\fR|\fB-e\fR] \fIfilesystem\fR\fR
 .ad
 .sp .6
 .RS 4n
@@ -2211,9 +2474,11 @@ If an incremental stream is received, then the destination file system must alre
 .sp
 When a snapshot replication package stream that is generated by using the \fBzfs send\fR \fB-R\fR command is  received, any snapshots that do not exist on the sending location are destroyed by using the \fBzfs destroy\fR \fB-d\fR command.
 .sp
-The name of the snapshot (and file system, if a full stream is received) that this subcommand creates depends on the argument type and the \fB-d\fR option.
+The name of the snapshot (and file system, if a full stream is received) that this subcommand creates depends on the argument type and the use of the \fB-d\fR or \fB-e\fR options.
 .sp
-If the argument is a snapshot name, the specified \fIsnapshot\fR is created. If the argument is a file system or volume name, a snapshot with the same name as the sent snapshot is created within the specified \fIfilesystem\fR or \fIvolume\fR. If the \fB-d\fR option is specified, the snapshot name is determined by appending the sent snapshot's name to the specified \fIfilesystem\fR. If the \fB-d\fR option is specified, any required file systems within the specified one are created.
+If the argument is a snapshot name, the specified \fIsnapshot\fR is created. If the argument is a file system or volume name, a snapshot with the same name as the sent snapshot is created within the specified \fIfilesystem\fR or \fIvolume\fR.  If neither of the \fB-d\fR or \fB-e\fR options are specified, the provided target snapshot name is used exactly as provided.
+.sp
+The \fB-d\fR and \fB-e\fR options cause the file system name of the target snapshot to be determined by appending a portion of the sent snapshot's name to the specified target \fIfilesystem\fR. If the \fB-d\fR option is specified, all but the first element of the sent snapshot's file system path (usually the pool name) is used and any required intermediate file systems within the specified one are created.  If the \fB-e\fR option is specified, then only the last element of the sent snapshot's file system name (i.e. the name of the source file system itself) is used as the target file system name.
 .sp
 .ne 2
 .mk
@@ -2222,7 +2487,17 @@ If the argument is a snapshot name, the specified \fIsnapshot\fR is created. If 
 .ad
 .sp .6
 .RS 4n
-Use the name of the sent snapshot to determine the name of the new snapshot as described in the paragraph above.
+Discard the first element of the sent snapshot's file system name, using the remaining elements to determine the name of the target file system for the new snapshot as described in the paragraph above.
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fB-e\fR\fR
+.ad
+.sp .6
+.RS 4n
+Discard all but the last element of the sent snapshot's file system name, using that element to determine the name of the target file system for the new snapshot as described in the paragraph above.
 .RE
 
 .sp
@@ -2238,7 +2513,6 @@ File system that is associated with the received stream is not mounted.
 
 .sp
 .ne 2
-.mk
 .na
 \fB\fB-v\fR\fR
 .ad
@@ -2343,6 +2617,9 @@ clone            subcommand     Must also have the 'create' ability and 'mount'
                                 ability in the origin file system
 create           subcommand     Must also have the 'mount' ability
 destroy          subcommand     Must also have the 'mount' ability
+diff             subcommand     Allows lookup of paths within a dataset
+                                given an object number, and the ability to
+                                create snapshots necessary to 'zfs diff'.
 mount            subcommand     Allows mount/umount of ZFS datasets
 promote          subcommand     Must also have the 'mount'
                                 and 'promote' ability in the origin file system
@@ -2368,8 +2645,11 @@ casesensitivity  property
 checksum         property       
 compression      property       
 copies           property       
+dedup            property
 devices          property       
 exec             property       
+logbias          property
+mlslabel         property
 mountpoint       property       
 nbmand           property       
 normalization    property       
@@ -2538,6 +2818,71 @@ Recursively releases a hold with the given tag on the snapshots of all descenden
 
 .RE
 
+.sp
+.ne 2
+.mk
+.na
+\fB\fBzfs diff\fR [\fB-FHt\fR] \fIsnapshot\fR \fIsnapshot|filesystem\fR
+.ad
+.sp .6
+.RS 4n
+Display the difference between a snapshot of a given filesystem and another
+snapshot of that filesystem from a later time or the current contents of the
+filesystem.  The first column is a character indicating the type of change,
+the other columns indicate pathname, new pathname (in case of rename), change
+in link count, and optionally file type and/or change time.
+
+The types of change are:
+.in +2
+.nf
+-       The path has been removed
++       The path has been created
+M       The path has been modified
+R       The path has been renamed
+.fi
+.in -2
+.sp
+.ne 2
+.na
+\fB-F\fR
+.ad
+.sp .6
+.RS 4n
+Display an indication of the type of file, in a manner similar to the \fB-F\fR
+option of \fBls\fR(1).
+.in +2
+.nf
+B       Block device
+C       Character device
+/       Directory
+>       Door
+|       Named pipe
+@       Symbolic link
+P       Event port
+=       Socket
+F       Regular file
+.fi
+.in -2
+.RE
+.sp
+.ne 2
+.na
+\fB-H\fR
+.ad
+.sp .6
+.RS 4n
+Give more parseable tab-separated output, without header lines and without arrows.
+.RE
+.sp
+.ne 2
+.na
+\fB-t\fR
+.ad
+.sp .6
+.RS 4n
+Display the path's inode change time as the first column of output.
+.RE
+
 .SH EXAMPLES
 .LP
 \fBExample 1 \fRCreating a ZFS File System Hierarchy
@@ -2685,6 +3030,9 @@ pool/home/bob  usedbysnapshots       0                      -
 pool/home/bob  usedbydataset         21K                    -
 pool/home/bob  usedbychildren        0                      -
 pool/home/bob  usedbyrefreservation  0                      -
+pool/home/bob  logbias               latency                default
+pool/home/bob  dedup                 off                    default
+pool/home/bob  mlslabel              none                   default
 .fi
 .in -2
 .sp
@@ -2882,7 +3230,7 @@ The following commands show how to set \fBsharenfs\fR property options to enable
 .sp
 .in +2
 .nf
-# \fB# zfs set sharenfs='rw=@123.123.0.0/16,root=neo' tank/home\fR
+# \fBzfs set sharenfs='rw=@123.123.0.0/16,root=neo' tank/home\fR
 .fi
 .in -2
 .sp
@@ -2930,7 +3278,7 @@ The following example shows how to grant anyone in the group \fBstaff\fR to crea
 .sp
 .in +2
 .nf
-# \fB# zfs allow staff create,mount tank/users\fR
+# \fBzfs allow staff create,mount tank/users\fR
 # \fBzfs allow -c destroy tank/users\fR
 # \fBzfs allow tank/users\fR
 -------------------------------------------------------------
@@ -3009,6 +3357,28 @@ Create time permissions on (tank/users)
 Local+Descendent permissions on (tank/users)
         group staff @pset,create,mount
 ------------------------------------------------------------- 
+.fi
+.in -2
+.sp
+
+.LP
+\fBExample 23\fR Showing the differences between a snapshot and a ZFS Dataset
+.sp
+.LP
+The following example shows how to see what has changed between a prior
+snapshot of a ZFS Dataset and its current state.  The \fB-F\fR option is used
+to indicate type information for the files affected.
+
+.sp
+.in +2
+.nf
+# zfs diff -F tank/test@before tank/test
+M       /       /tank/test/
+M       F       /tank/test/linked      (+1)
+R       F       /tank/test/oldname -> /tank/test/newname
+-       F       /tank/test/deleted
++       F       /tank/test/created
+M       F       /tank/test/modified
 .fi
 .in -2
 .sp

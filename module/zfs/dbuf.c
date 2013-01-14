@@ -21,6 +21,7 @@
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright (c) 2012 by Delphix. All rights reserved.
  */
 
 #include <sys/zfs_context.h>
@@ -260,7 +261,7 @@ dbuf_is_metadata(dmu_buf_impl_t *db)
 		boolean_t is_metadata;
 
 		DB_DNODE_ENTER(db);
-		is_metadata = dmu_ot[DB_DNODE(db)->dn_type].ot_metadata;
+		is_metadata = DMU_OT_IS_METADATA(DB_DNODE(db)->dn_type);
 		DB_DNODE_EXIT(db);
 
 		return (is_metadata);
@@ -298,7 +299,7 @@ retry:
 #if defined(_KERNEL) && defined(HAVE_SPL)
 	/* Large allocations which do not require contiguous pages
 	 * should be using vmem_alloc() in the linux kernel */
-	h->hash_table = vmem_zalloc(hsize * sizeof (void *), KM_SLEEP);
+	h->hash_table = vmem_zalloc(hsize * sizeof (void *), KM_PUSHPAGE);
 #else
 	h->hash_table = kmem_zalloc(hsize * sizeof (void *), KM_NOSLEEP);
 #endif
@@ -1719,7 +1720,7 @@ dbuf_create(dnode_t *dn, uint8_t level, uint64_t blkid,
 	ASSERT(RW_LOCK_HELD(&dn->dn_struct_rwlock));
 	ASSERT(dn->dn_type != DMU_OT_NONE);
 
-	db = kmem_cache_alloc(dbuf_cache, KM_SLEEP);
+	db = kmem_cache_alloc(dbuf_cache, KM_PUSHPAGE);
 
 	db->db_objset = os;
 	db->db.db_object = dn->dn_object;
@@ -2019,7 +2020,7 @@ dbuf_hold_impl(dnode_t *dn, uint8_t level, uint64_t blkid, int fail_sparse,
 	int error;
 
 	dh = kmem_zalloc(sizeof(struct dbuf_hold_impl_data) *
-	    DBUF_HOLD_IMPL_MAX_DEPTH, KM_SLEEP);
+	    DBUF_HOLD_IMPL_MAX_DEPTH, KM_PUSHPAGE);
 	__dbuf_hold_impl_init(dh, dn, level, blkid, fail_sparse, tag, dbp, 0);
 
 	error = __dbuf_hold_impl(dh);
@@ -2188,7 +2189,24 @@ dbuf_rele_and_unlock(dmu_buf_impl_t *db, void *tag)
 			dbuf_evict(db);
 		} else {
 			VERIFY(arc_buf_remove_ref(db->db_buf, db) == 0);
-			if (!DBUF_IS_CACHEABLE(db))
+
+			/*
+			 * A dbuf will be eligible for eviction if either the
+			 * 'primarycache' property is set or a duplicate
+			 * copy of this buffer is already cached in the arc.
+			 *
+			 * In the case of the 'primarycache' a buffer
+			 * is considered for eviction if it matches the
+			 * criteria set in the property.
+			 *
+			 * To decide if our buffer is considered a
+			 * duplicate, we must call into the arc to determine
+			 * if multiple buffers are referencing the same
+			 * block on-disk. If so, then we simply evict
+			 * ourselves.
+			 */
+			if (!DBUF_IS_CACHEABLE(db) ||
+			    arc_buf_eviction_needed(db->db_buf))
 				dbuf_clear(db);
 			else
 				mutex_exit(&db->db_mtx);
@@ -2831,6 +2849,39 @@ dbuf_write(dbuf_dirty_record_t *dr, arc_buf_t *data, dmu_tx_t *tx)
 }
 
 #if defined(_KERNEL) && defined(HAVE_SPL)
-EXPORT_SYMBOL(dmu_buf_rele);
+EXPORT_SYMBOL(dbuf_find);
+EXPORT_SYMBOL(dbuf_is_metadata);
+EXPORT_SYMBOL(dbuf_evict);
+EXPORT_SYMBOL(dbuf_loan_arcbuf);
+EXPORT_SYMBOL(dbuf_whichblock);
+EXPORT_SYMBOL(dbuf_read);
+EXPORT_SYMBOL(dbuf_unoverride);
+EXPORT_SYMBOL(dbuf_free_range);
+EXPORT_SYMBOL(dbuf_new_size);
+EXPORT_SYMBOL(dbuf_release_bp);
+EXPORT_SYMBOL(dbuf_dirty);
 EXPORT_SYMBOL(dmu_buf_will_dirty);
+EXPORT_SYMBOL(dmu_buf_will_not_fill);
+EXPORT_SYMBOL(dmu_buf_will_fill);
+EXPORT_SYMBOL(dmu_buf_fill_done);
+EXPORT_SYMBOL(dmu_buf_rele);
+EXPORT_SYMBOL(dbuf_assign_arcbuf);
+EXPORT_SYMBOL(dbuf_clear);
+EXPORT_SYMBOL(dbuf_prefetch);
+EXPORT_SYMBOL(dbuf_hold_impl);
+EXPORT_SYMBOL(dbuf_hold);
+EXPORT_SYMBOL(dbuf_hold_level);
+EXPORT_SYMBOL(dbuf_create_bonus);
+EXPORT_SYMBOL(dbuf_spill_set_blksz);
+EXPORT_SYMBOL(dbuf_rm_spill);
+EXPORT_SYMBOL(dbuf_add_ref);
+EXPORT_SYMBOL(dbuf_rele);
+EXPORT_SYMBOL(dbuf_rele_and_unlock);
+EXPORT_SYMBOL(dbuf_refcount);
+EXPORT_SYMBOL(dbuf_sync_list);
+EXPORT_SYMBOL(dmu_buf_set_user);
+EXPORT_SYMBOL(dmu_buf_set_user_ie);
+EXPORT_SYMBOL(dmu_buf_update_user);
+EXPORT_SYMBOL(dmu_buf_get_user);
+EXPORT_SYMBOL(dmu_buf_freeable);
 #endif

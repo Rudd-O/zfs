@@ -311,8 +311,9 @@ main(int argc, char **argv)
 	char mntopts[MNT_LINE_MAX] = { '\0' };
 	char badopt[MNT_LINE_MAX] = { '\0' };
 	char mtabopt[MNT_LINE_MAX] = { '\0' };
-	char *dataset, *mntpoint;
-	unsigned long mntflags = 0, zfsflags = 0, remount_ro = 0, remount_root = 0;
+	char mntpoint[PATH_MAX];
+	char *dataset;
+	unsigned long mntflags = 0, zfsflags = 0, remount = 0;
 	int sloppy = 0, fake = 0, verbose = 0, nomtab = 0, zfsutil = 0;
 	int error, c;
 
@@ -367,7 +368,14 @@ main(int argc, char **argv)
 	}
 
 	dataset = parse_dataset(argv[0]);
-	mntpoint = argv[1];
+
+	/* canonicalize the mount point */
+	if (realpath(argv[1], mntpoint) == NULL) {
+		(void) fprintf(stderr, gettext("filesystem '%s' cannot be "
+		    "mounted at '%s' due to canonicalization error %d.\n"),
+		    dataset, argv[1], errno);
+		return (MOUNT_SYSERR);
+	}
 
 	/* validate mount options and set mntflags */
 	error = parse_options(mntopts, &mntflags, &zfsflags, sloppy,
@@ -417,14 +425,10 @@ main(int argc, char **argv)
 		    "  mountopts:  \"%s\"\n  mtabopts:   \"%s\"\n"),
 		    dataset, mntpoint, mntflags, zfsflags, mntopts, mtabopt);
 
-	if (mntflags & MS_REMOUNT)
+	if (mntflags & MS_REMOUNT) {
 		nomtab = 1;
-
-	if ((mntflags & MS_REMOUNT) && (mntflags & MS_RDONLY))
-		remount_ro = 1;
-
-	if ((mntflags & MS_REMOUNT) && (strcmp(mntpoint,"/") == 0))
-		remount_root = 1;
+		remount = 1;
+	}
 
 	if (zfsflags & ZS_ZFSUTIL)
 		zfsutil = 1;
@@ -457,12 +461,10 @@ main(int argc, char **argv)
 	 * we differentiate the two cases using the 'zfsutil' mount option.
 	 * This mount option should only be supplied by the 'zfs mount' util.
 	 *
-	 * The only exception to the above rule is '-o remount,ro'.  This is
-	 * always allowed for non-legacy datasets for rc.sysinit/umountroot
-	 * to safely remount the root filesystem and flush its cache.
-	 *
-	 * I have added an exception for remounting the root file system, as
-	 * many distributions do on boot.  This helps with ZFS-on-root.
+	 * The only exception to the above rule is '-o remount' which is
+	 * always allowed for non-legacy datasets.  This is done because when
+	 * using zfs as your root file system both rc.sysinit/umountroot and
+	 * systemd depend on 'mount -o remount <mountpoint>' to work.
 	 */
 	if (zfsutil && !strcmp(legacy, ZFS_MOUNTPOINT_LEGACY)) {
 		(void) fprintf(stderr, gettext(
@@ -473,7 +475,8 @@ main(int argc, char **argv)
 		return (MOUNT_USAGE);
 	}
 
-	if (!zfsutil && strcmp(legacy, ZFS_MOUNTPOINT_LEGACY) && !remount_ro && !remount_root) {
+	if (!zfsutil && !(remount || fake) &&
+	    strcmp(legacy, ZFS_MOUNTPOINT_LEGACY)) {
 		(void) fprintf(stderr, gettext(
 		    "filesystem '%s' cannot be mounted using 'mount'.\n"
 		    "Use 'zfs set mountpoint=%s' or 'zfs mount %s'.\n"

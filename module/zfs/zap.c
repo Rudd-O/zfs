@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012 by Delphix. All rights reserved.
  */
 
 /*
@@ -114,7 +115,7 @@ fzap_upgrade(zap_t *zap, dmu_tx_t *tx, zap_flags_t flags)
 	    1<<FZAP_BLOCK_SHIFT(zap), FTAG, &db, DMU_READ_NO_PREFETCH));
 	dmu_buf_will_dirty(db, tx);
 
-	l = kmem_zalloc(sizeof (zap_leaf_t), KM_SLEEP);
+	l = kmem_zalloc(sizeof (zap_leaf_t), KM_PUSHPAGE);
 	l->l_dbuf = db;
 	l->l_phys = db->db_data;
 
@@ -390,7 +391,7 @@ static zap_leaf_t *
 zap_create_leaf(zap_t *zap, dmu_tx_t *tx)
 {
 	void *winner;
-	zap_leaf_t *l = kmem_alloc(sizeof (zap_leaf_t), KM_SLEEP);
+	zap_leaf_t *l = kmem_alloc(sizeof (zap_leaf_t), KM_PUSHPAGE);
 
 	ASSERT(RW_WRITE_HELD(&zap->zap_rwlock));
 
@@ -452,7 +453,7 @@ zap_open_leaf(uint64_t blkid, dmu_buf_t *db)
 
 	ASSERT(blkid != 0);
 
-	l = kmem_alloc(sizeof (zap_leaf_t), KM_SLEEP);
+	l = kmem_alloc(sizeof (zap_leaf_t), KM_PUSHPAGE);
 	rw_init(&l->l_rwlock, NULL, RW_DEFAULT, NULL);
 	rw_enter(&l->l_rwlock, RW_WRITER);
 	l->l_blkid = blkid;
@@ -946,6 +947,19 @@ fzap_prefetch(zap_name_t *zn)
  * Helper functions for consumers.
  */
 
+uint64_t
+zap_create_link(objset_t *os, dmu_object_type_t ot, uint64_t parent_obj,
+    const char *name, dmu_tx_t *tx)
+{
+	uint64_t new_obj;
+
+	VERIFY((new_obj = zap_create(os, ot, DMU_OT_NONE, 0, tx)) > 0);
+	VERIFY(zap_add(os, parent_obj, name, sizeof (uint64_t), 1, &new_obj,
+	    tx) == 0);
+
+	return (new_obj);
+}
+
 int
 zap_value_search(objset_t *os, uint64_t zapobj, uint64_t value, uint64_t mask,
     char *name)
@@ -957,7 +971,7 @@ zap_value_search(objset_t *os, uint64_t zapobj, uint64_t value, uint64_t mask,
 	if (mask == 0)
 		mask = -1ULL;
 
-	za = kmem_alloc(sizeof (zap_attribute_t), KM_SLEEP);
+	za = kmem_alloc(sizeof (zap_attribute_t), KM_PUSHPAGE);
 	for (zap_cursor_init(&zc, os, zapobj);
 	    (err = zap_cursor_retrieve(&zc, za)) == 0;
 	    zap_cursor_advance(&zc)) {
@@ -1077,6 +1091,16 @@ zap_add_int_key(objset_t *os, uint64_t obj,
 
 	(void) snprintf(name, sizeof (name), "%llx", (longlong_t)key);
 	return (zap_add(os, obj, name, 8, 1, &value, tx));
+}
+
+int
+zap_update_int_key(objset_t *os, uint64_t obj,
+    uint64_t key, uint64_t value, dmu_tx_t *tx)
+{
+	char name[20];
+
+	(void) snprintf(name, sizeof (name), "%llx", (longlong_t)key);
+	return (zap_update(os, obj, name, 8, 1, &value, tx));
 }
 
 int

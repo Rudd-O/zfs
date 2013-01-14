@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012 by Delphix. All rights reserved.
  */
 
 #include <sys/zio.h>
@@ -171,7 +172,7 @@ zap_name_free(zap_name_t *zn)
 zap_name_t *
 zap_name_alloc(zap_t *zap, const char *key, matchtype_t mt)
 {
-	zap_name_t *zn = kmem_alloc(sizeof (zap_name_t), KM_SLEEP);
+	zap_name_t *zn = kmem_alloc(sizeof (zap_name_t), KM_PUSHPAGE);
 
 	zn->zn_zap = zap;
 	zn->zn_key_intlen = sizeof (*key);
@@ -201,7 +202,7 @@ zap_name_alloc(zap_t *zap, const char *key, matchtype_t mt)
 zap_name_t *
 zap_name_alloc_uint64(zap_t *zap, const uint64_t *key, int numints)
 {
-	zap_name_t *zn = kmem_alloc(sizeof (zap_name_t), KM_SLEEP);
+	zap_name_t *zn = kmem_alloc(sizeof (zap_name_t), KM_PUSHPAGE);
 
 	ASSERT(zap->zap_normflags == 0);
 	zn->zn_zap = zap;
@@ -270,7 +271,7 @@ mze_insert(zap_t *zap, int chunkid, uint64_t hash)
 	ASSERT(zap->zap_ismicro);
 	ASSERT(RW_WRITE_HELD(&zap->zap_rwlock));
 
-	mze = kmem_alloc(sizeof (mzap_ent_t), KM_SLEEP);
+	mze = kmem_alloc(sizeof (mzap_ent_t), KM_PUSHPAGE);
 	mze->mze_chunkid = chunkid;
 	mze->mze_hash = hash;
 	mze->mze_cd = MZE_PHYS(zap, mze)->mze_cd;
@@ -364,7 +365,7 @@ mzap_open(objset_t *os, uint64_t obj, dmu_buf_t *db)
 
 	ASSERT3U(MZAP_ENT_LEN, ==, sizeof (mzap_ent_phys_t));
 
-	zap = kmem_zalloc(sizeof (zap_t), KM_SLEEP);
+	zap = kmem_zalloc(sizeof (zap_t), KM_PUSHPAGE);
 	rw_init(&zap->zap_rwlock, NULL, RW_DEFAULT, NULL);
 	rw_enter(&zap->zap_rwlock, RW_WRITER);
 	zap->zap_objset = os;
@@ -460,7 +461,7 @@ zap_lockdir(objset_t *os, uint64_t obj, dmu_tx_t *tx,
 	{
 		dmu_object_info_t doi;
 		dmu_object_info_from_db(db, &doi);
-		ASSERT(dmu_ot[doi.doi_type].ot_byteswap == zap_byteswap);
+		ASSERT3U(DMU_OT_BYTESWAP(doi.doi_type), ==, DMU_BSWAP_ZAP);
 	}
 #endif
 
@@ -532,7 +533,7 @@ mzap_upgrade(zap_t **zapp, dmu_tx_t *tx, zap_flags_t flags)
 	ASSERT(RW_WRITE_HELD(&zap->zap_rwlock));
 
 	sz = zap->zap_dbuf->db_size;
-	mzp = vmem_alloc(sz, KM_SLEEP);
+	mzp = kmem_alloc(sz, KM_PUSHPAGE | KM_NODEBUG);
 	bcopy(zap->zap_dbuf->db_data, mzp, sz);
 	nchunks = zap->zap_m.zap_num_chunks;
 
@@ -540,7 +541,7 @@ mzap_upgrade(zap_t **zapp, dmu_tx_t *tx, zap_flags_t flags)
 		err = dmu_object_set_blocksize(zap->zap_objset, zap->zap_object,
 		    1ULL << fzap_default_block_shift, 0, tx);
 		if (err) {
-			vmem_free(mzp, sz);
+			kmem_free(mzp, sz);
 			return (err);
 		}
 	}
@@ -566,7 +567,7 @@ mzap_upgrade(zap_t **zapp, dmu_tx_t *tx, zap_flags_t flags)
 		if (err)
 			break;
 	}
-	vmem_free(mzp, sz);
+	kmem_free(mzp, sz);
 	*zapp = zap;
 	return (err);
 }
@@ -584,7 +585,7 @@ mzap_create_impl(objset_t *os, uint64_t obj, int normflags, zap_flags_t flags,
 	{
 		dmu_object_info_t doi;
 		dmu_object_info_from_db(db, &doi);
-		ASSERT(dmu_ot[doi.doi_type].ot_byteswap == zap_byteswap);
+		ASSERT3U(DMU_OT_BYTESWAP(doi.doi_type), ==, DMU_BSWAP_ZAP);
 	}
 #endif
 
@@ -1404,7 +1405,7 @@ zap_count_write(objset_t *os, uint64_t zapobj, const char *name, int add,
 	}
 
 	/*
-	 * We lock the zap with adding ==  FALSE. Because, if we pass
+	 * We lock the zap with adding == FALSE. Because, if we pass
 	 * the actual value of add, it could trigger a mzap_upgrade().
 	 * At present we are just evaluating the possibility of this operation
 	 * and hence we donot want to trigger an upgrade.

@@ -116,6 +116,7 @@ zfs_znode_cache_constructor(void *buf, void *arg, int kmflags)
 	zp->z_dirlocks = NULL;
 	zp->z_acl_cached = NULL;
 	zp->z_xattr_cached = NULL;
+	zp->z_xattr_parent = NULL;
 	zp->z_moved = 0;
 	return (0);
 }
@@ -138,6 +139,7 @@ zfs_znode_cache_destructor(void *buf, void *arg)
 	ASSERT(zp->z_dirlocks == NULL);
 	ASSERT(zp->z_acl_cached == NULL);
 	ASSERT(zp->z_xattr_cached == NULL);
+	ASSERT(zp->z_xattr_parent == NULL);
 }
 
 void
@@ -286,6 +288,11 @@ zfs_inode_destroy(struct inode *ip)
 		zp->z_xattr_cached = NULL;
 	}
 
+	if (zp->z_xattr_parent) {
+		iput(ZTOI(zp->z_xattr_parent));
+		zp->z_xattr_parent = NULL;
+	}
+
 	kmem_cache_free(znode_cache, zp);
 }
 
@@ -359,6 +366,7 @@ zfs_znode_alloc(zfs_sb_t *zsb, dmu_buf_t *db, int blksz,
 	ASSERT(zp->z_dirlocks == NULL);
 	ASSERT3P(zp->z_acl_cached, ==, NULL);
 	ASSERT3P(zp->z_xattr_cached, ==, NULL);
+	ASSERT3P(zp->z_xattr_parent, ==, NULL);
 	zp->z_moved = 0;
 	zp->z_sa_hdl = NULL;
 	zp->z_unlinked = 0;
@@ -394,6 +402,14 @@ zfs_znode_alloc(zfs_sb_t *zsb, dmu_buf_t *db, int blksz,
 		goto error;
 	}
 
+	/*
+	 * xattr znodes hold a reference on their unique parent
+	 */
+	if (dip && zp->z_pflags & ZFS_XATTR) {
+		igrab(dip);
+		zp->z_xattr_parent = ITOZ(dip);
+	}
+
 	ip->i_ino = obj;
 	zfs_inode_update(zp);
 	zfs_inode_set_ops(zsb, ip);
@@ -401,12 +417,8 @@ zfs_znode_alloc(zfs_sb_t *zsb, dmu_buf_t *db, int blksz,
 	if (insert_inode_locked(ip))
 		goto error;
 
-	if (dentry) {
-		if (zpl_xattr_security_init(ip, dip, &dentry->d_name))
-			goto error;
-
+	if (dentry)
 		d_instantiate(dentry, ip);
-	}
 
 	mutex_enter(&zsb->z_znodes_lock);
 	list_insert_tail(&zsb->z_all_znodes, zp);
@@ -627,7 +639,7 @@ zfs_mknode(znode_t *dzp, vattr_t *vap, dmu_tx_t *tx, cred_t *cr,
 	 * order for  DMU_OT_ZNODE is critical since it needs to be constructed
 	 * in the old znode_phys_t format.  Don't change this ordering
 	 */
-	sa_attrs = kmem_alloc(sizeof(sa_bulk_attr_t) * ZPL_END, KM_SLEEP);
+	sa_attrs = kmem_alloc(sizeof(sa_bulk_attr_t) * ZPL_END, KM_PUSHPAGE);
 
 	if (obj_type == DMU_OT_ZNODE) {
 		SA_ADD_BULK_ATTR(sa_attrs, cnt, SA_ZPL_ATIME(zsb),
@@ -1502,13 +1514,13 @@ zfs_create_fs(objset_t *os, cred_t *cr, nvlist_t *zplprops, dmu_tx_t *tx)
 	vattr.va_uid = crgetuid(cr);
 	vattr.va_gid = crgetgid(cr);
 
-	rootzp = kmem_cache_alloc(znode_cache, KM_SLEEP);
+	rootzp = kmem_cache_alloc(znode_cache, KM_PUSHPAGE);
 	rootzp->z_moved = 0;
 	rootzp->z_unlinked = 0;
 	rootzp->z_atime_dirty = 0;
 	rootzp->z_is_sa = USE_SA(version, os);
 
-	zsb = kmem_zalloc(sizeof (zfs_sb_t), KM_SLEEP);
+	zsb = kmem_zalloc(sizeof (zfs_sb_t), KM_PUSHPAGE | KM_NODEBUG);
 	zsb->z_os = os;
 	zsb->z_parent = zsb;
 	zsb->z_version = version;
@@ -1516,7 +1528,7 @@ zfs_create_fs(objset_t *os, cred_t *cr, nvlist_t *zplprops, dmu_tx_t *tx)
 	zsb->z_use_sa = USE_SA(version, os);
 	zsb->z_norm = norm;
 
-	sb = kmem_zalloc(sizeof (struct super_block), KM_SLEEP);
+	sb = kmem_zalloc(sizeof (struct super_block), KM_PUSHPAGE);
 	sb->s_fs_info = zsb;
 
 	ZTOI(rootzp)->i_sb = sb;

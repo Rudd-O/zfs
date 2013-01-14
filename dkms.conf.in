@@ -9,11 +9,10 @@ PRE_BUILD="configure
                    (*)      echo ${kernel_source_dir} ;;
                  esac)
   --with-linux-obj=${kernel_source_dir}
+  --with-spl-timeout=180
 "
-POST_INSTALL="cp
-  ${dkms_tree}/${PACKAGE_NAME}/${PACKAGE_VERSION}/build/zfs_config.h
-  ${dkms_tree}/${PACKAGE_NAME}/${PACKAGE_VERSION}/build/module/Module.symvers
-  ${dkms_tree}/${PACKAGE_NAME}/${PACKAGE_VERSION}/${kernelver}/${arch}/
+POST_INSTALL="dkms.postinst -a ${arch} -k ${kernelver} -t ${dkms_tree}
+                            -n ${PACKAGE_NAME} -v ${PACKAGE_VERSION}
 "
 REMAKE_INITRD="no"
 MAKE[0]="make"

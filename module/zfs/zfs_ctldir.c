@@ -90,6 +90,11 @@
  */
 int zfs_expire_snapshot = ZFSCTL_EXPIRE_SNAPSHOT;
 
+/*
+ * Dedicated task queue for unmounting snapshots.
+ */
+static taskq_t *zfs_expire_taskq;
+
 static zfs_snapentry_t *
 zfsctl_sep_alloc(void)
 {
@@ -112,16 +117,15 @@ zfsctl_sep_free(zfs_snapentry_t *sep)
 static void
 zfsctl_expire_snapshot(void *data)
 {
-	zfs_snapentry_t *sep;
-	zfs_sb_t *zsb;
+	zfs_snapentry_t *sep = (zfs_snapentry_t *)data;
+	zfs_sb_t *zsb = ITOZSB(sep->se_inode);
 	int error;
-
-	sep = spl_get_work_data(data, zfs_snapentry_t, se_work.work);
-	zsb = ITOZSB(sep->se_inode);
 
 	error = zfsctl_unmount_snapshot(zsb, sep->se_name, MNT_EXPIRE);
 	if (error == EBUSY)
-		schedule_delayed_work(&sep->se_work, zfs_expire_snapshot * HZ);
+		sep->se_taskqid = taskq_dispatch_delay(zfs_expire_taskq,
+		    zfsctl_expire_snapshot, sep, TQ_SLEEP,
+		    ddi_get_lbolt() + zfs_expire_snapshot * HZ);
 }
 
 int
@@ -661,7 +665,7 @@ zfsctl_snapdir_inactive(struct inode *ip)
 
 		if (sep->se_inode == ip) {
 			avl_remove(&zsb->z_ctldir_snaps, sep);
-			cancel_delayed_work_sync(&sep->se_work);
+			taskq_cancel_id(zfs_expire_taskq, sep->se_taskqid);
 			zfsctl_sep_free(sep);
 			break;
 		}
@@ -681,7 +685,7 @@ zfsctl_snapdir_inactive(struct inode *ip)
 	"exec 0</dev/null " \
 	"     1>/dev/null " \
 	"     2>/dev/null; " \
-	"umount -t zfs -n %s%s"
+	"umount -t zfs -n '%s%s'"
 
 static int
 __zfsctl_unmount_snapshot(zfs_snapentry_t *sep, int flags)
@@ -692,7 +696,7 @@ __zfsctl_unmount_snapshot(zfs_snapentry_t *sep, int flags)
 
 	argv[2] = kmem_asprintf(SET_UNMOUNT_CMD,
 	    flags & MNT_FORCE ? "-f " : "", sep->se_path);
-	error = call_usermodehelper(argv[0], argv, envp, 1);
+	error = call_usermodehelper(argv[0], argv, envp, UMH_WAIT_PROC);
 	strfree(argv[2]);
 
 	/*
@@ -708,7 +712,8 @@ __zfsctl_unmount_snapshot(zfs_snapentry_t *sep, int flags)
 	 * to prevent zfsctl_expire_snapshot() from attempting a unmount.
 	 */
 	if ((error == 0) && !(flags & MNT_EXPIRE))
-		cancel_delayed_work(&sep->se_work);
+		taskq_cancel_id(zfs_expire_taskq, sep->se_taskqid);
+
 
 	return (error);
 }
@@ -781,7 +786,7 @@ zfsctl_unmount_snapshots(zfs_sb_t *zsb, int flags, int *count)
 	"exec 0</dev/null " \
 	"     1>/dev/null " \
 	"     2>/dev/null; " \
-	"mount -t zfs -n %s %s"
+	"mount -t zfs -n '%s' '%s'"
 
 int
 zfsctl_mount_snapshot(struct path *path, int flags)
@@ -817,7 +822,7 @@ zfsctl_mount_snapshot(struct path *path, int flags)
 	 * to safely abort the automount.  This should be very rare.
 	 */
 	argv[2] = kmem_asprintf(SET_MOUNT_CMD, full_name, full_path);
-	error = call_usermodehelper(argv[0], argv, envp, 1);
+	error = call_usermodehelper(argv[0], argv, envp, UMH_WAIT_PROC);
 	strfree(argv[2]);
 	if (error) {
 		printk("ZFS: Unable to automount %s at %s: %d\n",
@@ -837,7 +842,7 @@ zfsctl_mount_snapshot(struct path *path, int flags)
 	sep = avl_find(&zsb->z_ctldir_snaps, &search, NULL);
 	if (sep) {
 		avl_remove(&zsb->z_ctldir_snaps, sep);
-		cancel_delayed_work_sync(&sep->se_work);
+		taskq_cancel_id(zfs_expire_taskq, sep->se_taskqid);
 		zfsctl_sep_free(sep);
 	}
 
@@ -847,8 +852,9 @@ zfsctl_mount_snapshot(struct path *path, int flags)
 	sep->se_inode = ip;
 	avl_add(&zsb->z_ctldir_snaps, sep);
 
-        spl_init_delayed_work(&sep->se_work, zfsctl_expire_snapshot, sep);
-	schedule_delayed_work(&sep->se_work, zfs_expire_snapshot * HZ);
+	sep->se_taskqid = taskq_dispatch_delay(zfs_expire_taskq,
+	    zfsctl_expire_snapshot, sep, TQ_SLEEP,
+	    ddi_get_lbolt() + zfs_expire_snapshot * HZ);
 
 	mutex_exit(&zsb->z_ctldir_lock);
 error:
@@ -920,8 +926,8 @@ zfsctl_lookup_objset(struct super_block *sb, uint64_t objsetid, zfs_sb_t **zsbp)
 		 * race cannot occur to an expired mount point because
 		 * we hold the zsb->z_ctldir_lock to prevent the race.
 		 */
-		sbp = sget(&zpl_fs_type, zfsctl_test_super,
-		    zfsctl_set_super, &id);
+		sbp = zpl_sget(&zpl_fs_type, zfsctl_test_super,
+		    zfsctl_set_super, 0, &id);
 		if (IS_ERR(sbp)) {
 			error = -PTR_ERR(sbp);
 		} else {
@@ -952,7 +958,7 @@ zfsctl_shares_lookup(struct inode *dip, char *name, struct inode **ipp,
 
 	if (zsb->z_shares_dir == 0) {
 		ZFS_EXIT(zsb);
-		return (-ENOTSUP);
+		return (ENOTSUP);
 	}
 
 	error = zfs_zget(zsb, zsb->z_shares_dir, &dzp);
@@ -977,6 +983,8 @@ zfsctl_shares_lookup(struct inode *dip, char *name, struct inode **ipp,
 void
 zfsctl_init(void)
 {
+	zfs_expire_taskq = taskq_create("z_unmount", 1, maxclsyspri,
+	    1, 8, TASKQ_PREPOPULATE);
 }
 
 /*
@@ -986,6 +994,7 @@ zfsctl_init(void)
 void
 zfsctl_fini(void)
 {
+	taskq_destroy(zfs_expire_taskq);
 }
 
 module_param(zfs_expire_snapshot, int, 0644);

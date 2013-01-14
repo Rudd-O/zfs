@@ -96,7 +96,7 @@ dsl_dir_open_obj(dsl_pool_t *dp, uint64_t ddobj,
 	if (dd == NULL) {
 		dsl_dir_t *winner;
 
-		dd = kmem_zalloc(sizeof (dsl_dir_t), KM_SLEEP);
+		dd = kmem_zalloc(sizeof (dsl_dir_t), KM_PUSHPAGE);
 		dd->dd_object = ddobj;
 		dd->dd_dbuf = dbuf;
 		dd->dd_pool = dp;
@@ -189,7 +189,6 @@ errout:
 	kmem_free(dd, sizeof (dsl_dir_t));
 	dmu_buf_rele(dbuf, tag);
 	return (err);
-
 }
 
 void
@@ -223,7 +222,7 @@ dsl_dir_name(dsl_dir_t *dd, char *buf)
 	}
 }
 
-/* Calculate name legnth, avoiding all the strcat calls of dsl_dir_name */
+/* Calculate name length, avoiding all the strcat calls of dsl_dir_name */
 int
 dsl_dir_namelen(dsl_dir_t *dd)
 {
@@ -460,12 +459,14 @@ dsl_dir_destroy_check(void *arg1, void *arg2, dmu_tx_t *tx)
 	/*
 	 * There should be exactly two holds, both from
 	 * dsl_dataset_destroy: one on the dd directory, and one on its
-	 * head ds.  Otherwise, someone is trying to lookup something
-	 * inside this dir while we want to destroy it.  The
-	 * config_rwlock ensures that nobody else opens it after we
-	 * check.
+	 * head ds.  If there are more holds, then a concurrent thread is
+	 * performing a lookup inside this dir while we're trying to destroy
+	 * it.  To minimize this possibility, we perform this check only
+	 * in syncing context and fail the operation if we encounter
+	 * additional holds.  The dp_config_rwlock ensures that nobody else
+	 * opens it after we check.
 	 */
-	if (dmu_buf_refcount(dd->dd_dbuf) > 2)
+	if (dmu_tx_is_syncing(tx) && dmu_buf_refcount(dd->dd_dbuf) > 2)
 		return (EBUSY);
 
 	err = zap_count(mos, dd->dd_phys->dd_child_dir_zapobj, &count);
@@ -589,8 +590,6 @@ void
 dsl_dir_sync(dsl_dir_t *dd, dmu_tx_t *tx)
 {
 	ASSERT(dmu_tx_is_syncing(tx));
-
-	dmu_buf_will_dirty(dd->dd_dbuf, tx);
 
 	mutex_enter(&dd->dd_lock);
 	ASSERT3U(dd->dd_tempreserved[tx->tx_txg&TXG_MASK], ==, 0);
@@ -791,7 +790,7 @@ dsl_dir_tempreserve_impl(dsl_dir_t *dd, uint64_t asize, boolean_t netfree,
 	    asize - ref_rsrv);
 	mutex_exit(&dd->dd_lock);
 
-	tr = kmem_zalloc(sizeof (struct tempreserve), KM_SLEEP);
+	tr = kmem_zalloc(sizeof (struct tempreserve), KM_PUSHPAGE);
 	tr->tr_ds = dd;
 	tr->tr_size = asize;
 	list_insert_tail(tr_list, tr);
@@ -825,7 +824,7 @@ dsl_dir_tempreserve_space(dsl_dir_t *dd, uint64_t lsize, uint64_t asize,
 		return (0);
 	}
 
-	tr_list = kmem_alloc(sizeof (list_t), KM_SLEEP);
+	tr_list = kmem_alloc(sizeof (list_t), KM_PUSHPAGE);
 	list_create(tr_list, sizeof (struct tempreserve),
 	    offsetof(struct tempreserve, tr_node));
 	ASSERT3S(asize, >, 0);
@@ -835,7 +834,7 @@ dsl_dir_tempreserve_space(dsl_dir_t *dd, uint64_t lsize, uint64_t asize,
 	if (err == 0) {
 		struct tempreserve *tr;
 
-		tr = kmem_zalloc(sizeof (struct tempreserve), KM_SLEEP);
+		tr = kmem_zalloc(sizeof (struct tempreserve), KM_PUSHPAGE);
 		tr->tr_size = lsize;
 		list_insert_tail(tr_list, tr);
 
@@ -851,7 +850,7 @@ dsl_dir_tempreserve_space(dsl_dir_t *dd, uint64_t lsize, uint64_t asize,
 	if (err == 0) {
 		struct tempreserve *tr;
 
-		tr = kmem_zalloc(sizeof (struct tempreserve), KM_SLEEP);
+		tr = kmem_zalloc(sizeof (struct tempreserve), KM_PUSHPAGE);
 		tr->tr_dp = dd->dd_pool;
 		tr->tr_size = asize;
 		list_insert_tail(tr_list, tr);
@@ -948,8 +947,6 @@ dsl_dir_diduse_space(dsl_dir_t *dd, dd_used_t type,
 	ASSERT(dmu_tx_is_syncing(tx));
 	ASSERT(type < DD_USED_NUM);
 
-	dsl_dir_dirty(dd, tx);
-
 	if (needlock)
 		mutex_enter(&dd->dd_lock);
 	accounted_delta = parent_delta(dd, dd->dd_phys->dd_used_bytes, used);
@@ -958,6 +955,7 @@ dsl_dir_diduse_space(dsl_dir_t *dd, dd_used_t type,
 	    dd->dd_phys->dd_compressed_bytes >= -compressed);
 	ASSERT(uncompressed >= 0 ||
 	    dd->dd_phys->dd_uncompressed_bytes >= -uncompressed);
+	dmu_buf_will_dirty(dd->dd_dbuf, tx);
 	dd->dd_phys->dd_used_bytes += used;
 	dd->dd_phys->dd_uncompressed_bytes += uncompressed;
 	dd->dd_phys->dd_compressed_bytes += compressed;
@@ -1001,13 +999,13 @@ dsl_dir_transfer_space(dsl_dir_t *dd, int64_t delta,
 	if (delta == 0 || !(dd->dd_phys->dd_flags & DD_FLAG_USED_BREAKDOWN))
 		return;
 
-	dsl_dir_dirty(dd, tx);
 	if (needlock)
 		mutex_enter(&dd->dd_lock);
 	ASSERT(delta > 0 ?
 	    dd->dd_phys->dd_used_breakdown[oldtype] >= delta :
 	    dd->dd_phys->dd_used_breakdown[newtype] >= -delta);
 	ASSERT(dd->dd_phys->dd_used_bytes >= ABS(delta));
+	dmu_buf_will_dirty(dd->dd_dbuf, tx);
 	dd->dd_phys->dd_used_breakdown[oldtype] -= delta;
 	dd->dd_phys->dd_used_breakdown[newtype] += delta;
 	if (needlock)
@@ -1064,10 +1062,6 @@ dsl_dir_set_quota_sync(void *arg1, void *arg2, dmu_tx_t *tx)
 	mutex_enter(&dd->dd_lock);
 	dd->dd_phys->dd_quota = effective_value;
 	mutex_exit(&dd->dd_lock);
-
-	spa_history_log_internal(LOG_DS_QUOTA, dd->dd_pool->dp_spa,
-	    tx, "%lld dataset = %llu ",
-	    (longlong_t)effective_value, dd->dd_phys->dd_head_dataset_obj);
 }
 
 int
@@ -1180,10 +1174,6 @@ dsl_dir_set_reservation_sync(void *arg1, void *arg2, dmu_tx_t *tx)
 		    delta, 0, 0, tx);
 	}
 	mutex_exit(&dd->dd_lock);
-
-	spa_history_log_internal(LOG_DS_RESERVATION, dd->dd_pool->dp_spa,
-	    tx, "%lld dataset = %llu",
-	    (longlong_t)effective_value, dd->dd_phys->dd_head_dataset_obj);
 }
 
 int

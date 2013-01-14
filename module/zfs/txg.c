@@ -20,6 +20,8 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Portions Copyright 2011 Martin Matuska
+ * Copyright (c) 2012 by Delphix. All rights reserved.
  */
 
 #include <sys/zfs_context.h>
@@ -29,6 +31,7 @@
 #include <sys/dsl_pool.h>
 #include <sys/dsl_scan.h>
 #include <sys/callb.h>
+#include <sys/spa_impl.h>
 
 /*
  * Pool-wide transaction groups.
@@ -218,8 +221,18 @@ uint64_t
 txg_hold_open(dsl_pool_t *dp, txg_handle_t *th)
 {
 	tx_state_t *tx = &dp->dp_tx;
-	tx_cpu_t *tc = &tx->tx_cpu[CPU_SEQID];
+	tx_cpu_t *tc;
 	uint64_t txg;
+
+	/*
+	 * It appears the processor id is simply used as a "random"
+	 * number to index into the array, and there isn't any other
+	 * significance to the chosen tx_cpu. Because.. Why not use
+	 * the current cpu to index into the array?
+	 */
+	kpreempt_disable();
+	tc = &tx->tx_cpu[CPU_SEQID];
+	kpreempt_enable();
 
 	mutex_enter(&tc->tc_lock);
 
@@ -269,6 +282,8 @@ txg_rele_to_sync(txg_handle_t *th)
 static void
 txg_quiesce(dsl_pool_t *dp, uint64_t txg)
 {
+	hrtime_t start;
+	txg_history_t *th;
 	tx_state_t *tx = &dp->dp_tx;
 	int g = txg & TXG_MASK;
 	int c;
@@ -283,6 +298,15 @@ txg_quiesce(dsl_pool_t *dp, uint64_t txg)
 	tx->tx_open_txg++;
 
 	/*
+	 * Measure how long the txg was open and replace the kstat.
+	 */
+	th = dsl_pool_txg_history_get(dp, txg);
+	th->th_kstat.open_time = gethrtime() - th->th_kstat.birth;
+	th->th_kstat.state = TXG_STATE_QUIESCING;
+	dsl_pool_txg_history_put(th);
+	dsl_pool_txg_history_add(dp, tx->tx_open_txg);
+
+	/*
 	 * Now that we've incremented tx_open_txg, we can let threads
 	 * enter the next transaction group.
 	 */
@@ -292,6 +316,8 @@ txg_quiesce(dsl_pool_t *dp, uint64_t txg)
 	/*
 	 * Quiesce the transaction group by waiting for everyone to txg_exit().
 	 */
+	start = gethrtime();
+
 	for (c = 0; c < max_ncpus; c++) {
 		tx_cpu_t *tc = &tx->tx_cpu[c];
 		mutex_enter(&tc->tc_lock);
@@ -299,6 +325,13 @@ txg_quiesce(dsl_pool_t *dp, uint64_t txg)
 			cv_wait(&tc->tc_cv[g], &tc->tc_lock);
 		mutex_exit(&tc->tc_lock);
 	}
+
+	/*
+	 * Measure how long the txg took to quiesce.
+	 */
+	th = dsl_pool_txg_history_get(dp, txg);
+	th->th_kstat.quiesce_time = gethrtime() - start;
+	dsl_pool_txg_history_put(th);
 }
 
 static void
@@ -339,7 +372,7 @@ txg_dispatch_callbacks(dsl_pool_t *dp, uint64_t txg)
 			    TASKQ_THREADS_CPU_PCT | TASKQ_PREPOPULATE);
 		}
 
-		cb_list = kmem_alloc(sizeof (list_t), KM_SLEEP);
+		cb_list = kmem_alloc(sizeof (list_t), KM_PUSHPAGE);
 		list_create(cb_list, sizeof (dmu_tx_callback_t),
 		    offsetof(dmu_tx_callback_t, dcb_node));
 
@@ -374,23 +407,23 @@ txg_sync_thread(dsl_pool_t *dp)
 
 #ifdef _KERNEL
 	/*
-	 * Disable the normal reclaim path for the txg_sync thread.  This
-	 * ensures the thread will never enter dmu_tx_assign() which can
-	 * otherwise occur due to direct reclaim.  If this is allowed to
-	 * happen the system can deadlock.  Direct reclaim call path:
-	 *
-	 *   ->shrink_icache_memory->prune_icache->dispose_list->
-	 *   clear_inode->zpl_clear_inode->zfs_inactive->dmu_tx_assign
+	 * Annotate this process with a flag that indicates that it is
+	 * unsafe to use KM_SLEEP during memory allocations due to the
+	 * potential for a deadlock.  KM_PUSHPAGE should be used instead.
 	 */
-	current->flags |= PF_MEMALLOC;
+	current->flags |= PF_NOFS;
 #endif /* _KERNEL */
 
 	txg_thread_enter(tx, &cpr);
 
 	start = delta = 0;
 	for (;;) {
-		uint64_t timer, timeout = zfs_txg_timeout * hz;
+		hrtime_t hrstart;
+		txg_history_t *th;
+		uint64_t timer, timeout;
 		uint64_t txg;
+
+		timeout = zfs_txg_timeout * hz;
 
 		/*
 		 * We sync when we're scanning, there's someone waiting
@@ -433,11 +466,17 @@ txg_sync_thread(dsl_pool_t *dp)
 		tx->tx_syncing_txg = txg;
 		cv_broadcast(&tx->tx_quiesce_more_cv);
 
+		th = dsl_pool_txg_history_get(dp, txg);
+		th->th_kstat.state = TXG_STATE_SYNCING;
+		vdev_get_stats(spa->spa_root_vdev, &th->th_vs1);
+		dsl_pool_txg_history_put(th);
+
 		dprintf("txg=%llu quiesce_txg=%llu sync_txg=%llu\n",
 		    txg, tx->tx_quiesce_txg_waiting, tx->tx_sync_txg_waiting);
 		mutex_exit(&tx->tx_sync_lock);
 
 		start = ddi_get_lbolt();
+		hrstart = gethrtime();
 		spa_sync(spa, txg);
 		delta = ddi_get_lbolt() - start;
 
@@ -450,6 +489,23 @@ txg_sync_thread(dsl_pool_t *dp)
 		 * Dispatch commit callbacks to worker threads.
 		 */
 		txg_dispatch_callbacks(dp, txg);
+
+		/*
+		 * Measure the txg sync time determine the amount of I/O done.
+		 */
+		th = dsl_pool_txg_history_get(dp, txg);
+		vdev_get_stats(spa->spa_root_vdev, &th->th_vs2);
+		th->th_kstat.sync_time = gethrtime() - hrstart;
+		th->th_kstat.nread = th->th_vs2.vs_bytes[ZIO_TYPE_READ] -
+		    th->th_vs1.vs_bytes[ZIO_TYPE_READ];
+		th->th_kstat.nwritten = th->th_vs2.vs_bytes[ZIO_TYPE_WRITE] -
+		    th->th_vs1.vs_bytes[ZIO_TYPE_WRITE];
+		th->th_kstat.reads = th->th_vs2.vs_ops[ZIO_TYPE_READ] -
+		    th->th_vs1.vs_ops[ZIO_TYPE_READ];
+		th->th_kstat.writes = th->th_vs2.vs_ops[ZIO_TYPE_WRITE] -
+		    th->th_vs1.vs_ops[ZIO_TYPE_WRITE];
+		th->th_kstat.state = TXG_STATE_COMMITTED;
+		dsl_pool_txg_history_put(th);
 	}
 }
 
@@ -615,7 +671,7 @@ txg_list_destroy(txg_list_t *tl)
 	mutex_destroy(&tl->tl_lock);
 }
 
-int
+boolean_t
 txg_list_empty(txg_list_t *tl, uint64_t txg)
 {
 	return (tl->tl_head[txg & TXG_MASK] == NULL);
@@ -767,4 +823,7 @@ EXPORT_SYMBOL(txg_wait_open);
 EXPORT_SYMBOL(txg_wait_callbacks);
 EXPORT_SYMBOL(txg_stalled);
 EXPORT_SYMBOL(txg_sync_waiting);
+
+module_param(zfs_txg_timeout, int, 0644);
+MODULE_PARM_DESC(zfs_txg_timeout, "Max seconds worth of delta per txg");
 #endif

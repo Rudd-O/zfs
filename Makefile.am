@@ -3,20 +3,20 @@ include $(top_srcdir)/config/deb.am
 include $(top_srcdir)/config/tgz.am
 include $(top_srcdir)/config/arch.am
 
+SUBDIRS = include
 if CONFIG_USER
 USER_DIR = dracut udev etc man scripts lib cmd systemd
 endif
 if CONFIG_KERNEL
-KERNEL_DIR = module
+SUBDIRS += module
 endif
-SUBDIRS = $(USER_DIR) $(KERNEL_DIR) include
 
 AUTOMAKE_OPTIONS = foreign
 EXTRA_DIST  = autogen.sh zfs.spec.in zfs-modules.spec.in
 EXTRA_DIST += config/config.awk config/rpm.am config/deb.am config/tgz.am
 EXTRA_DIST += META DISCLAIMER COPYRIGHT README.markdown
 EXTRA_DIST += OPENSOLARIS.LICENSE ZFS.RELEASE
-EXTRA_DIST += cp
+EXTRA_DIST += dkms.postinst copy-builtin
 noinst_HEADERS = zfs_config.h zfs.release
 
 distclean-local::
