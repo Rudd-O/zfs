@@ -31,9 +31,6 @@ modules.order
 Makefile
 Makefile.in
 
-systemdescaper
-systemd-zfs-generator
-
 #
 # Top level generated files specific to this top level dir
 #
