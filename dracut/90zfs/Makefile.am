@@ -21,5 +21,8 @@ $(pkgdracut_SCRIPTS):
 		-e 's,@sysconfdir\@,$(sysconfdir),g' \
 		'$@.in' >'$@'
 
+clean-local::
+	-$(RM) $(pkgdracut_SCRIPTS)
+
 distclean-local::
 	-$(RM) $(pkgdracut_SCRIPTS)
