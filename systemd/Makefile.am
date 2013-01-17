@@ -21,3 +21,6 @@ $(systemdgenerator_SCRIPTS):
 
 distclean-local::
 	-$(RM) $(systemdgenerator_SCRIPTS)
+
+clean-local::
+	-$(RM) $(systemdgenerator_SCRIPTS)
