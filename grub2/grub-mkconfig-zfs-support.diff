@@ -16,7 +16,7 @@ diff -up ./util/grub-mkconfig.in.original ./util/grub-mkconfig.in
 +        if [ -n "$GRUB_DEVICE" ] ; then break ; fi
 +        if [ "$fstype" != "zfs" ] ; then continue ; fi
 +        if [ "$mntpnt" != "/" ] ; then continue ; fi
-+        GRUB_DEVICE=`fstab-decode echo "$dev"`
++        GRUB_DEVICE="$dev" # this used to be processed by fstab-decode but that tool got killed so now I need to find a suitable replacement
 +        GRUB_DEVICE="ZFS=$GRUB_DEVICE" ; echo "$GRUB_DEVICE" ; break
 +    done
 +}
