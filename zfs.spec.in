@@ -8,10 +8,10 @@
 %define _mandir          %{_datadir}/man
 %define _includedir      /usr/include
 %define _udevdir         /lib/udev
-%if %{defined fc17}
-%define _dracutdir       /usr/lib/dracut
-%else
+%if %{defined fc16}
 %define _dracutdir       /usr/share/dracut
+%else
+%define _dracutdir       /usr/lib/dracut
 %endif
 
 Summary:         ZFS Library and Utils
