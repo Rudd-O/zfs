@@ -58,7 +58,9 @@ zfsrootparentfs=
 zfsrootparentname=
 zfsrootfs=`cat /proc/mounts | grep ' / zfs ' | awk ' { print $1 } ' | head -1` || true
 if [ -n "$zfsrootfs" ] ; then
-    zfsrootfs=`fstab-decode echo "$zfsrootfs"`
+#   zfsrootfs=`fstab-decode echo "$zfsrootfs"`
+#   fstab-decode no longer exists, need to find a replacement
+#   meanwhile filesystems with spaces in their names won't work
     echo "$scriptname: root ZFS file system is $zfsrootfs"
     zfsrootparentfs=`dirname "$zfsrootfs"`
     zfsrootparentname=`basename "$zfsrootparentfs"`
@@ -73,7 +75,10 @@ while read -r ignore mountpoint rest ; do
         if [ "$mountpoint" == "/" ] ; then continue ; fi
         if [ "$mountpoint" == "swap" ] ; then continue ; fi
 
-	fstab-decode echo "$mountpoint" >> "$gendir"/mountpoints
+#	fstab-decode echo "$mountpoint" >> "$gendir"/mountpoints
+#	fstab-decode no longer exists, need to find a replacement
+#	meanwhile filesystems with spaces in their names won't work
+	echo "$mountpoint" >> "$gendir"/mountpoints
         echo >> "$gendir"/mountpoints
 done < /etc/fstab
 
