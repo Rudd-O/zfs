@@ -3,10 +3,16 @@
 . /lib/dracut-lib.sh
 
 ZPOOL_FORCE=""
+ZPOOL_NOT_BY_ID=""
 
 if getargbool 0 zfs_force -y zfs.force -y zfsforce ; then
 	warn "ZFS: Will force-import pools if necessary."
 	ZPOOL_FORCE="-f"
+fi
+
+if getargbool 0 zfs_not_by_id -y zfs.not_by_id -y zfsnotbyid ; then
+	warn "ZFS: Will import pools from devices in /dev rather than by ID."
+	ZPOOL_NOT_BY_ID="-d /dev"
 fi
 
 case "$root" in
@@ -23,7 +29,7 @@ case "$root" in
 				[ "$zfsbootfs" = "no pools available" ] ; then
 				# Not there, so we need to import everything.
 				info "ZFS: Attempting to import additional pools."
-				zpool import -N -a ${ZPOOL_FORCE}
+				zpool import -N -a ${ZPOOL_FORCE} ${ZPOOL_NOT_BY_ID}
 				zfsbootfs=`zpool list -H -o bootfs | sed -n '/-/ !p' | sed 'q'`
 				if [ "$?" != "0" ] || [ "$zfsbootfs" = "" ] || \
 					[ "$zfsbootfs" = "no pools available" ] ; then
@@ -50,7 +56,7 @@ case "$root" in
 				# pool wasn't imported automatically by the kernel module, so
 				# try it manually.
 				info "ZFS: Importing pool ${pool}..."
-				if ! zpool import -N ${ZPOOL_FORCE} $pool ; then
+				if ! zpool import -N ${ZPOOL_FORCE} ${ZPOOL_NOT_BY_ID} $pool ; then
 					warn "ZFS: Unable to import pool ${pool}."
 					rootok=0
 

@@ -48,6 +48,12 @@ cases where storage is on a shared fabric such as iSCSI where multiple hosts
 can access storage devices concurrently.  _Please understand the implications
 of force-importing a pool before enabling this option!_
 
+* `zfs_not_by_id=0`: If set to 1, the initramfs will run `zpool import -d /dev`
+when attempting to import pools.  This restores the old behavior of importing
+pools from /dev rather than from /dev/disk/by-id, enhancing portability of
+root/boot ZFS pools between machines.  _Please understand the implications
+of importing a pool in this manner before enabling this option!_
+
 * `spl_hostid`: By default, the hostid used by the SPL module is read from
 /etc/hostid inside the initramfs.  This file is placed there from the host
 system when the initramfs is built which effectively ties the ramdisk to the
