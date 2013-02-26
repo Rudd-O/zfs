@@ -43,6 +43,16 @@ One caveat: the root file system must be registered as the first line in /etc/fs
 
 Of course, GRUB2 does not yet have "official" support for ZFS on root, but with the Dracut support here, plus a little bit of trickery in the grub2-mkconfig script or hand-rolling grub.cfg, it can be done just fine.  Look at the patch in the grub2/ subdirectory.
 
+SUPPORT FOR WAITING FOR DEVICES
+
+Sometimes (with USB devices) the kernel will initialize the devices late.  This causes said devices not to be available when the generator requires them to be imported.  Thus, on boot, you can tell the generator to wait until those devices have appeared, via the /proc/cmdline command line for your kernel.
+
+So, if you put in your kernel command line (say, for example, in /etc/default/grub) something to the effect of:
+
+    zfs_systemd_wait_for_device=/dev/sdb
+
+then the generator will wait, for up to one minute, until that device appears.  Then it will perform the requisite pool import that the pool requires to boot up properly.
+
 AUTOMATIC MULTIBOOT SUPPORT
 
 This generator also has a very particular feature that is very useful for multi-booting Linux systems.  Suppose you have an arrangement of ZFS file systems in your pool as follows:

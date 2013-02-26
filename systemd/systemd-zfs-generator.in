@@ -6,6 +6,26 @@ set -e
 	exit 0
 }
 
+### this feature is for delaying zpool import
+cat /proc/cmdline | python -c '
+import sys, os, time
+prefix = "zfs_systemd_wait_for_device="
+waitfor = [ x[len(prefix):] for x in sys.stdin.read().split() if x.startswith(prefix) ]
+if not waitfor:
+    sys.exit(0)
+found = False
+step = 16
+for _ in range(60*step):
+    if all([ os.path.exists(x) for x in waitfor ]):
+        found = True
+        break
+    time.sleep(1.0/step)
+if found is True:
+    sys.exit(0)
+else:
+    sys.exit(1)
+'
+
 scriptname=`basename "$0"`
 scriptdir=`dirname "$0"`
 echo "$scriptname: ZFS support available"
