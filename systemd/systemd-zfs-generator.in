@@ -18,21 +18,23 @@ step = 16
 for _ in range(60*step):
     if all([ os.path.exists(x) for x in waitfor ]):
         found = True
+        print >> sys.stderr, "All requisite devices appeared: %s"%waitfor
         break
     time.sleep(1.0/step)
 if found is True:
     sys.exit(0)
 else:
+    print >> sys.stderr, "One of the requisite devices did not show up: %s"%waitfor
     sys.exit(1)
 '
 
 scriptname=`basename "$0"`
 scriptdir=`dirname "$0"`
-echo "$scriptname: ZFS support available"
+echo "$scriptname: ZFS support available" >> /dev/stderr
 
 if [ -f @sysconfdir@/zfs/zpool.cache ] ; then
-	echo "$scriptname: importing all pools that were imported before last reboot"
-        pools=`@sbindir@/zpool import -c @sysconfdir@/zfs/zpool.cache | grep '^  pool:' | sed 's/^  pool: //'`
+        echo "$scriptname: importing all pools that were imported before last reboot" >> /dev/stderr
+        pools=`@sbindir@/zpool import | grep '^  pool:' | sed 's/^  pool: //'`
         if [ -n "$pools" ] ; then
           for pool in "$pools" ; do
             @sbindir@/zpool import -N "$pool" || true
