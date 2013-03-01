@@ -32,14 +32,13 @@ scriptname=`basename "$0"`
 scriptdir=`dirname "$0"`
 echo "$scriptname: ZFS support available" >> /dev/stderr
 
-if [ -f @sysconfdir@/zfs/zpool.cache ] ; then
-        echo "$scriptname: importing all pools that were imported before last reboot" >> /dev/stderr
-        pools=`@sbindir@/zpool import | grep '^  pool:' | sed 's/^  pool: //'`
-        if [ -n "$pools" ] ; then
-          for pool in "$pools" ; do
-            @sbindir@/zpool import -N "$pool" || true
-          done
-        fi
+grep -E 'zfs(_|\.|)force=(1|true)' /proc/cmdline && force="-f" || force=
+echo "$scriptname: importing all pools that were imported before last reboot" >> /dev/stderr
+pools=`@sbindir@/zpool import $force | grep 'pool:' | sed -r 's/(.*?)pool: //'`
+if [ -n "$pools" ] ; then
+    for pool in "$pools" ; do
+        @sbindir@/zpool import -c $force -N "$pool" || true
+    done
 fi
 
 gendir="$1"
