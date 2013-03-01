@@ -37,7 +37,7 @@ echo "$scriptname: importing all pools that were imported before last reboot" >>
 pools=`@sbindir@/zpool import $force | grep 'pool:' | sed -r 's/(.*?)pool: //'`
 if [ -n "$pools" ] ; then
     for pool in "$pools" ; do
-        @sbindir@/zpool import -c $force -N "$pool" || true
+        @sbindir@/zpool import $force -N "$pool" || true
     done
 fi
 
