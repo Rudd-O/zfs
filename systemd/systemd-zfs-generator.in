@@ -34,12 +34,7 @@ echo "$scriptname: ZFS support available" >> /dev/stderr
 
 grep -E 'zfs(_|\.|)force=(1|true)' /proc/cmdline && force="-f" || force=
 echo "$scriptname: importing all pools that were imported before last reboot" >> /dev/stderr
-pools=`@sbindir@/zpool import $force | grep 'pool:' | sed -r 's/(.*?)pool: //'`
-if [ -n "$pools" ] ; then
-    for pool in "$pools" ; do
-        @sbindir@/zpool import $force -N "$pool" || true
-    done
-fi
+@sbindir@/zpool import -aN $force
 
 gendir="$1"
 if [ -z "$gendir" ] ; then gendir=/run/systemd/generator ; fi
