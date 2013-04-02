@@ -210,6 +210,8 @@ zio_init(void)
 	zfs_mg_alloc_failures = MAX((3 * max_ncpus / 2), 8);
 
 	zio_inject_init();
+
+	lz4_init();
 }
 
 void
@@ -238,6 +240,8 @@ zio_fini(void)
 	kmem_cache_destroy(zio_cache);
 
 	zio_inject_fini();
+
+	lz4_fini();
 }
 
 /*
@@ -2245,8 +2249,11 @@ zio_ddt_free(zio_t *zio)
 
 	ddt_enter(ddt);
 	freedde = dde = ddt_lookup(ddt, bp, B_TRUE);
-	ddp = ddt_phys_select(dde, bp);
-	ddt_phys_decref(ddp);
+	if (dde) {
+		ddp = ddt_phys_select(dde, bp);
+		if (ddp)
+			ddt_phys_decref(ddp);
+	}
 	ddt_exit(ddt);
 
 	return (ZIO_PIPELINE_CONTINUE);

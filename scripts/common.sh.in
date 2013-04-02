@@ -32,8 +32,7 @@ TESTS_SKIP=${TESTS_SKIP:-}
 
 prefix=@prefix@
 exec_prefix=@exec_prefix@
-libexecdir=@libexecdir@
-pkglibexecdir=${libexecdir}/@PACKAGE@
+pkgdatadir=@datarootdir@/@PACKAGE@
 bindir=@bindir@
 sbindir=@sbindir@
 udevdir=@udevdir@
@@ -41,24 +40,23 @@ udevruledir=@udevruledir@
 sysconfdir=@sysconfdir@
 
 ETCDIR=${ETCDIR:-/etc}
-DEVDIR=${DEVDIR:-/dev/disk/zpool}
-ZPOOLDIR=${ZPOOLDIR:-${pkglibexecdir}/zpool-config}
-ZPIOSDIR=${ZPIOSDIR:-${pkglibexecdir}/zpios-test}
-ZPIOSPROFILEDIR=${ZPIOSPROFILEDIR:-${pkglibexecdir}/zpios-profile}
+DEVDIR=${DEVDIR:-/dev/disk/by-vdev}
+ZPOOLDIR=${ZPOOLDIR:-${pkgdatadir}/zpool-config}
+ZPIOSDIR=${ZPIOSDIR:-${pkgdatadir}/zpios-test}
+ZPIOSPROFILEDIR=${ZPIOSPROFILEDIR:-${pkgdatadir}/zpios-profile}
 
 ZDB=${ZDB:-${sbindir}/zdb}
 ZFS=${ZFS:-${sbindir}/zfs}
 ZINJECT=${ZINJECT:-${sbindir}/zinject}
 ZPOOL=${ZPOOL:-${sbindir}/zpool}
-ZPOOL_ID=${ZPOOL_ID:-${bindir}/zpool_id}
 ZTEST=${ZTEST:-${sbindir}/ztest}
 ZPIOS=${ZPIOS:-${sbindir}/zpios}
 
-COMMON_SH=${COMMON_SH:-${pkglibexecdir}/common.sh}
-ZFS_SH=${ZFS_SH:-${pkglibexecdir}/zfs.sh}
-ZPOOL_CREATE_SH=${ZPOOL_CREATE_SH:-${pkglibexecdir}/zpool-create.sh}
-ZPIOS_SH=${ZPIOS_SH:-${pkglibexecdir}/zpios.sh}
-ZPIOS_SURVEY_SH=${ZPIOS_SURVEY_SH:-${pkglibexecdir}/zpios-survey.sh}
+COMMON_SH=${COMMON_SH:-${pkgdatadir}/common.sh}
+ZFS_SH=${ZFS_SH:-${pkgdatadir}/zfs.sh}
+ZPOOL_CREATE_SH=${ZPOOL_CREATE_SH:-${pkgdatadir}/zpool-create.sh}
+ZPIOS_SH=${ZPIOS_SH:-${pkgdatadir}/zpios.sh}
+ZPIOS_SURVEY_SH=${ZPIOS_SURVEY_SH:-${pkgdatadir}/zpios-survey.sh}
 
 LDMOD=${LDMOD:-/sbin/modprobe}
 LSMOD=${LSMOD:-/sbin/lsmod}
@@ -525,7 +523,7 @@ udev_trigger() {
 
 #
 # The following udev helper functions assume that the provided
-# udev rules file will create a /dev/disk/zpool/<CHANNEL><RANK>
+# udev rules file will create a /dev/disk/by-vdev/<CHANNEL><RANK>
 # disk mapping.  In this mapping each CHANNEL is represented by
 # the letters a-z, and the RANK is represented by the numbers
 # 1-n.  A CHANNEL should identify a group of RANKS which are all
