@@ -5,7 +5,12 @@
 ZPOOL_FORCE=""
 ZPOOL_NOT_BY_ID=""
 
-if getargbool 0 zfs_force -y zfs.force -y zfsforce ; then
+if getarg 'zfs_force=ifnocache' -d 'zfs.force=ifnocache' -d 'zfsforce=ifnocache' ; then
+	if [ ! -e @sysconfdir@/zfs/zpool.cache ] ; then
+		warn "ZFS: Will force-import pools if necessary."
+		ZPOOL_FORCE="-f"
+	fi
+elif getargbool 0 zfs_force -y zfs.force -y zfsforce ; then
 	warn "ZFS: Will force-import pools if necessary."
 	ZPOOL_FORCE="-f"
 fi
