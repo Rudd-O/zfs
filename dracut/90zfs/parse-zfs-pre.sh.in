@@ -4,8 +4,8 @@
 
 # Ignore zpool.cache if requested on boot
 if getargbool 0 zfs_bypass_cache= ; then
-	info "ZFS: bypassing zpool.cache prior to loading the zfs module"
-	mv /etc/zfs/zpool.cache /etc/zfs/zpool.cache.bypassed
+	warn "ZFS: bypassing @sysconfdir@/zfs/zpool.cache prior to loading the zfs module"
+	mv @sysconfdir@/zfs/zpool.cache @sysconfdir@/zfs/zpool.cache.bypassed
 	modprobe zfs
-	mv /etc/zfs/zpool.cache.bypassed /etc/zfs/zpool.cache
+	mv @sysconfdir@/zfs/zpool.cache.bypassed @sysconfdir@/zfs/zpool.cache
 fi
