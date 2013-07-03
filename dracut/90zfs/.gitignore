@@ -1,4 +1,5 @@
 module-setup.sh
 mount-zfs.sh
 parse-zfs.sh
+parse-zfs-pre.sh
 export-zfs.sh
