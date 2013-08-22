@@ -1,0 +1,17 @@
+--- 10_linux.orig	2013-08-22 09:32:52.726157058 +0000
++++ 10_linux	2013-08-22 09:36:09.007656265 +0000
+@@ -67,7 +67,13 @@
+     xzfs)
+ 	rpool=`${grub_probe} --device ${GRUB_DEVICE} --target=fs_label 2>/dev/null || true`
+ 	bootfs="`make_system_path_relative_to_its_root / | sed -e "s,@$,,"`"
+-	LINUX_ROOT_DEVICE="ZFS=${rpool}${bootfs}"
++	fs=$(cat /etc/fstab | while read fs mntpnt type ; do
++		[ "$mntpnt" != "/" ] && continue
++		[ "$fs" == "rootfs" ] && continue
++		echo "$fs"
++		break
++	done)
++	LINUX_ROOT_DEVICE="ZFS=${fs}"
+ 	;;
+ esac
+ 
