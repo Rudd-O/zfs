@@ -109,7 +109,7 @@ function getdeps() {
 	mountpoint=`dirname "$1"`
 	while true ; do
 		if [ "$mountpoint" == "/" ] ; then break ; fi
-		if grep -Fxq "$mountpoint" "$gendir"/mountpoints ; then
+		if echo "$mountpoints" | grep -Fxq "$mountpoint" ; then
 			echo -n `escaping "$mountpoint"`.mount
 			echo -n " "
 		fi
@@ -118,12 +118,8 @@ function getdeps() {
 
 }
 
-# preparations
-rm -f "$gendir"/listing "$gendir"/listing2 "$gendir"/mountpoints
-touch "$gendir"/mountpoints
-
 echo "$scriptname: discovering early available ZFS file systems"
-@sbindir@/zfs list -H -o name,mountpoint,canmount > "$gendir"/listing
+listing=`@sbindir@/zfs list -H -o name,mountpoint,canmount`
 
 echo "$scriptname: discovering root ZFS file system"
 zfsrootparentfs=
@@ -140,6 +136,7 @@ fi
 
 # we read the output of fstab
 # add to the list of our known filesystems
+mountpoints=
 while read -r ignore mountpoint rest ; do
 	if [ "$mountpoint" == "/sysroot" ] ; then continue ; fi
 	if [ "$ignore" == "#" ] ; then continue ; fi
@@ -150,8 +147,8 @@ while read -r ignore mountpoint rest ; do
 #	fstab-decode echo "$mountpoint" >> "$gendir"/mountpoints
 #	fstab-decode no longer exists, need to find a replacement
 #	meanwhile filesystems with spaces in their names won't work
-	echo "$mountpoint" >> "$gendir"/mountpoints
-        echo >> "$gendir"/mountpoints
+	mountpoints="$mountpoints
+$mountpoint"
 done < /etc/fstab
 
 OLDIFS="$IFS"
@@ -165,8 +162,9 @@ while read -r name mountpoint canmount ; do
 	if [ "$mountpoint" == "legacy" ] ; then continue ; fi
 	if [ "$mountpoint" == "none" ] ; then continue ; fi
 
-	echo -E "$mountpoint" >> "$gendir"/mountpoints
-done < "$gendir"/listing
+	mountpoints="$mountpoints
+$mountpoint"
+done < <(echo "$listing")
 
 # we go through the output of zfs list
 # and generate all the units
@@ -217,12 +215,11 @@ Type=zfs
 	[ -L "$gendir/local-fs.target.requires/$unitname" ] || ln -s "$gendir/$unitname" "$gendir/local-fs.target.requires"
 
 	# end of escaped loop
-done < "$gendir"/listing
+done < <(echo "$listing")
 
 IFS="$OLDIFS"
 
-# I am done, so now nuke them temp files
-rm -f "$gendir"/listing "$gendir"/listing2 "$gendir"/mountpoints
+# I am done
 
 echo "[Unit]
 Description=ZFS service (dummy)
