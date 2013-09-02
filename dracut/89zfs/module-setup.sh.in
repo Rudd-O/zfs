@@ -1,0 +1,131 @@
+#!/bin/sh
+
+check() {
+        local _dev
+        local _devlinks
+        local _devname
+        local _devtype
+        local _majmin
+        local _x
+        local rootzfsdev
+        local rootpool
+
+	# We depend on udev-rules being loaded
+	[ "$1" = "-d" ] && return 0
+
+	# Verify the zfs tool chain
+	test -x @sbindir@/zpool || return 255
+	test -x @sbindir@/zfs || return 255
+	test -x @sbindir@/zdb || return 255
+
+        # this following hack ensures that ZFS is included in host-only dracut initramfs
+        # and also ensures that cryptsetup is included if the root pool is encrypted
+
+        # is the root FS a ZFS "device"?
+        rootzfsdev=
+        while read dev mntpnt type rest ; do
+            if [ "$mntpnt" == "/" -a "$type" == "zfs" ] ; then
+                rootzfsdev="$dev"
+            fi
+        done < /etc/mtab
+
+        # if it is, then let's do this
+        # complete host_devs and host_fs_types
+        # before 90crypt has a chance to do its thing
+        if [ -n "$rootzfsdev" ] ; then
+            declare -a _devs
+            host_fs_types["$rootzfsdev"]="zfs"
+            rootpool=$(echo "$rootzfsdev" | cut -d / -f 1)
+
+            # for each physical device in the root pool, add to list
+            while read key rest ; do
+                if [ "$key" == "path:" ] ; then
+                    _dev=`eval echo $rest`
+                    _devname=$(udevadm info --query=property --name="$_dev" | grep "^DEVNAME=" | sed 's|^DEVNAME=||')
+                    _devs+=("$_devname")
+                fi
+            done < <(@sbindir@/zdb -C "$rootpool")
+
+            # inspect the dev name according to udevadm
+            # and also inspect the device type
+            for _dev in "${_devs[@]}" ; do
+                _devtype=$(udevadm info --query=property --name="$_dev" | grep "^ID_FS_TYPE=" | sed 's|^ID_FS_TYPE=||')
+                _majmin=$(get_maj_min "$_dev")
+
+                push host_devs "$_dev"
+                host_fs_types["$_dev"]="$_devtype"
+
+                # any slave device gets the same treatment
+                # this is what discovers dm-crypt host devices
+                if [[ -d /sys/dev/block/$_majmin/slaves ]] ; then
+                    for _x in /sys/dev/block/$_majmin/slaves/*; do
+                        [[ -f $_x/dev ]] || continue
+                        _x=/dev/`basename "$_x"`
+                        _devname=$(udevadm info --query=property --name="$_x" | grep "^DEVNAME=" | sed 's|^DEVNAME=||')
+                        _devtype=$(udevadm info --query=property --name="$_x" | grep "^ID_FS_TYPE=" | sed 's|^ID_FS_TYPE=||')
+                        push host_devs "$_devname"
+                        host_fs_types["$_devname"]="$_devtype"
+                    done
+                fi
+            done
+
+        fi
+
+        [[ $hostonly ]] || [[ $mount_needs ]] && {
+            for fs in "${host_fs_types[@]}"; do
+                [[ "$fs" = "zfs" ]] && return 0
+            done
+            return 255
+        }
+
+	return 0
+}
+
+depends() {
+	echo udev-rules
+	return 0
+}
+
+installkernel() {
+	instmods zfs
+	instmods zcommon
+	instmods znvpair
+	instmods zavl
+	instmods zunicode
+	instmods spl
+	instmods zlib_deflate
+	instmods zlib_inflate
+}
+
+install() {
+	inst_rules @udevruledir@/90-zfs.rules
+	inst_rules @udevruledir@/69-vdev.rules
+	inst_rules @udevruledir@/60-zvol.rules
+	dracut_install @sbindir@/zfs
+	dracut_install @sbindir@/zpool
+	dracut_install @udevdir@/vdev_id
+	dracut_install @udevdir@/zvol_id
+	dracut_install mount.zfs
+	dracut_install hostid
+	inst_hook cmdline 15 "$moddir/parse-zfs-pre.sh"
+	inst_hook cmdline 95 "$moddir/parse-zfs.sh"
+	inst_hook mount 98 "$moddir/mount-zfs.sh"
+
+	if [ -e @sysconfdir@/zfs/zpool.cache ]; then
+		firstpool=`@sbindir@/zpool list -H -o name | head -1 ; true`
+		if [ "$firstpool" != "" ] ; then
+			@sbindir@/zpool set cachefile=@sysconfdir@/zfs/zpool.cache "$firstpool"
+		fi
+		inst @sysconfdir@/zfs/zpool.cache
+	fi
+
+	# Synchronize initramfs and system hostid
+	TMP=`mktemp`
+	AA=`hostid | cut -b 1,2`
+	BB=`hostid | cut -b 3,4`
+	CC=`hostid | cut -b 5,6`
+	DD=`hostid | cut -b 7,8`
+	printf "\x$DD\x$CC\x$BB\x$AA" >$TMP
+	inst_simple "$TMP" /etc/hostid
+	rm "$TMP"
+}

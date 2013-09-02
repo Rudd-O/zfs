@@ -59,7 +59,7 @@ AC_CONFIG_FILES([
 	Makefile
 	systemd/Makefile
 	dracut/Makefile
-	dracut/90zfs/Makefile
+	dracut/89zfs/Makefile
 	udev/Makefile
 	udev/rules.d/Makefile
 	etc/Makefile
