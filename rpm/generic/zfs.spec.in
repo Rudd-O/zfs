@@ -158,6 +158,39 @@ exit 0
 }
 exit 0
 
+%post systemd
+if [ $1 -eq 1 ]; then
+        # Package install,
+        /bin/systemctl enable zfs-share-nfs.service >/dev/null 2>&1 || :
+        if /bin/systemctl --quiet is-enabled nfs.target ; then
+           /bin/systemctl start zfs-share-nfs.service >/dev/null 2>&1 || :
+        fi
+else
+        # Package upgrade
+        if /bin/systemctl --quiet is-enabled zfs-share-nfs.service ; then
+                /bin/systemctl reenable zfs-share-nfs.service >/dev/null 2>&1 || :
+        fi
+fi
+
+%preun systemd
+        for service in zfs-share-nfs.service ; do
+
+if [ $1 -eq 0 ] ; then
+        # Package removal, not upgrade
+        /usr/bin/systemctl --no-reload disable $service > /dev/null 2>&1 || :
+        /usr/bin/systemctl stop $service > /dev/null 2>&1 || :
+fi
+        done
+
+%postun systemd
+if [ $1 -ge 1 ]; then
+        # Package upgrade, not uninstall
+        for service in zfs-share-nfs.service ; do
+        /bin/systemctl try-restart $service >/dev/null 2>&1 || :
+        done
+fi
+/bin/systemctl --system daemon-reload >/dev/null 2>&1 || :
+
 %files
 %doc AUTHORS COPYRIGHT DISCLAIMER
 %doc OPENSOLARIS.LICENSE README.markdown
@@ -186,8 +219,10 @@ exit 0
 
 %files systemd
 %defattr(-,root,root)
+%doc systemd/README.systemd
 /lib/systemd/systemdescaper
 /lib/systemd/system-generators/systemd-zfs-generator
+/lib/systemd/system/zfs-share-nfs.service
 
 %changelog
 * Fri Mar 22 2013 Brian Behlendorf <behlendorf1@llnl.gov> - 0.6.1-1

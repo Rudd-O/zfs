@@ -1,0 +1,16 @@
+[Unit]
+Description=ZFS sharing of NFS services
+BindsTo=nfs-server.service
+Before=nfs.target
+After=nfs-server.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+StandardError=syslog+console
+ExecStart=@sbindir@/zfs share -a
+ExecStop=@sbindir@/zfs unshare -a
+ExecReload=@sbindir@/zfs share -a
+
+[Install]
+WantedBy=nfs.target

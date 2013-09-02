@@ -1,3 +1,26 @@
+systemd support for operating systems using ZFS
+-----------------------------------------------
+
+The NFS sharing unit
+--------------------
+
+`zfs-share-nfs.service` makes sure that ZFS automatically shares file systems
+via NFS when they have been configured to be shared, and the NFS server is
+enabled.  It also makes sure that the ZFS shares are re-exported whenever the
+NFS server is reloaded or restarted.
+
+For ZFS sharing to work, of course, the NFS server `nfs-utils` package and
+associated services must be installed and enabled.
+
+The RPM automatically takes care of enabling ZFS sharing when the `zfs-systemd`
+package is installed.  Those of you installing from source will need to
+enable it by hand for bootup with `systemctl enable zfs-share-nfs.service` and
+of course `systemctl start zfs-share-nfs.service` to run it, after you have
+reloaded the systemd daemon with `systemctl daemon-reload`.
+
+The generator
+-------------
+
 This is a very basic ZFS unit generator, with support for boot-time generation of ZFS units of all available zpools mounted at boot time.  It is intended as a partial (and, eventually, a full) replacement for the initscript in Linux systems with systemd as the init system.
 
 WHAT IT DOES
