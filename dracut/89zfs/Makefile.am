@@ -3,14 +3,12 @@ pkgdracut_SCRIPTS = \
 	$(top_srcdir)/dracut/89zfs/module-setup.sh \
 	$(top_srcdir)/dracut/89zfs/mount-zfs.sh \
 	$(top_srcdir)/dracut/89zfs/export-zfs.sh \
-	$(top_srcdir)/dracut/89zfs/parse-zfs-pre.sh \
 	$(top_srcdir)/dracut/89zfs/parse-zfs.sh
 
 EXTRA_DIST = \
 	$(top_srcdir)/dracut/89zfs/module-setup.sh.in \
 	$(top_srcdir)/dracut/89zfs/mount-zfs.sh.in \
 	$(top_srcdir)/dracut/89zfs/export-zfs.sh.in \
-	$(top_srcdir)/dracut/89zfs/parse-zfs-pre.sh \
 	$(top_srcdir)/dracut/89zfs/parse-zfs.sh.in
 
 $(pkgdracut_SCRIPTS):

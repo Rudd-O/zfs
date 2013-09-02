@@ -20,6 +20,9 @@ if getargbool 0 zfs_not_by_id -y zfs.not_by_id -y zfsnotbyid ; then
 	ZPOOL_NOT_BY_ID="-d /dev"
 fi
 
+# load module, but do not import anything at all
+modprobe zfs zfs_autoimport_disable=1
+
 case "$root" in
 	zfs:*)
 		# We have ZFS modules loaded, so we're able to import pools now.

@@ -57,15 +57,6 @@ pools from /dev rather than from /dev/disk/by-id, enhancing portability of
 root/boot ZFS pools between machines.  _Please understand the implications
 of importing a pool in this manner before enabling this option!_
 
-* `zfs_bypass_cache=0`: If set to 1, the initramfs will temporarily move the
-`/etc/zfs/zpool.cache` file out of the way right before loading the `zfs`
-kernel module, restoring it to its original place afterwards.  This is
-necessary because the `zfs` kernel module tends to import all pools dictated
-by the cache automatically upon first load, and this usually happens at a
-very inopportune moment when udev rules are still executing and not all block
-devices are ready for pool import to succeed completely (examples being LUKS
-encrypted devices).  This option might need use of `zfs_force` in tandem.
-
 * `spl_hostid`: By default, the hostid used by the SPL module is read from
 /etc/hostid inside the initramfs.  This file is placed there from the host
 system when the initramfs is built which effectively ties the ramdisk to the
