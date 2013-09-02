@@ -20,6 +20,11 @@ check() {
 
         # this following hack ensures that ZFS is included in host-only dracut initramfs
         # and also ensures that cryptsetup is included if the root pool is encrypted
+        # by informing dracut that there are encrypted devices backing the root pool
+
+        # detect shitty dracut/bash
+        shitty_dracut=0
+        echo $host_fs_types | grep -q '|' && shitty_dracut=1
 
         # is the root FS a ZFS "device"?
         rootzfsdev=
@@ -34,7 +39,11 @@ check() {
         # before 90crypt has a chance to do its thing
         if [ -n "$rootzfsdev" ] ; then
             declare -a _devs
-            host_fs_types["$rootzfsdev"]="zfs"
+            if [ $shitty_dracut == 1 ] ; then
+                push host_fs_types "$rootzfsdev|zfs"
+            else
+                host_fs_types["$rootzfsdev"]="zfs"
+            fi
             rootpool=$(echo "$rootzfsdev" | cut -d / -f 1)
 
             # for each physical device in the root pool, add to list
@@ -53,7 +62,11 @@ check() {
                 _majmin=$(get_maj_min "$_dev")
 
                 push host_devs "$_dev"
-                host_fs_types["$_dev"]="$_devtype"
+                if [ $shitty_dracut == 1 ] ; then
+                    push host_fs_types "$_dev|$_devtype"
+                else
+                    host_fs_types["$_dev"]="$_devtype"
+                fi
 
                 # any slave device gets the same treatment
                 # this is what discovers dm-crypt host devices
@@ -64,7 +77,11 @@ check() {
                         _devname=$(udevadm info --query=property --name="$_x" | grep "^DEVNAME=" | sed 's|^DEVNAME=||')
                         _devtype=$(udevadm info --query=property --name="$_x" | grep "^ID_FS_TYPE=" | sed 's|^ID_FS_TYPE=||')
                         push host_devs "$_devname"
-                        host_fs_types["$_devname"]="$_devtype"
+                        if [ $shitty_dracut == 1 ] ; then
+                            push host_fs_types "$_devname|$_devtype"
+                        else
+                            host_fs_types["$_devname"]="$_devtype"
+                        fi
                     done
                 fi
             done
@@ -73,7 +90,7 @@ check() {
 
         [[ $hostonly ]] || [[ $mount_needs ]] && {
             for fs in "${host_fs_types[@]}"; do
-                [[ "$fs" = "zfs" ]] && return 0
+                echo "$fs" | grep -q "zfs$" && return 0
             done
             return 255
         }
