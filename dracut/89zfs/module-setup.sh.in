@@ -22,9 +22,11 @@ check() {
         # and also ensures that cryptsetup is included if the root pool is encrypted
         # by informing dracut that there are encrypted devices backing the root pool
 
+        if [ ${#host_fs_types[@]} -gt 0 ] ; then
+
         # detect shitty dracut/bash
         shitty_dracut=0
-        echo $host_fs_types | grep -q '|' && shitty_dracut=1
+        echo "${host_fs_types[@]}" | grep -q '|' && shitty_dracut=1
 
         # is the root FS a ZFS "device"?
         rootzfsdev=
@@ -85,6 +87,8 @@ check() {
                     done
                 fi
             done
+
+        fi
 
         fi
 
