@@ -2,6 +2,9 @@
 
 . /lib/dracut-lib.sh
 
+# we must load the zfs module before the udev rules get to loading it
+modprobe zfs zfs_autoimport_disable=1
+
 # Let the command line override our host id.
 spl_hostid=`getarg spl_hostid=`
 if [ "${spl_hostid}" != "" ] ; then
