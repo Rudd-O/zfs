@@ -89,7 +89,8 @@ Before=initrd.target
 [Service]
 Type=oneshot
 ExecStart=@sbindir@/zpool import -fN $1
-ExecStop=@sbindir@/zpool export $1
+# disabling ExecStop=@sbindir@/zpool export $1 because it causes an error
+# it's simply not necessary
 RemainAfterExit=yes
 " > "$initdir"/etc/systemd/system/"$poolnameunit"
     ln -sf ../"$poolnameunit" "$initdir"/etc/systemd/system/initrd.target.requires/
