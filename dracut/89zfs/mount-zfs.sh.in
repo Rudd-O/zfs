@@ -54,9 +54,30 @@ case "$root" in
 			fi
 			info "ZFS: Using ${zfsbootfs} as root."
 		else
+                    systemdbeingused=
+                    for a in /etc/systemd/system/zpool-import-*.service ; do
+                        test -f "$a" && systemdbeingused=1
+                    done
+
+		    zfsbootfs="${root#zfs:}"
+		    pool="${zfsbootfs%%/*}"
+                    if [ -n "$systemdbeingused" ] ; then
+			rootok=0
+			# systemd is importing the pool, when the pool is imported we mount
+			for x in 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0; do
+			    info "ZFS: Waiting for ${pool} to be imported by systemd..."
+			    if zpool list -H "$pool" > /dev/null 2>&1 ; then
+				rootok=1
+				break
+			    fi
+			    sleep 1
+			done
+			if [ $rootok == 0 ] ; then
+			    warn "ZFS: Unable to verify that systemd has imported pool ${pool}."
+			    return 1
+			fi
+                    else
 			# Should have an explicit pool set, so just import it and we're done.
-			zfsbootfs="${root#zfs:}"
-			pool="${zfsbootfs%%/*}"
 			if ! zpool list -H $pool > /dev/null 2>&1 ; then
 				# pool wasn't imported automatically by the kernel module, so
 				# try it manually.
@@ -68,6 +89,7 @@ case "$root" in
 					return 1
 				fi
 			fi
+                    fi
 		fi
 
 		# Above should have left our rpool imported and pool/dataset in $root.
