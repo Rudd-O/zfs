@@ -14,9 +14,9 @@ check() {
 	[ "$1" = "-d" ] && return 0
 
 	# Verify the zfs tool chain
-	test -x @sbindir@/zpool || return 255
-	test -x @sbindir@/zfs || return 255
-	test -x @sbindir@/zdb || return 255
+	test -x @sbindir@/zpool || return 1
+	test -x @sbindir@/zfs || return 1
+	test -x @sbindir@/zdb || return 1
 
         # this following hack ensures that ZFS is included in host-only dracut initramfs
         # and also ensures that cryptsetup is included if the root pool is encrypted
