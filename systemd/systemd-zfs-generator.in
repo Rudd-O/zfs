@@ -9,87 +9,10 @@ exec 2>&1
 	exit 0
 }
 
-getarg() {
-    local _o _found _key _cmdline
-    unset _o
-    unset _found
-    _key=$1
-    shift
-    _cmdline="$@"
-    set --
-    for _o in $_cmdline; do
-        if [ "$_o" = "$_key" ]; then
-            _found=1;
-        elif [ "${_o%%=*}" = "${_key%=}" ]; then
-            [ -n "${_o%%=*}" ] && set -- "$@" "${_o#*=}";
-            _found=1;
-        fi
-    done
-    if [ -n "$_found" ]; then
-        [ $# -gt 0 ] && echo -n "$@"
-        return 0
-    fi
-    return 1;
-}
-
-getargbool() {
-    local _b
-    unset _b
-    local _default
-    _default=$1; shift
-    _b=$(getarg "$@")
-    [ $? -ne 0 -a -z "$_b" ] && _b=$_default
-    if [ -n "$_b" ]; then
-        [ $_b = "0" ] && return 1
-        [ $_b = "no" ] && return 1
-        [ $_b = "off" ] && return 1
-    fi
-    return 0
-}
-
 scriptname=`basename "$0"`
 scriptdir=`dirname "$0"`
 cmdline=`cat /proc/cmdline`
 echo "$scriptname: ZFS support available"
-
-### this feature is for delaying zpool import if devices have not appeared yet
-devices_to_wait_for=$(getarg zfs_systemd_wait_for_device $cmdline) || true
-if [ "$devices_to_wait_for" != "" ] ; then
-    deciseconds=600
-    while [ "$deciseconds" != "0" ] ; do
-	all_devices_found=yes
-	for device in $devices_to_wait_for ; do
-	    test -e "$device" || {
-		all_devices_found=
-		if [ "$deciseconds" != "0" ] ; then
-		    echo "$scriptname: device $device has not appeared in 60 seconds"
-		fi
-	    }
-	done
-	if [ "$all_devices_found" == "yes" ] ; then
-	    echo "$scriptname: all requisite devices appeared: $devices_to_wait_for"
-	    break
-	fi
-	sleep 0.1
-	deciseconds=$(( $deciseconds - 1 ))
-    done
-fi
-
-echo "$scriptname: pool status before import"
-@sbindir@/zpool status -v || true
-
-force=
-getargbool 0 zfs_force $cmdline && {
-    force=-f
-    echo "$scriptname: forcibly importing all pools available on the system"
-} || {
-    echo "$scriptname: importing all pools that were imported before last reboot"
-}
-
-@sbindir@/zpool import -aN $force || true
-
-echo "$scriptname: pool status after import"
-@sbindir@/zpool status -v || true
 
 gendir="$1"
 if [ -z "$gendir" ] ; then gendir=/run/systemd/generator ; fi
@@ -103,6 +26,86 @@ escaper="$scriptdir"/../systemdescaper
 function escaping() {
 	"$escaper" --escape "$1"
 }
+
+generate_pool_unit() {
+
+    # import the module of course
+echo "[Unit]
+Description=ZFS module
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+ExecStart=/sbin/modprobe zfs zfs_autoimport_disable=1
+RemainAfterExit=yes
+" > "$gendir"/zfs-module-load.service
+        ln -sf ../zfs-module-load.service "$gendir"/local-fs.target.requires/
+
+    # now write the import for the pool
+    escapedunit=zpool-import-`escaping "$1"`.service
+echo "[Unit]
+Description=ZFS pool $1
+DefaultDependencies=no
+Before=local-fs.target
+After=zfs-module-load.service $2
+Requires=zfs-module-load.service $2
+
+[Service]
+Type=oneshot
+ExecStart=@sbindir@/zpool import -f $1
+# ExecStop=disabled @sbindir@/zpool export $1 because otherwise the pool does not get reimported on boot
+RemainAfterExit=yes
+" > "$gendir"/$escapedunit
+        ln -sf ../zfs-module-load.service "$gendir"/local-fs.target.requires/
+        ln -sf ../$escapedunit "$gendir"/local-fs.target.requires/
+
+}
+
+echo "$scriptname: discovering available ZFS pools for import" >&2
+OLDIFS="$IFS"
+IFS=
+poolname=
+deps=
+while read everything ; do
+
+    if [ "${everything:0:1}" != " " ] ; then
+
+        # this is a pool name
+
+        if [ -n "$poolname" ] ; then
+            if ! zpool list "$poolname" >/dev/null 2>&1 ; then
+                # this pool is not imported yet -- save pool info collected before
+                generate_pool_unit "$poolname" "$deps"
+            fi
+        fi
+
+        poolname=`echo "$everything" | sed 's/:$//'`
+        deps=
+
+    elif echo "$everything" | grep -q "^ *path: " ; then
+
+        # this is a device path -- quoted weirdly
+        # we add it to the list of dependencies for this pool of course
+        devname=`echo "$everything" | sed 's/^ *path: //'`
+        devname=`eval echo $devname`
+        devname=`escaping "$devname"`.device
+        deps="$deps $devname"
+
+    fi
+
+done < <(@sbindir@/zdb -C)
+if [ -n "$poolname" ] ; then
+    if ! zpool list "$poolname" >/dev/null 2>&1 ; then
+        # this pool is not imported yet -- save pool info collected before
+        generate_pool_unit "$poolname" "$deps"
+    fi
+fi
+
+IFS="$OLDIFS"
+unset OLDIFS
+
+# at this point, we are done telling systemd to import as-of-yet unavailable pools
+# and we simply move on to mounting the file systems that are indeed available
 
 function getdeps() {
 
@@ -118,10 +121,10 @@ function getdeps() {
 
 }
 
-echo "$scriptname: discovering early available ZFS file systems"
+echo "$scriptname: discovering early available ZFS file systems" >&2
 listing=`@sbindir@/zfs list -H -o name,mountpoint,canmount`
 
-echo "$scriptname: discovering root ZFS file system"
+echo "$scriptname: discovering root ZFS file system" >&2
 zfsrootparentfs=
 zfsrootparentname=
 zfsrootfs=`cat /proc/mounts | grep ' / zfs ' | awk ' { print $1 } ' | head -1` || true
@@ -228,30 +231,3 @@ Description=ZFS service (dummy)
 Type=oneshot
 ExecStart=/bin/true
 " > "$gendir"/zfs.service
-
-
-# if the root filesystem is on zfs, we need to disable remount-rootfs.service
-# but I an disabling this code since systemd apparently does not pick up this unit file
-# after it was generated
-#
-#if cat /proc/self/mounts | grep -q ' / zfs ' ; then
-#
-#	echo -E "$scriptname: ZFS file system on root, disabling remount-rootfs.service"
-#
-#	echo "[Unit]
-#Description=Remount Root FS (no-op due to ZFS)
-#DefaultDependencies=no
-#Conflicts=shutdown.target
-#After=systemd-readahead-collect.service systemd-readahead-replay.service fsck-root.service
-#Before=local-fs-pre.target local-fs.target shutdown.target
-#Wants=local-fs-pre.target
-#
-#[Service]
-#Type=oneshot
-#RemainAfterExit=yes
-#ExecStart=/bin/true
-#StandardOutput=syslog
-#" > $gendir/remount-rootfs.service
-#
-#	[ -L "$gendir/local-fs.target.requires/remount-rootfs.service" ] || ln -s "$gendir/remount-rootfs.service" "$gendir/local-fs.target.requires"
-#fi

@@ -21,7 +21,12 @@ reloaded the systemd daemon with `systemctl daemon-reload`.
 The generator
 -------------
 
-This is a very basic ZFS unit generator, with support for boot-time generation of ZFS units of all available zpools mounted at boot time.  It is intended as a partial (and, eventually, a full) replacement for the initscript in Linux systems with systemd as the init system.
+This is a very basic ZFS unit generator, with support for boot-time generation
+of ZFS units mounting all datasets in all available zpools imported at early
+boot time, as well as importing all zpools known to zpool.cache at early boot
+time, as soon as their backing devices have appeared.  It is intended as a
+partial (and, eventually, a full) replacement for the initscript in Linux
+systems with systemd as the init system.
 
 WHAT IT DOES
 
@@ -30,6 +35,9 @@ Our systemd-zfs-generator lets systemd automount any filesystem that:
     - is set to canmount=yes,
     - is not /sysroot or /
     - is not set to legacy
+
+It also lets systemd import all zpools that have not yet been imported, with
+the consequent implicit `zfs mount` of the datasets in these pools.
 
 HOW IT WORKS
 

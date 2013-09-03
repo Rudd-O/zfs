@@ -40,16 +40,11 @@ parameters passed in from the boot loader:
 attribute.  If an explicitly set root is desired, you may use
 `root=ZFS:pool/dataset`
 
-* `zfs_force=0`: If set to 1, the initramfs will run `zpool import -f` when
-attempting to import pools if the required pool isn't automatically imported
-by the zfs module.  This can save you a trip to a bootcd if hostid has
-changed, but is dangerous and can lead to zpool corruption, particularly in
-cases where storage is on a shared fabric such as iSCSI where multiple hosts
-can access storage devices concurrently.  Alternatively, if you specify
-`zfs_force=ifnocache`, then the root pool will be force-imported only if the
-initial RAM disk does not have an `/etc/zfs/zpool.cache` file. _Please
-understand the implications of force-importing a pool before enabling this
-option!_
+* `zfs_force=0`: This parameter does not exist anymore.  All pools are
+forcibly imported, always.  If you keep a disk connected to two machines
+at the same time, and that disk is part of a pool that is active in one
+of the machines, booting the other machine with an initramfs prepared
+using this software will likely hose the pool.
 
 * `zfs_not_by_id=0`: If set to 1, the initramfs will run `zpool import -d /dev`
 when attempting to import pools.  This restores the old behavior of importing
