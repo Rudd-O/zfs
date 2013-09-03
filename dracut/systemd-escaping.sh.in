@@ -1,0 +1,72 @@
+#!/bin/bash
+
+systemd_unescape() {
+
+    local char
+    local variable
+    local newvariable
+
+    variable="$1"
+    newvariable=
+
+    m=0
+    while [ $m -lt $(( ${#variable} )) ] ; do
+        char=${variable:$m:1}
+        if [ "$m" == "0" ] ; then
+            if [ "$char" == "-" ] ; then
+                char=/
+            else
+                char=/"$char"
+            fi
+        else
+            if [ "$char" == "-" ] ; then
+                char=/
+            elif [ "$char" == "\\" ] ; then
+                m=$(( $m + 1 ))
+                char="${char}${variable:$m:1}"
+                m=$(( $m + 1 ))
+                char="${char}${variable:$m:1}"
+                m=$(( $m + 1 ))
+                char="${char}${variable:$m:1}"
+                char=`printf "$char"`
+            fi
+        fi
+        newvariable="${newvariable}${char}"
+        m=$(( $m + 1 ))
+    done
+
+    echo $newvariable
+
+}
+
+systemd_escape() {
+
+    local char
+    local ord
+    local variable
+    local newvariable
+
+    variable="$1"
+    newvariable=
+
+    m=0
+    while [ $m -lt $(( ${#variable} )) ] ; do
+        char=${variable:$m:1}
+        ord=$( printf "%d" "'$char" )
+        if [ $ord -lt 47 ] ; then
+            char="\\x"$( printf "%x" "'$char" )
+        elif [ $ord == 47 ] ; then
+            char=-
+        fi
+        newvariable="${newvariable}${char}"
+        m=$(( $m + 1 ))
+    done
+
+    # FIXME remove trailing slashes of course
+    while [ "$newvariable" != "-" -a "${newvariable:0:1}" == "-" ] ; do
+        newvariable="${newvariable:1}"
+    done
+
+    echo $newvariable
+
+}

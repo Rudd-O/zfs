@@ -215,6 +215,7 @@ fi
 
 %files dracut
 %doc dracut/README.dracut.markdown
+%{_dracutdir}/systemd-escaping.sh
 %{_dracutdir}/modules.d/*
 
 %files systemd

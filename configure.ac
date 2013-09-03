@@ -60,6 +60,7 @@ AC_CONFIG_FILES([
 	systemd/Makefile
 	dracut/Makefile
 	dracut/89zfs/Makefile
+	dracut/99zfssystemd/Makefile
 	udev/Makefile
 	udev/rules.d/Makefile
 	etc/Makefile

@@ -1,0 +1,153 @@
+#!/bin/sh
+
+. "@dracutdir@"/systemd-escaping.sh
+
+check() {
+        if [[ "$hostonly" ]] ; then
+            if dracut_module_included "systemd" ; then
+                return 0
+            fi
+        fi
+	return 255
+}
+
+depends() {
+	echo base zfs
+	return 0
+}
+
+installkernel() {
+        return 0
+}
+
+get_zvol_device_name() {
+    local _pdev
+    local a
+    local data
+    _pdev=$(get_persistent_dev $1 2>/dev/null) || return 0
+    data=`udevadm info --query=property --name=$_pdev 2>/dev/null` || return 0
+    for a in `echo "$data" | grep ^DEVLINKS= | sed 's/^DEVLINKS=//'` ; do
+        if echo "$a" | grep -q '/dev/zvol/' ; then
+            echo "$a" | sed 's|^/dev/zvol/||'
+            return 0
+        fi
+    done
+}
+
+is_device_required_by_initrd_target() {
+    local match
+    match=
+    for a in "$initdir"/etc/systemd/system/initrd.target.requires/* ; do
+        a=`basename "$a" | sed 's|.device$||'`
+        b=`systemd_unescape "$a"`
+        if [ "$b" == "$1" ] ; then
+            match="$b"
+            break
+        fi
+    done
+    [ -n "$match" ] && return 0 || return 1
+}
+
+set_up_initrd_systemd_for_pool() {
+    local _dev
+    local key
+    local rest
+    local poolnameunit
+    local pooldevs
+
+    pooldevs=
+    while read key rest ; do
+        if [ "$key" == "path:" ] ; then
+            _dev=`eval echo $rest`
+            _dev=`get_persistent_dev "$_dev"`
+            _dev=`systemd_escape "$_dev"`.device
+            pooldevs="${pooldevs}${_dev} "
+        fi
+    done < <(@sbindir@/zdb -C "$1")
+
+    echo "[Unit]
+Description=ZFS module
+DefaultDependencies=no
+Before=initrd.target
+
+[Service]
+Type=oneshot
+ExecStart=/sbin/modprobe zfs zfs_autoimport_disable=1
+RemainAfterExit=yes
+" > "$initdir"/etc/systemd/system/zfs-module-load.service
+    ln -sf ../zfs-module-load.service "$initdir"/etc/systemd/system/initrd.target.requires/
+
+    poolnameunit=zpool-import-`systemd_escape "$1"`.service
+
+    echo "[Unit]
+Description=ZFS pool $1
+DefaultDependencies=no
+Requires=zfs-module-load.service $pooldevs
+After=zfs-module-load.service $pooldevs
+Before=initrd.target
+
+[Service]
+Type=oneshot
+ExecStart=@sbindir@/zpool import -fN $1
+ExecStop=@sbindir@/zpool export $1
+RemainAfterExit=yes
+" > "$initdir"/etc/systemd/system/"$poolnameunit"
+    ln -sf ../"$poolnameunit" "$initdir"/etc/systemd/system/initrd.target.requires/
+
+    echo "$poolnameunit"
+}
+
+install() {
+    # if systemd and hostonly
+    # we leverage systemd by setting up units for the pool and necessary
+    # physical devices / datasets that are in the pool and are required
+    # for boot
+
+    local fs
+    local _pdev
+    local a
+    local b
+    local zvoldev
+    local pool
+    local dev
+    local type
+    local mntpnt
+    local rest
+    local rootzfsdev
+    local poolnamunit
+    local pdevunit
+
+    declare -a neededpools
+
+    # are there any physical devices needed for boot that reside on pools?
+    for fs in "${host_devs[@]}"; do
+        zvoldev=`get_zvol_device_name $fs`
+        if [ -n "$zvoldev" ] ; then
+            _pdev=$(get_persistent_dev /dev/zvol/$zvoldev 2>/dev/null) || continue
+            [ -n "$_pdev" ] || continue
+            is_device_required_by_initrd_target "$_pdev" || continue
+            pool=`echo "$zvoldev" | sed 's|/.*||'`
+
+            # this will create the units for the pool and backing devices
+            poolnameunit=`set_up_initrd_systemd_for_pool "$pool"`
+
+            # this will now link the zvol devices to pool import
+            pdevunit=`systemd_escape "$_pdev"`.device
+            mkdir -p \
+                "$initdir"/etc/systemd/system/$pdevunit.requires
+            ln -sf ../"$poolnameunit" \
+                "$initdir"/etc/systemd/system/$pdevunit.requires/
+        fi
+    done
+
+    # is the root FS a ZFS "device"?
+    rootzfsdev=
+    while read dev mntpnt type rest ; do
+        if [ "$type" == "zfs" ] ; then
+            if [ "$mntpnt" == "/" -o "$mntpnt" == "/usr" ] ; then
+                pool=`echo "$dev" | sed 's|/.*||'`
+                poolnameunit=`set_up_initrd_systemd_for_pool "$pool"`
+            fi
+        fi
+    done < /etc/mtab
+}

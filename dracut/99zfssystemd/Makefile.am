@@ -1,11 +1,11 @@
-SUBDIRS = 89zfs 99zfssystemd
+pkgdracut99dir = $(dracutdir)/modules.d/99zfssystemd
+pkgdracut99_SCRIPTS = \
+	$(top_srcdir)/dracut/99zfssystemd/module-setup.sh
 
-EXTRA_DIST = README.dracut.markdown systemd-escaping.sh.in
+EXTRA_DIST = \
+	$(top_srcdir)/dracut/99zfssystemd/module-setup.sh.in
 
-dracut_DATA = \
-	$(top_srcdir)/dracut/systemd-escaping.sh 
-
-$(dracut_DATA):
+$(pkgdracut99_SCRIPTS):
 	-$(SED) -e 's,@bindir\@,$(bindir),g' \
 		-e 's,@sbindir\@,$(sbindir),g' \
 		-e 's,@datadir\@,$(datadir),g' \
@@ -16,7 +16,7 @@ $(dracut_DATA):
 		'$@.in' >'$@'
 
 clean-local::
-	-$(RM) $(dracut_DATA)
+	-$(RM) $(pkgdracut99_SCRIPTS)
 
 distclean-local::
-	-$(RM) $(dracut_DATA)
+	-$(RM) $(pkgdracut99_SCRIPTS)
