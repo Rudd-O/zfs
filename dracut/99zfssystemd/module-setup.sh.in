@@ -49,6 +49,16 @@ is_device_required_by_initrd_target() {
 }
 
 set_up_initrd_systemd_for_pool() {
+    # This function takes a pool name and inspects it, then after careful
+    # inspection, it creates device units for each of its backing devices
+    # and creates service units for the pool, linking them together with
+    # dependencies.  Finally, the pool unit is linked as a requirement
+    # for initrd.target, such that systemd will import the pool.
+
+    # This is better done as a systemd generator inside the initrd, which
+    # should completely replace the idiotic and sloppy code in this and
+    # the other dracut module.
+
     local _dev
     local key
     local rest
@@ -99,10 +109,12 @@ RemainAfterExit=yes
 }
 
 install() {
-    # if systemd and hostonly
-    # we leverage systemd by setting up units for the pool and necessary
+    # This code executes when the initrd is generated, but only if systemd
+    # is inside the initrd and the initrd is hostonly.
+
+    # Here we use systemd by setting up units for the pool and necessary
     # physical devices / datasets that are in the pool and are required
-    # for boot
+    # for boot, such as swap devices.
 
     local fs
     local _pdev
@@ -120,6 +132,9 @@ install() {
 
     declare -a neededpools
 
+    # First step: determine if any pools contain devices that systemd is
+    # going to be waiting on boot
+
     # are there any physical devices needed for boot that reside on pools?
     for fs in "${host_devs[@]}"; do
         zvoldev=`get_zvol_device_name $fs`
@@ -127,12 +142,18 @@ install() {
             _pdev=$(get_persistent_dev /dev/zvol/$zvoldev 2>/dev/null) || continue
             [ -n "$_pdev" ] || continue
             is_device_required_by_initrd_target "$_pdev" || continue
+            # if we reached here then yes, this zvol is needed
+
             pool=`echo "$zvoldev" | sed 's|/.*||'`
 
-            # this will create the units for the pool and backing devices
+            # now we will create the units representing the pool and
+            # all backing devices as well, of course
             poolnameunit=`set_up_initrd_systemd_for_pool "$pool"`
 
             # this will now link the zvol devices to pool import
+            # such that waiting for the zvol devices (as systemd
+            # will do on boot) triggers import of the pool, as
+            # soon as the devices backing the pool appear
             pdevunit=`systemd_escape "$_pdev"`.device
             mkdir -p \
                 "$initdir"/etc/systemd/system/$pdevunit.requires
@@ -146,6 +167,9 @@ install() {
     while read dev mntpnt type rest ; do
         if [ "$type" == "zfs" ] ; then
             if [ "$mntpnt" == "/" -o "$mntpnt" == "/usr" ] ; then
+                # OK, these mountpoints are essential for booting
+                # so the pool(s) backing them will also get
+                # initialized by systemd
                 pool=`echo "$dev" | sed 's|/.*||'`
                 poolnameunit=`set_up_initrd_systemd_for_pool "$pool"`
             fi
