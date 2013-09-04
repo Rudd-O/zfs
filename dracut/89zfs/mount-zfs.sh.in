@@ -23,7 +23,7 @@ case "$root" in
 				[ "$zfsbootfs" = "no pools available" ] ; then
 				# Not there, so we need to import everything.
 				info "ZFS: Attempting to import additional pools."
-				zpool import -N -a ${ZPOOL_NOT_BY_ID}
+				zpool import -N -a -f ${ZPOOL_NOT_BY_ID}
 				zfsbootfs=`zpool list -H -o bootfs | sed -n '/-/ !p' | sed 'q'`
 				if [ "$?" != "0" ] || [ "$zfsbootfs" = "" ] || \
 					[ "$zfsbootfs" = "no pools available" ] ; then
@@ -71,7 +71,7 @@ case "$root" in
 				# pool wasn't imported automatically by the kernel module, so
 				# try it manually.
 				info "ZFS: Importing pool ${pool}..."
-				if ! zpool import -N ${ZPOOL_NOT_BY_ID} $pool ; then
+				if ! zpool import -N -f ${ZPOOL_NOT_BY_ID} $pool ; then
 					warn "ZFS: Unable to import pool ${pool}."
 					rootok=0
 
