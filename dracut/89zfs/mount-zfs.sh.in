@@ -71,6 +71,7 @@ case "$root" in
 				# pool wasn't imported automatically by the kernel module, so
 				# try it manually.
 				rootok=0
+				udevadm settle --timeout=30
 				for x in 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0; do
 				  info "ZFS: Importing pool ${pool}..."
 				  if ! zpool import -N -f ${ZPOOL_NOT_BY_ID} $pool ; then
