@@ -2,9 +2,6 @@
 
 . /lib/dracut-lib.sh
 
-# we must load the zfs module before the udev rules get to loading it
-modprobe zfs zfs_autoimport_disable=1
-
 # Let the command line override our host id.
 spl_hostid=`getarg spl_hostid=`
 if [ "${spl_hostid}" != "" ] ; then
@@ -20,6 +17,9 @@ else
 	warn "ZFS: No hostid found on kernel command line or /etc/hostid.  "
 	warn "ZFS: Pools may not import correctly."
 fi
+
+# we must load the zfs module before the udev rules get to loading it
+modprobe zfs zfs_autoimport_disable=1
 
 case "$root" in
 	""|zfs|zfs:)

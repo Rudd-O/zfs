@@ -78,8 +78,8 @@ set_up_initrd_systemd_for_pool() {
     echo "[Unit]
 Description=ZFS pool $1
 DefaultDependencies=no
-Requires=zfs-module-load.service $pooldevs
-After=zfs-module-load.service $pooldevs
+Requires=dracut-cmdline.service $pooldevs
+After=dracut-cmdline.service $pooldevs
 Before=initrd.target
 
 [Service]
@@ -116,19 +116,6 @@ install() {
     local rootzfsdev
     local poolnamunit
     local pdevunit
-
-    echo "[Unit]
-Description=ZFS module
-DefaultDependencies=no
-Before=initrd.target dracut-pre-udev.service
-
-[Service]
-Type=oneshot
-ExecStart=/sbin/modprobe zfs zfs_autoimport_disable=1
-RemainAfterExit=yes
-" > "$initdir"/etc/systemd/system/zfs-module-load.service
-    mkdir -p "$initdir"/etc/systemd/system/dracut-pre-udev.service.requires
-    ln -sf ../zfs-module-load.service "$initdir"/etc/systemd/system/dracut-pre-udev.service.requires/
 
         if [[ "$hostonly" ]] ; then
 
