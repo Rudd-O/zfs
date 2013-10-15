@@ -3,10 +3,8 @@
 . "@dracutdir@"/systemd-escaping.sh
 
 check() {
-        if [[ "$hostonly" ]] ; then
-            if strstr " $mods_to_load " " systemd " ; then
-                return 0
-            fi
+        if strstr " $mods_to_load " " systemd " ; then
+            return 0
         fi
 	return 255
 }
@@ -75,19 +73,6 @@ set_up_initrd_systemd_for_pool() {
         fi
     done < <(@sbindir@/zdb -C "$1")
 
-    echo "[Unit]
-Description=ZFS module
-DefaultDependencies=no
-Before=initrd.target
-
-[Service]
-Type=oneshot
-ExecStart=/sbin/modprobe zfs zfs_autoimport_disable=1
-RemainAfterExit=yes
-" > "$initdir"/etc/systemd/system/zfs-module-load.service
-    mkdir -p "$initdir"/etc/systemd/system/initrd.target.requires
-    ln -sf ../zfs-module-load.service "$initdir"/etc/systemd/system/initrd.target.requires/
-
     poolnameunit=zpool-import-`systemd_escape "$1"`.service
 
     echo "[Unit]
@@ -107,6 +92,7 @@ RemainAfterExit=yes
     ln -sf ../"$poolnameunit" "$initdir"/etc/systemd/system/initrd.target.requires/
 
     echo "$poolnameunit"
+
 }
 
 install() {
@@ -130,6 +116,21 @@ install() {
     local rootzfsdev
     local poolnamunit
     local pdevunit
+
+    echo "[Unit]
+Description=ZFS module
+DefaultDependencies=no
+Before=initrd.target dracut-pre-udev.service
+
+[Service]
+Type=oneshot
+ExecStart=/sbin/modprobe zfs zfs_autoimport_disable=1
+RemainAfterExit=yes
+" > "$initdir"/etc/systemd/system/zfs-module-load.service
+    mkdir -p "$initdir"/etc/systemd/system/dracut-pre-udev.service.requires
+    ln -sf ../zfs-module-load.service "$initdir"/etc/systemd/system/dracut-pre-udev.service.requires/
+
+        if [[ "$hostonly" ]] ; then
 
     declare -a neededpools
 
@@ -176,4 +177,7 @@ install() {
             fi
         fi
     done < /etc/mtab
+
+        fi
+
 }
