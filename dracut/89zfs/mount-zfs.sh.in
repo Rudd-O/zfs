@@ -80,6 +80,7 @@ case "$root" in
 				  else
 					rootok=1
 					return 0
+ 				  fi
 				done
 			fi
                     fi
