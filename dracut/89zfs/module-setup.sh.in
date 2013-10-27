@@ -1,11 +1,21 @@
 #!/bin/sh
 
+get_devtype() {
+  local typ
+  typ=$(udevadm info --query=property --name="$1" | grep "^ID_FS_TYPE=" | sed 's|^ID_FS_TYPE=||')
+  if [ "$typ" = "" ] ; then
+     typ=$(blkid -c /dev/null "$1" -o value -s TYPE)
+  fi
+  echo "$typ"
+}
+
 check() {
         local _dev
         local _devlinks
         local _devname
         local _devtype
         local _majmin
+        local _slavemajmin
         local _x
         local rootzfsdev
         local rootpool
@@ -61,14 +71,16 @@ check() {
             # inspect the dev name according to udevadm
             # and also inspect the device type
             for _dev in "${_devs[@]}" ; do
-                _devtype=$(udevadm info --query=property --name="$_dev" | grep "^ID_FS_TYPE=" | sed 's|^ID_FS_TYPE=||')
+                _devtype=$(get_devtype "$_dev")
                 _majmin=$(get_maj_min "$_dev")
 
                 push host_devs "$_dev"
                 if [ $shitty_dracut == 1 ] ; then
                     push host_fs_types "$_dev|$_devtype"
+                    push host_fs_types "$_majmin|$_devtype"
                 else
                     host_fs_types["$_dev"]="$_devtype"
+                    host_fs_types["$_majmin"]="$_devtype"
                 fi
 
                 # any slave device gets the same treatment
@@ -78,12 +90,15 @@ check() {
                         [[ -f $_x/dev ]] || continue
                         _x=/dev/`basename "$_x"`
                         _devname=$(udevadm info --query=property --name="$_x" | grep "^DEVNAME=" | sed 's|^DEVNAME=||')
-                        _devtype=$(udevadm info --query=property --name="$_x" | grep "^ID_FS_TYPE=" | sed 's|^ID_FS_TYPE=||')
+                        _devtype=$(get_devtype "$_devname")
+                        _slavemajmin=$(get_maj_min "$_x")
                         push host_devs "$_devname"
                         if [ $shitty_dracut == 1 ] ; then
                             push host_fs_types "$_devname|$_devtype"
+                            push host_fs_types "$_slavemajmin|$_devtype"
                         else
                             host_fs_types["$_devname"]="$_devtype"
+                            host_fs_types["$_slavemajmin"]="$_devtype"
                         fi
                     done
                 fi
