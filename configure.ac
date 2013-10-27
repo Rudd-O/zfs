@@ -90,6 +90,7 @@ AC_CONFIG_FILES([
 	lib/libuutil/Makefile
 	lib/libzpool/Makefile
 	lib/libzfs/Makefile
+	lib/libzfs_core/Makefile
 	lib/libshare/Makefile
 	cmd/Makefile
 	cmd/zdb/Makefile
@@ -105,6 +106,7 @@ AC_CONFIG_FILES([
 	cmd/zvol_id/Makefile
 	cmd/vdev_id/Makefile
 	cmd/arcstat/Makefile
+	cmd/dbufstat/Makefile
 	module/Makefile
 	module/avl/Makefile
 	module/nvpair/Makefile

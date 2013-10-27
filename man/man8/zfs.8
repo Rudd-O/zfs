@@ -58,8 +58,8 @@ zfs \- configures ZFS file systems
 
 .LP
 .nf
-\fBzfs\fR \fBsnapshot | snap\fR [\fB-r\fR] [\fB-o\fR \fIproperty\fR=\fIvalue\fR]... 
-      \fIfilesystem@snapname\fR|\fIvolume@snapname\fR
+\fBzfs\fR \fBsnapshot | snap\fR [\fB-r\fR] [\fB-o\fR \fIproperty\fR=\fIvalue\fR] ... 
+      \fIfilesystem@snapname\fR|\fIvolume@snapname\fR ...
 .fi
 
 .LP
@@ -96,7 +96,7 @@ zfs \- configures ZFS file systems
 .LP
 .nf
 \fBzfs\fR \fBlist\fR [\fB-r\fR|\fB-d\fR \fIdepth\fR][\fB-H\fR][\fB-o\fR \fIproperty\fR[,...]] [\fB-t\fR \fItype\fR[,...]]
-     [\fB-s\fR \fIproperty\fR] ... [\fB-S\fR \fIproperty\fR] ... [\fIfilesystem\fR|\fIvolume\fR|\fIsnapshot\fR|\fIsnap\fR] ...
+     [\fB-s\fR \fIproperty\fR] ... [\fB-S\fR \fIproperty\fR] ... [\fIfilesystem\fR|\fIvolume\fR|\fIsnapshot\fR] ...
 .fi
 
 .LP
@@ -1511,7 +1511,9 @@ Destroy (or mark for deferred destruction) all snapshots with this name in desce
 .ad
 .sp .6
 .RS 4n
-Recursively destroy all dependents.
+Recursively destroy all clones of these snapshots, including the clones,
+snapshots, and children.  If this flag is specified, the \fB-d\fR flag will
+have no effect.
 .RE
 
 .sp
@@ -1547,7 +1549,7 @@ Print verbose information about the deleted data.
 .RE
 
 .sp
-Extreme care should be taken when applying either the \fB-r\fR or the \fB-f\fR
+Extreme care should be taken when applying either the \fB-r\fR or the \fB-R\fR
 options, as they can destroy large portions of a pool and cause unexpected
 behavior for mounted file systems in use.
 .RE
@@ -1558,11 +1560,11 @@ behavior for mounted file systems in use.
 .ne 2
 .mk
 .na
-\fB\fBzfs snapshot\fR [\fB-r\fR] [\fB-o\fR \fIproperty\fR=\fIvalue\fR] ... \fIfilesystem@snapname\fR|\fIvolume@snapname\fR\fR
+\fB\fBzfs snapshot\fR [\fB-r\fR] [\fB-o\fR \fIproperty\fR=\fIvalue\fR] ... \fIfilesystem@snapname\fR|\fIvolume@snapname\fR\fR ...
 .ad
 .sp .6
 .RS 4n
-Creates a snapshot with the given name. All previous modifications by successful system calls to the file system are part of the snapshot. See the "Snapshots" section for details.
+Creates snapshots with the given names. All previous modifications by successful system calls to the file system are part of the snapshots. Snapshots are taken atomically, so that all snapshots correspond to the same moment in time. See the "Snapshots" section for details.
 .sp
 .ne 2
 .mk
@@ -1571,7 +1573,7 @@ Creates a snapshot with the given name. All previous modifications by successful
 .ad
 .sp .6
 .RS 4n
-Recursively create snapshots of all descendent datasets. Snapshots are taken atomically, so that all recursive snapshots correspond to the same moment in time.
+Recursively create snapshots of all descendent datasets.
 .RE
 
 .sp
@@ -1734,7 +1736,7 @@ Recursively rename the snapshots of all descendent datasets. Snapshots are the o
 .ne 2
 .mk
 .na
-\fB\fBzfs\fR \fBlist\fR [\fB-r\fR|\fB-d\fR \fIdepth\fR] [\fB-H\fR] [\fB-o\fR \fIproperty\fR[,\fI\&...\fR]] [ \fB-t\fR \fItype\fR[,\fI\&...\fR]] [ \fB-s\fR \fIproperty\fR ] ... [ \fB-S\fR \fIproperty\fR ] ... [\fIfilesystem\fR|\fIvolume\fR|\fIsnapshot\fR|\fIsnap\fR] ...\fR
+\fB\fBzfs\fR \fBlist\fR [\fB-r\fR|\fB-d\fR \fIdepth\fR] [\fB-H\fR] [\fB-o\fR \fIproperty\fR[,\fI\&...\fR]] [ \fB-t\fR \fItype\fR[,\fI\&...\fR]] [ \fB-s\fR \fIproperty\fR ] ... [ \fB-S\fR \fIproperty\fR ] ... [\fIfilesystem\fR|\fIvolume\fR|\fIsnapshot\fR] ...\fR
 .ad
 .sp .6
 .RS 4n
@@ -1863,7 +1865,7 @@ Same as the \fB-s\fR option, but sorts by property in descending order.
 .ad
 .sp .6
 .RS 4n
-A comma-separated list of types to display, where \fItype\fR is one of \fBfilesystem\fR, \fBsnapshot\fR , \fBvolume\fR, or \fBall\fR. For example, specifying \fB-t snapshot\fR displays only snapshots.
+A comma-separated list of types to display, where \fItype\fR is one of \fBfilesystem\fR, \fBsnapshot\fR, \fBsnap\fR, \fBvolume\fR, or \fBall\fR. For example, specifying \fB-t snapshot\fR displays only snapshots.
 .RE
 
 .RE
