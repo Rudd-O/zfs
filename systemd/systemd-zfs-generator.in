@@ -160,7 +160,7 @@ IFS="	"
 # we read the output of zfs list
 # add to the list of our known filesystems
 while read -r name mountpoint canmount ; do
-	if [ $canmount != on ] ; then continue ; fi
+	if [ "$canmount" != "on" ] ; then continue ; fi
 	if [ "$mountpoint" == "/sysroot" ] ; then continue ; fi
 	if [ "$mountpoint" == "legacy" ] ; then continue ; fi
 	if [ "$mountpoint" == "none" ] ; then continue ; fi
