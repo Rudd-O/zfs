@@ -43,7 +43,6 @@ check() {
         while read dev mntpnt type rest ; do
             if [ "$mntpnt" == "/" -a "$type" == "zfs" ] ; then
                 rootzfsdev="$dev"
-                break
             fi
         done < /etc/mtab
 
