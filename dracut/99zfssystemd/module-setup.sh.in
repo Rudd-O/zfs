@@ -114,6 +114,7 @@ install() {
     local mntpnt
     local rest
     local rootzfsdev
+    local usrzfsdev
     local poolnamunit
     local pdevunit
 
@@ -153,17 +154,31 @@ install() {
 
     # is the root FS a ZFS "device"?
     rootzfsdev=
+    usrzfsdev=
     while read dev mntpnt type rest ; do
         if [ "$type" == "zfs" ] ; then
-            if [ "$mntpnt" == "/" -o "$mntpnt" == "/usr" ] ; then
-                # OK, these mountpoints are essential for booting
-                # so the pool(s) backing them will also get
-                # initialized by systemd
-                pool=`echo "$dev" | sed 's|/.*||'`
-                poolnameunit=`set_up_initrd_systemd_for_pool "$pool"`
+            if [ "$mntpnt" == "/usr" ] ; then
+                rootzfsdev="$dev"
+            fi
+            if [ "$mntpnt" == "/usr" ] ; then
+                usrzfsdev="$dev"
             fi
         fi
     done < /etc/mtab
+    if [ -n "$rootzfsdev" ] ; then
+                # OK, these mountpoints are essential for booting
+                # so the pool(s) backing them will also get
+                # initialized by systemd
+                pool=`echo "$rootzfsdev" | sed 's|/.*||'`
+                poolnameunit=`set_up_initrd_systemd_for_pool "$pool"`
+    fi
+    if [ -n "$usrzfsdev" ] ; then
+                # OK, these mountpoints are essential for booting
+                # so the pool(s) backing them will also get
+                # initialized by systemd
+                pool=`echo "$usrzfsdev" | sed 's|/.*||'`
+                poolnameunit=`set_up_initrd_systemd_for_pool "$pool"`
+    fi
 
         fi
 
