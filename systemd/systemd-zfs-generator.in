@@ -73,7 +73,7 @@ while read everything ; do
         # this is a pool name
 
         if [ -n "$poolname" ] ; then
-            if ! zpool list "$poolname" >/dev/null 2>&1 ; then
+            if ! "@sbindir@/zpool" list "$poolname" >/dev/null 2>&1 ; then
                 # this pool is not imported yet -- save pool info collected before
                 generate_pool_unit "$poolname" "$deps"
             fi
@@ -95,7 +95,7 @@ while read everything ; do
 
 done < <(@sbindir@/zdb -C)
 if [ -n "$poolname" ] ; then
-    if ! zpool list "$poolname" >/dev/null 2>&1 ; then
+    if ! "@sbindir@/zpool" list "$poolname" >/dev/null 2>&1 ; then
         # this pool is not imported yet -- save pool info collected before
         generate_pool_unit "$poolname" "$deps"
     fi
