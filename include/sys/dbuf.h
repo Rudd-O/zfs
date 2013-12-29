@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013 by Delphix. All rights reserved.
  * Copyright (c) 2013 by Saso Kiselkov. All rights reserved.
  */
 
@@ -111,6 +112,9 @@ typedef struct dbuf_dirty_record {
 	/* pointer to parent dirty record */
 	struct dbuf_dirty_record *dr_parent;
 
+	/* How much space was changed to dsl_pool_dirty_space() for this? */
+	unsigned int dr_accounted;
+
 	union dirty_types {
 		struct dirty_indirect {
 
@@ -131,6 +135,7 @@ typedef struct dbuf_dirty_record {
 			blkptr_t dr_overridden_by;
 			override_states_t dr_override_state;
 			uint8_t dr_copies;
+			boolean_t dr_nopwrite;
 		} dl;
 	} dt;
 } dbuf_dirty_record_t;
@@ -250,7 +255,7 @@ dmu_buf_impl_t *dbuf_hold_level(struct dnode *dn, int level, uint64_t blkid,
 int dbuf_hold_impl(struct dnode *dn, uint8_t level, uint64_t blkid, int create,
     void *tag, dmu_buf_impl_t **dbp);
 
-void dbuf_prefetch(struct dnode *dn, uint64_t blkid);
+void dbuf_prefetch(struct dnode *dn, uint64_t blkid, zio_priority_t prio);
 
 void dbuf_add_ref(dmu_buf_impl_t *db, void *tag);
 uint64_t dbuf_refcount(dmu_buf_impl_t *db);

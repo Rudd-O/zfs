@@ -139,8 +139,9 @@ extern "C" {
 
 #define	ZFS_MAX_BLOCKSIZE	(SPA_MAXBLOCKSIZE)
 
-/* Path component length */
 /*
+ * Path component length
+ *
  * The generic fs code uses MAXNAMELEN to represent
  * what the largest component length is.  Unfortunately,
  * this length includes the terminating NULL.  ZFS needs
@@ -209,8 +210,8 @@ typedef struct znode {
 	kmutex_t	z_acl_lock;	/* acl data lock */
 	zfs_acl_t	*z_acl_cached;	/* cached acl */
 	krwlock_t	z_xattr_lock;	/* xattr data lock */
-	nvlist_t	*z_xattr_cached;/* cached xattrs */
-	struct znode	*z_xattr_parent;/* xattr parent znode */
+	nvlist_t	*z_xattr_cached; /* cached xattrs */
+	struct znode	*z_xattr_parent; /* xattr parent znode */
 	list_node_t	z_link_node;	/* all znodes in fs link */
 	sa_handle_t	*z_sa_hdl;	/* handle to sa data */
 	boolean_t	z_is_sa;	/* are we native sa? */
@@ -248,11 +249,7 @@ typedef struct znode {
 
 #define	S_ISDEV(mode)	(S_ISCHR(mode) || S_ISBLK(mode) || S_ISFIFO(mode))
 
-/*
- * ZFS_ENTER() is called on entry to each ZFS inode and vfs operation.
- * ZFS_EXIT() must be called before exitting the vop.
- * ZFS_VERIFY_ZP() verifies the znode is valid.
- */
+/* Called on entry to each ZFS vnode and vfs operation  */
 #define	ZFS_ENTER(zsb) \
 	{ \
 		rrw_enter_read(&(zsb)->z_teardown_lock, FTAG); \
@@ -262,12 +259,14 @@ typedef struct znode {
 		} \
 	}
 
+/* Must be called before exiting the vop */
 #define	ZFS_EXIT(zsb) \
 	{ \
 		rrw_exit(&(zsb)->z_teardown_lock, FTAG); \
 		tsd_exit(); \
 	}
 
+/* Verifies the znode is valid */
 #define	ZFS_VERIFY_ZP(zp) \
 	if ((zp)->z_sa_hdl == NULL) { \
 		ZFS_EXIT(ZTOZSB(zp)); \
@@ -289,15 +288,14 @@ typedef struct znode {
 #define	ZFS_OBJ_HOLD_OWNED(zsb, obj_num) \
 	mutex_owned(ZFS_OBJ_MUTEX((zsb), (obj_num)))
 
-/*
- * Macros to encode/decode ZFS stored time values from/to struct timespec
- */
+/* Encode ZFS stored time values from a struct timespec */
 #define	ZFS_TIME_ENCODE(tp, stmp)		\
 {						\
 	(stmp)[0] = (uint64_t)(tp)->tv_sec;	\
 	(stmp)[1] = (uint64_t)(tp)->tv_nsec;	\
 }
 
+/* Decode ZFS stored time values to a struct timespec */
 #define	ZFS_TIME_DECODE(tp, stmp)		\
 {						\
 	(tp)->tv_sec = (time_t)(stmp)[0];		\
@@ -355,7 +353,8 @@ extern void zfs_log_symlink(zilog_t *zilog, dmu_tx_t *tx, uint64_t txtype,
 extern void zfs_log_rename(zilog_t *zilog, dmu_tx_t *tx, uint64_t txtype,
     znode_t *sdzp, char *sname, znode_t *tdzp, char *dname, znode_t *szp);
 extern void zfs_log_write(zilog_t *zilog, dmu_tx_t *tx, int txtype,
-    znode_t *zp, offset_t off, ssize_t len, int ioflag);
+    znode_t *zp, offset_t off, ssize_t len, int ioflag,
+    zil_callback_t callback, void *callback_data);
 extern void zfs_log_truncate(zilog_t *zilog, dmu_tx_t *tx, int txtype,
     znode_t *zp, uint64_t off, uint64_t len);
 extern void zfs_log_setattr(zilog_t *zilog, dmu_tx_t *tx, int txtype,

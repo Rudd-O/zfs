@@ -265,7 +265,7 @@ get_usage(zpool_help_t idx) {
 	case HELP_EVENTS:
 		return (gettext("\tevents [-vHfc]\n"));
 	case HELP_GET:
-		return (gettext("\tget <\"all\" | property[,...]> "
+		return (gettext("\tget [-p] <\"all\" | property[,...]> "
 		    "<pool> ...\n"));
 	case HELP_SET:
 		return (gettext("\tset <property=value> <pool> \n"));
@@ -831,6 +831,7 @@ zpool_do_create(int argc, char **argv)
 				goto errout;
 			break;
 		case 'm':
+			/* Equivalent to -O mountpoint=optarg */
 			mountpoint = optarg;
 			break;
 		case 'o':
@@ -869,8 +870,18 @@ zpool_do_create(int argc, char **argv)
 			*propval = '\0';
 			propval++;
 
-			if (add_prop_list(optarg, propval, &fsprops, B_FALSE))
+			/*
+			 * Mountpoints are checked and then added later.
+			 * Uniquely among properties, they can be specified
+			 * more than once, to avoid conflict with -m.
+			 */
+			if (0 == strcmp(optarg,
+			    zfs_prop_to_name(ZFS_PROP_MOUNTPOINT))) {
+				mountpoint = propval;
+			} else if (add_prop_list(optarg, propval, &fsprops,
+			    B_FALSE)) {
 				goto errout;
+			}
 			break;
 		case ':':
 			(void) fprintf(stderr, gettext("missing argument for "
@@ -987,6 +998,18 @@ zpool_do_create(int argc, char **argv)
 		}
 	}
 
+	/*
+	 * Now that the mountpoint's validity has been checked, ensure that
+	 * the property is set appropriately prior to creating the pool.
+	 */
+	if (mountpoint != NULL) {
+		ret = add_prop_list(zfs_prop_to_name(ZFS_PROP_MOUNTPOINT),
+		    mountpoint, &fsprops, B_FALSE);
+		if (ret != 0)
+			goto errout;
+	}
+
+	ret = 1;
 	if (dryrun) {
 		/*
 		 * For a dry run invocation, print out a basic message and run
@@ -1021,21 +1044,19 @@ zpool_do_create(int argc, char **argv)
 				if (nvlist_exists(props, propname))
 					continue;
 
-				if (add_prop_list(propname, ZFS_FEATURE_ENABLED,
-				    &props, B_TRUE) != 0)
+				ret = add_prop_list(propname,
+				    ZFS_FEATURE_ENABLED, &props, B_TRUE);
+				if (ret != 0)
 					goto errout;
 			}
 		}
+
+		ret = 1;
 		if (zpool_create(g_zfs, poolname,
 		    nvroot, props, fsprops) == 0) {
 			zfs_handle_t *pool = zfs_open(g_zfs, poolname,
 			    ZFS_TYPE_FILESYSTEM);
 			if (pool != NULL) {
-				if (mountpoint != NULL)
-					verify(zfs_prop_set(pool,
-					    zfs_prop_to_name(
-					    ZFS_PROP_MOUNTPOINT),
-					    mountpoint) == 0);
 				if (zfs_mount(pool, NULL, 0) == 0)
 					ret = zfs_shareall(pool);
 				zfs_close(pool);
@@ -2547,7 +2568,7 @@ get_columns(void)
 		columns = 999;
 	}
 
-	return columns;
+	return (columns);
 }
 
 int
@@ -5016,19 +5037,21 @@ get_history_one(zpool_handle_t *zhp, void *data)
 			}
 			(void) printf("%s [internal %s txg:%lld] %s", tbuf,
 			    zfs_history_event_names[ievent],
-			    (long long int)fnvlist_lookup_uint64(rec, ZPOOL_HIST_TXG),
+			    (longlong_t) fnvlist_lookup_uint64(
+			    rec, ZPOOL_HIST_TXG),
 			    fnvlist_lookup_string(rec, ZPOOL_HIST_INT_STR));
 		} else if (nvlist_exists(rec, ZPOOL_HIST_INT_NAME)) {
 			if (!cb->internal)
 				continue;
 			(void) printf("%s [txg:%lld] %s", tbuf,
-			    (long long int)fnvlist_lookup_uint64(rec, ZPOOL_HIST_TXG),
+			    (longlong_t) fnvlist_lookup_uint64(
+			    rec, ZPOOL_HIST_TXG),
 			    fnvlist_lookup_string(rec, ZPOOL_HIST_INT_NAME));
 			if (nvlist_exists(rec, ZPOOL_HIST_DSNAME)) {
 				(void) printf(" %s (%llu)",
 				    fnvlist_lookup_string(rec,
 				    ZPOOL_HIST_DSNAME),
-				    (long long unsigned int)fnvlist_lookup_uint64(rec,
+				    (u_longlong_t)fnvlist_lookup_uint64(rec,
 				    ZPOOL_HIST_DSID));
 			}
 			(void) printf(" %s", fnvlist_lookup_string(rec,
@@ -5144,10 +5167,10 @@ zpool_do_events_short(nvlist_t *nvl)
 	verify(nvlist_lookup_int64_array(nvl, FM_EREPORT_TIME, &tv, &n) == 0);
 	memset(str, ' ', 32);
 	(void) ctime_r((const time_t *)&tv[0], ctime_str);
-	(void) strncpy(str,    ctime_str+4,  6);             /* 'Jun 30'     */
-	(void) strncpy(str+7,  ctime_str+20, 4);             /* '1993'       */
-	(void) strncpy(str+12, ctime_str+11, 8);             /* '21:49:08'   */
-	(void) sprintf(str+20, ".%09lld", (longlong_t)tv[1]);/* '.123456789' */
+	(void) strncpy(str, ctime_str+4,  6);		/* 'Jun 30' */
+	(void) strncpy(str+7, ctime_str+20, 4);		/* '1993' */
+	(void) strncpy(str+12, ctime_str+11, 8);	/* '21:49:08' */
+	(void) sprintf(str+20, ".%09lld", (longlong_t)tv[1]); /* '.123456789' */
 	(void) printf(gettext("%s "), str);
 
 	verify(nvlist_lookup_string(nvl, FM_CLASS, &ptr) == 0);
@@ -5255,10 +5278,10 @@ zpool_do_events_nvprint(nvlist_t *nvl, int depth)
 			printf(gettext("(%d embedded nvlists)\n"), nelem);
 			for (i = 0; i < nelem; i++) {
 				printf(gettext("%*s%s[%d] = %s\n"),
-				       depth, "", name, i, "(embedded nvlist)");
+				    depth, "", name, i, "(embedded nvlist)");
 				zpool_do_events_nvprint(val[i], depth + 8);
 				printf(gettext("%*s(end %s[%i])\n"),
-				       depth, "", name, i);
+				    depth, "", name, i);
 			}
 			printf(gettext("%*s(end %s)\n"), depth, "", name);
 			}
@@ -5336,7 +5359,8 @@ zpool_do_events_nvprint(nvlist_t *nvl, int depth)
 
 			(void) nvpair_value_int64_array(nvp, &val, &nelem);
 			for (i = 0; i < nelem; i++)
-				printf(gettext("0x%llx "), (u_longlong_t)val[i]);
+				printf(gettext("0x%llx "),
+				    (u_longlong_t)val[i]);
 
 			break;
 			}
@@ -5347,7 +5371,8 @@ zpool_do_events_nvprint(nvlist_t *nvl, int depth)
 
 			(void) nvpair_value_uint64_array(nvp, &val, &nelem);
 			for (i = 0; i < nelem; i++)
-				printf(gettext("0x%llx "), (u_longlong_t)val[i]);
+				printf(gettext("0x%llx "),
+				    (u_longlong_t)val[i]);
 
 			break;
 			}
@@ -5371,8 +5396,8 @@ zpool_do_events_next(ev_opts_t *opts)
 	nvlist_t *nvl;
 	int cleanup_fd, ret, dropped;
 
-        cleanup_fd = open(ZFS_DEV, O_RDWR);
-        VERIFY(cleanup_fd >= 0);
+	cleanup_fd = open(ZFS_DEV, O_RDWR);
+	VERIFY(cleanup_fd >= 0);
 
 	if (!opts->scripted)
 		(void) printf(gettext("%-30s %s\n"), "TIME", "CLASS");
@@ -5397,7 +5422,7 @@ zpool_do_events_next(ev_opts_t *opts)
 		nvlist_free(nvl);
 	}
 
-        VERIFY(0 == close(cleanup_fd));
+	VERIFY(0 == close(cleanup_fd));
 
 	return (ret);
 }
@@ -5455,7 +5480,7 @@ zpool_do_events(int argc, char **argv)
 	else
 		ret = zpool_do_events_next(&opts);
 
-	return ret;
+	return (ret);
 }
 
 static int
@@ -5488,8 +5513,8 @@ get_callback(zpool_handle_t *zhp, void *data)
 				    NULL, NULL);
 			}
 		} else {
-			if (zpool_get_prop(zhp, pl->pl_prop, value,
-			    sizeof (value), &srctype) != 0)
+			if (zpool_get_prop_literal(zhp, pl->pl_prop, value,
+			    sizeof (value), &srctype, cbp->cb_literal) != 0)
 				continue;
 
 			zprop_print_one_property(zpool_get_name(zhp), cbp,
@@ -5505,9 +5530,26 @@ zpool_do_get(int argc, char **argv)
 {
 	zprop_get_cbdata_t cb = { 0 };
 	zprop_list_t fake_name = { 0 };
-	int ret;
+	int c, ret;
 
-	if (argc < 2) {
+	/* check options */
+	while ((c = getopt(argc, argv, "p")) != -1) {
+		switch (c) {
+		case 'p':
+			cb.cb_literal = B_TRUE;
+			break;
+
+		case '?':
+			(void) fprintf(stderr, gettext("invalid option '%c'\n"),
+			    optopt);
+			usage(B_FALSE);
+		}
+	}
+
+	argc -= optind;
+	argv += optind;
+
+	if (argc < 1) {
 		(void) fprintf(stderr, gettext("missing property "
 		    "argument\n"));
 		usage(B_FALSE);
@@ -5521,9 +5563,11 @@ zpool_do_get(int argc, char **argv)
 	cb.cb_columns[3] = GET_COL_SOURCE;
 	cb.cb_type = ZFS_TYPE_POOL;
 
-	if (zprop_get_list(g_zfs, argv[1], &cb.cb_proplist,
-	    ZFS_TYPE_POOL) != 0)
+	if (zprop_get_list(g_zfs, argv[0], &cb.cb_proplist, ZFS_TYPE_POOL) != 0)
 		usage(B_FALSE);
+
+	argc--;
+	argv++;
 
 	if (cb.cb_proplist != NULL) {
 		fake_name.pl_prop = ZPOOL_PROP_NAME;
@@ -5532,7 +5576,7 @@ zpool_do_get(int argc, char **argv)
 		cb.cb_proplist = &fake_name;
 	}
 
-	ret = for_each_pool(argc - 2, argv + 2, B_TRUE, &cb.cb_proplist,
+	ret = for_each_pool(argc, argv, B_TRUE, &cb.cb_proplist,
 	    get_callback, &cb);
 
 	if (cb.cb_proplist == &fake_name)
@@ -5650,8 +5694,7 @@ main(int argc, char **argv)
 	/*
 	 * Special case '-?'
 	 */
-	if ((strcmp(cmdname, "-?") == 0) ||
-	     strcmp(cmdname, "--help") == 0)
+	if ((strcmp(cmdname, "-?") == 0) || strcmp(cmdname, "--help") == 0)
 		usage(B_TRUE);
 
 	if ((g_zfs = libzfs_init()) == NULL)
