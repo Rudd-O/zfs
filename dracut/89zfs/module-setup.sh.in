@@ -10,15 +10,7 @@ get_devtype() {
 }
 
 check() {
-        local _dev
-        local _devlinks
-        local _devname
-        local _devtype
-        local _majmin
-        local _slavemajmin
-        local _x
-        local rootzfsdev
-        local rootpool
+        local fs
 
 	# We depend on udev-rules being loaded
 	[ "$1" = "-d" ] && return 0
@@ -27,85 +19,6 @@ check() {
 	test -x @sbindir@/zpool || return 1
 	test -x @sbindir@/zfs || return 1
 	test -x @sbindir@/zdb || return 1
-
-        # this following hack ensures that ZFS is included in host-only dracut initramfs
-        # and also ensures that cryptsetup is included if the root pool is encrypted
-        # by informing dracut that there are encrypted devices backing the root pool
-
-        if [ ${#host_fs_types[@]} -gt 0 ] ; then
-
-        # detect shitty dracut/bash
-        shitty_dracut=0
-        echo "${host_fs_types[@]}" | grep -q '|' && shitty_dracut=1
-
-        # is the root FS a ZFS "device"?
-        rootzfsdev=
-        while read dev mntpnt type rest ; do
-            if [ "$mntpnt" == "/" -a "$type" == "zfs" ] ; then
-                rootzfsdev="$dev"
-            fi
-        done < /etc/mtab
-
-        # if it is, then let's do this
-        # complete host_devs and host_fs_types
-        # before 90crypt has a chance to do its thing
-        if [ -n "$rootzfsdev" ] ; then
-            declare -a _devs
-            if [ $shitty_dracut == 1 ] ; then
-                push host_fs_types "$rootzfsdev|zfs"
-            else
-                host_fs_types["$rootzfsdev"]="zfs"
-            fi
-            rootpool=$(echo "$rootzfsdev" | cut -d / -f 1)
-
-            # for each physical device in the root pool, add to list
-            while read key rest ; do
-                if [ "$key" == "path:" ] ; then
-                    _dev=`eval echo $rest`
-                    _devname=$(udevadm info --query=property --name="$_dev" | grep "^DEVNAME=" | sed 's|^DEVNAME=||')
-                    _devs+=("$_devname")
-                fi
-            done < <(@sbindir@/zdb -C "$rootpool")
-
-            # inspect the dev name according to udevadm
-            # and also inspect the device type
-            for _dev in "${_devs[@]}" ; do
-                _devtype=$(get_devtype "$_dev")
-                _majmin=$(get_maj_min "$_dev")
-
-                push host_devs "$_dev"
-                if [ $shitty_dracut == 1 ] ; then
-                    push host_fs_types "$_dev|$_devtype"
-                    push host_fs_types "$_majmin|$_devtype"
-                else
-                    host_fs_types["$_dev"]="$_devtype"
-                    host_fs_types["$_majmin"]="$_devtype"
-                fi
-
-                # any slave device gets the same treatment
-                # this is what discovers dm-crypt host devices
-                if [[ -d /sys/dev/block/$_majmin/slaves ]] ; then
-                    for _x in /sys/dev/block/$_majmin/slaves/*; do
-                        [[ -f $_x/dev ]] || continue
-                        _x=/dev/`basename "$_x"`
-                        _devname=$(udevadm info --query=property --name="$_x" | grep "^DEVNAME=" | sed 's|^DEVNAME=||')
-                        _devtype=$(get_devtype "$_devname")
-                        _slavemajmin=$(get_maj_min "$_x")
-                        push host_devs "$_devname"
-                        if [ $shitty_dracut == 1 ] ; then
-                            push host_fs_types "$_devname|$_devtype"
-                            push host_fs_types "$_slavemajmin|$_devtype"
-                        else
-                            host_fs_types["$_devname"]="$_devtype"
-                            host_fs_types["$_slavemajmin"]="$_devtype"
-                        fi
-                    done
-                fi
-            done
-
-        fi
-
-        fi
 
         [[ $hostonly ]] || [[ $mount_needs ]] && {
             for fs in "${host_fs_types[@]}"; do

@@ -1,0 +1,88 @@
+#!/bin/sh
+
+get_devtype() {
+  local typ
+  typ=$(udevadm info --query=property --name="$1" | grep "^ID_FS_TYPE=" | sed 's|^ID_FS_TYPE=||')
+  if [ "$typ" = "" ] ; then
+     typ=$(blkid -c /dev/null "$1" -o value -s TYPE)
+  fi
+  echo "$typ"
+}
+
+find_zfs_block_devices() {
+    local dev
+    local blockdev
+    local mp
+    local fstype
+    local pool
+    local key
+    local n
+    while read n n n n mp n n n fstype dev n ; do
+       if [ "$fstype" != "zfs" ]; then continue ; fi
+       if [ "$mp" == "$1" ]; then
+           pool=$(echo "$dev" | cut -d / -f 1)
+           while read key rest ; do
+               if [ "$key" == "path:" ] ; then
+                    blockdev=`eval echo $rest`
+                    echo `readlink -f $blockdev`
+               fi
+           done < <(@SBINDIR@/zdb -eC "$pool")
+       fi
+    done < /proc/self/mountinfo
+}
+
+check() {
+    local mp
+    local dev
+    local blockdevs
+    local fstype
+    local majmin
+    local _slavedev
+    local _slavedevname
+    local _slavedevtype
+    local _slavemajmin
+    local _dev
+
+if [[ $hostonly ]]; then
+
+    for mp in \
+        "/" \
+        "/etc" \
+        "/bin" \
+        "/sbin" \
+        "/lib" \
+        "/lib64" \
+        "/usr" \
+        "/usr/bin" \
+        "/usr/sbin" \
+        "/usr/lib" \
+        "/usr/lib64" \
+        "/boot";
+    do
+        mp=$(readlink -f "$mp")
+        mountpoint "$mp" >/dev/null 2>&1 || continue
+        blockdevs=$(find_zfs_block_devices "$mp")
+        for dev in $blockdevs
+        do
+            push host_devs "$dev"
+            fstype=$(get_devtype "$dev")
+            host_fs_types["$dev"]="$fstype"
+            majmin=$(get_maj_min "$dev")
+            if [[ -d /sys/dev/block/$majmin/slaves ]] ; then
+                for _slavedev in /sys/dev/block/$majmin/slaves/*; do
+                    [[ -f $_slavedev/dev ]] || continue
+                    _slavedev=/dev/$(basename "$_slavedev")
+                    _slavedevname=$(udevadm info --query=property --name="$_slavedev" | grep "^DEVNAME=" | sed 's|^DEVNAME=||')
+                    _slavedevtype=$(get_devtype "$_slavedevname")
+                    _slavemajmin=$(get_maj_min "$_slavedevname")
+                    push host_devs "$_slavedevname"
+                    host_fs_types["$_slavedevname"]="$_slavedevtype"
+                done
+            fi
+         done
+    done
+
+fi
+
+return 1
+}
