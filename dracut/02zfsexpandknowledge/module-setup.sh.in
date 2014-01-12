@@ -17,7 +17,13 @@ find_zfs_block_devices() {
     local pool
     local key
     local n
-    while read n n n n mp n n n fstype dev n ; do
+    numfields=`head -1 /proc/self/mountinfo | awk '{print NF}'`
+    if [ "$numfields" == "10" ] ; then
+        fields="n n n n mp n n fstype dev n"
+    else
+        fields="n n n n mp n n n fstype dev n"
+    fi
+    while read $fields ; do
        if [ "$fstype" != "zfs" ]; then continue ; fi
        if [ "$mp" == "$1" ]; then
            pool=$(echo "$dev" | cut -d / -f 1)
