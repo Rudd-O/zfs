@@ -649,6 +649,11 @@ zfs_do_clone(int argc, char **argv)
 	if (ret == 0) {
 		zfs_handle_t *clone;
 
+		if (log_history) {
+			(void) zpool_log_history(g_zfs, history_str);
+			log_history = B_FALSE;
+		}
+
 		clone = zfs_open(g_zfs, argv[1], ZFS_TYPE_DATASET);
 		if (clone != NULL) {
 			if (zfs_get_type(clone) != ZFS_TYPE_VOLUME)
@@ -827,6 +832,11 @@ zfs_do_create(int argc, char **argv)
 	/* pass to libzfs */
 	if (zfs_create(g_zfs, argv[0], type, props) != 0)
 		goto error;
+
+	if (log_history) {
+		(void) zpool_log_history(g_zfs, history_str);
+		log_history = B_FALSE;
+	}
 
 	if ((zhp = zfs_open(g_zfs, argv[0], ZFS_TYPE_DATASET)) == NULL)
 		goto error;
@@ -6467,7 +6477,7 @@ main(int argc, char **argv)
 	/*
 	 * Run the appropriate command.
 	 */
-	libzfs_mnttab_cache(g_zfs, B_FALSE);
+	libzfs_mnttab_cache(g_zfs, B_TRUE);
 	if (find_command_idx(cmdname, &i) == 0) {
 		current_command = &command_table[i];
 		ret = command_table[i].func(argc - 1, argv + 1);
@@ -6481,10 +6491,11 @@ main(int argc, char **argv)
 		usage(B_FALSE);
 		ret = 1;
 	}
-	libzfs_fini(g_zfs);
 
 	if (ret == 0 && log_history)
 		(void) zpool_log_history(g_zfs, history_str);
+
+	libzfs_fini(g_zfs);
 
 	/*
 	 * The 'ZFS_ABORT' environment variable causes us to dump core on exit
