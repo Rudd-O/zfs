@@ -32,7 +32,7 @@ find_zfs_block_devices() {
                     blockdev=`eval echo $rest`
                     echo `readlink -f $blockdev`
                fi
-           done < <(@sbindir@/zdb -eC "$pool")
+           done < <(@sbindir@/zdb -C "$pool")
        fi
     done < /proc/self/mountinfo
 }
@@ -68,6 +68,7 @@ if [[ $hostonly ]]; then
         mp=$(readlink -f "$mp")
         mountpoint "$mp" >/dev/null 2>&1 || continue
         blockdevs=$(find_zfs_block_devices "$mp")
+        dinfo "$_module_name: block devices backing ZFS dataset $mp: $blockdevs"
         for dev in $blockdevs
         do
             push host_devs "$dev"
@@ -85,7 +86,11 @@ if [[ $hostonly ]]; then
                     host_fs_types["$_slavedevname"]="$_slavedevtype"
                 done
             fi
-         done
+        done
+    done
+    for a in "${!host_fs_types[@]}"
+        do
+        dinfo "$_module_name: device $a of type ${host_fs_types[$a]}"
     done
 
 fi
