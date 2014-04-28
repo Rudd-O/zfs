@@ -36,6 +36,7 @@ is_device_required_by_initrd_target() {
     local match
     match=
     for a in "$initdir"/etc/systemd/system/initrd.target.requires/* ; do
+        test -e "$a" || return 1
         a=`basename "$a" | sed 's|.device$||'`
         b=`systemd_unescape "$a"`
         if [ "$b" == "$1" ] ; then
