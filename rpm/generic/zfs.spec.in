@@ -91,25 +91,6 @@ Requires:       bc
 This package contains test infrastructure and support scripts for
 validating the file system.
 
-%package systemd
-Summary:         ZFS systemd helper
-Group:           System Environment/Base
-Requires:        systemd
-
-%description systemd
-The %{name}-systemd package lets systemd automatically discover all your
-ZFS file systems, create mount units for them, mount them all in parallel
-nd in the correct order on boot, all without the need to set file system
-mount points to legacy and having to register them in /etc/fstab.
-
-Used in combination with the %{name}-dracut package, the %{name}-systemd
-package allows you to install and boot a Linux system using only ZFS file
-systems, place critical system directories in ZFS file systems, avoid
-having to manage /etc/fstab for your ZFS file systems, and enjoy the
-benefits of ZFS completely without relying on any legacy file systems.
-
-In addition to that, mounts are parallelized to reduce boot speed.
-
 %package dracut
 Summary:        Dracut module
 Group:          System Environment/Kernel
@@ -144,7 +125,6 @@ image which is ZFS aware.
     --with-config=user \
     --with-udevdir=%{_udevdir} \
     --with-dracutdir=%{_dracutdir} \
-    --with-systemddir=/lib/systemd \
     --disable-static \
     %{debug} \
     %{blkid} \
@@ -193,39 +173,6 @@ exit 0
 }
 exit 0
 
-%post systemd
-if [ $1 -eq 1 ]; then
-        # Package install,
-        /bin/systemctl enable zfs-share-nfs.service >/dev/null 2>&1 || :
-        if /bin/systemctl --quiet is-enabled nfs.target ; then
-           /bin/systemctl start zfs-share-nfs.service >/dev/null 2>&1 || :
-        fi
-else
-        # Package upgrade
-        if /bin/systemctl --quiet is-enabled zfs-share-nfs.service ; then
-                /bin/systemctl reenable zfs-share-nfs.service >/dev/null 2>&1 || :
-        fi
-fi
-
-%preun systemd
-        for service in zfs-share-nfs.service ; do
-
-if [ $1 -eq 0 ] ; then
-        # Package removal, not upgrade
-        /usr/bin/systemctl --no-reload disable $service > /dev/null 2>&1 || :
-        /usr/bin/systemctl stop $service > /dev/null 2>&1 || :
-fi
-        done
-
-%postun systemd
-if [ $1 -ge 1 ]; then
-        # Package upgrade, not uninstall
-        for service in zfs-share-nfs.service ; do
-        /bin/systemctl try-restart $service >/dev/null 2>&1 || :
-        done
-fi
-/bin/systemctl --system daemon-reload >/dev/null 2>&1 || :
-
 %files
 %doc AUTHORS COPYRIGHT DISCLAIMER
 %doc OPENSOLARIS.LICENSE README.markdown
@@ -259,13 +206,6 @@ fi
 %doc dracut/README.dracut.markdown
 %{_dracutdir}/systemd-escaping.sh
 %{_dracutdir}/modules.d/*
-
-%files systemd
-%defattr(-,root,root)
-%doc systemd/README.systemd
-/lib/systemd/systemdescaper
-/lib/systemd/system-generators/systemd-zfs-generator
-/lib/systemd/system/zfs-share-nfs.service
 
 %changelog
 * Wed Aug 21 2013 Brian Behlendorf <behlendorf1@llnl.gov> - 0.6.2-1
