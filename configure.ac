@@ -57,7 +57,6 @@ ZFS_AC_DEBUG_DMU_TX
 
 AC_CONFIG_FILES([ 
 	Makefile
-	systemd/Makefile
 	dracut/Makefile
 	dracut/89zfs/Makefile
 	dracut/02zfsexpandknowledge/Makefile
@@ -67,6 +66,9 @@ AC_CONFIG_FILES([
 	etc/Makefile
 	etc/init.d/Makefile
 	etc/zfs/Makefile
+	etc/systemd/Makefile
+	etc/systemd/system/Makefile
+	etc/modules-load.d/Makefile
 	man/Makefile
 	man/man1/Makefile
 	man/man5/Makefile
