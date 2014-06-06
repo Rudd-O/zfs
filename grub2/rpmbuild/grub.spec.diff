@@ -1,0 +1,26 @@
+--- grub2.spec.orig	2014-06-05 23:52:05.112000000 -0700
++++ grub2.spec	2014-06-06 00:00:47.812000000 -0700
+@@ -538,6 +538,7 @@
+ Patch0482: 0482-Fix-net_bootp-cmd-crash-when-there-isn-t-network-car.patch
+ Patch0483: 0483-Initialize-grub_file_filters_-all-enabled.patch
+ Patch0484: 0484-Use-2-instead-of-1-for-our-right-hand-margin-so-line.patch
++Patch0485: 0485-Ensure-proper-boot-configuration-in-the-case-of-Linu.patch
+ 
+ BuildRequires:  flex bison binutils python
+ BuildRequires:  ncurses-devel xz-devel
+@@ -554,6 +555,7 @@
+ BuildRequires:	texinfo
+ BuildRequires:	dejavu-sans-fonts
+ BuildRequires:	help2man
++BuildRequires:	zfs-devel
+ %ifarch %{efiarchs}
+ BuildRequires:	pesign >= 0.99-8
+ %endif
+@@ -656,6 +658,7 @@
+         --with-platform=efi					\
+ 	--with-grubdir=%{name}					\
+         --program-transform-name=s,grub,%{name},		\
++	--enable-libzfs						\
+ 	--disable-grub-mount					\
+ 	--disable-werror
+ make %{?_smp_mflags}
