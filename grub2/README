@@ -1,21 +1,6 @@
-Modern Fedora 19+ GRUB just needs to be rebuilt with libzfs present.
-
-To ensure a proper build, apply the grub.spec.diff file in this directory
-to the specfile of the upstream SRPM.  This will make the build fail
-unless zfs-devel is installed, which is what you want.
-
-This is still not enough to get the SRPM to work properly however. The
-10_linux file that gets installed in /etc/grub.d has a bug.  To fix that
-bug, you can apply the 10_linux.diff patch in this directory to that file.
-It would be a great idea if this patch could be incorporated into the spec
-file and properly applied when you build.
-
-The grub_mkconfig_zfs_support.diff file is now obsolete in modern distros.
-
 BUILDING A PROPER GRUB RPM
 
-You can rpmbuild a set of GRUB2 RPMs by using the two files in the rpmbuild
-subdirectory:
+You can rpmbuild a set of GRUB2 RPMs by using the two files in this folder:
 
 1. rpm -ivh the src.rpm of grub2 downloaded from Koji
 2. apply the patch file grub.spec.diff in the SPECS directory of your

@@ -135,6 +135,8 @@ make %{?_smp_mflags}
 %{__rm} -rf $RPM_BUILD_ROOT
 make install DESTDIR=%{?buildroot}
 find %{?buildroot}%{_libdir} -name '*.la' -exec rm -f {} \;
+mkdir -p %{?buildroot}%{_docdir}/zfs/
+cp -R grub2 %{?buildroot}%{_docdir}/zfs/
 
 %post
 /sbin/ldconfig
@@ -176,6 +178,7 @@ exit 0
 %files
 %doc AUTHORS COPYRIGHT DISCLAIMER
 %doc OPENSOLARIS.LICENSE README.markdown
+%{_docdir}/zfs/grub2/*
 %{_sbindir}/*
 %{_bindir}/*
 %{_libdir}/*.so.*
