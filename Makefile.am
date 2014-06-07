@@ -23,6 +23,7 @@ AUTOMAKE_OPTIONS = foreign
 EXTRA_DIST  = autogen.sh copy-builtin
 EXTRA_DIST += config/config.awk config/rpm.am config/deb.am config/tgz.am
 EXTRA_DIST += META DISCLAIMER COPYRIGHT README.markdown OPENSOLARIS.LICENSE
+EXTRA_DIST += grub2/README grub2/grub.spec.diff grub2/0485-Ensure-proper-boot-configuration-in-the-case-of-Linu.patch
 
 distclean-local::
 	-$(RM) -R autom4te*.cache
