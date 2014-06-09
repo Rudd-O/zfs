@@ -12,7 +12,7 @@
  BuildRequires:	texinfo
  BuildRequires:	dejavu-sans-fonts
  BuildRequires:	help2man
-+BuildRequires:	zfs-devel
++BuildRequires:	libzfs2-devel
  %ifarch %{efiarchs}
  BuildRequires:	pesign >= 0.99-8
  %endif
