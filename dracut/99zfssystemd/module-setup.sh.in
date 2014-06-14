@@ -36,6 +36,7 @@ is_device_required_by_initrd_target() {
     local match
     match=
     for a in "$initdir"/etc/systemd/system/initrd.target.requires/* ; do
+        dinfo "zfssystemd: testing whether $1 is required by $a"
         test -e "$a" || return 1
         a=`basename "$a" | sed 's|.device$||'`
         b=`systemd_unescape "$a"`
@@ -44,7 +45,28 @@ is_device_required_by_initrd_target() {
             break
         fi
     done
+    [ -n "$match" ] && dinfo "zfssystemd: $1 appears to be required by $match" || dinfo "zfssystemd: $1 is not required by any initrd target"
     [ -n "$match" ] && return 0 || return 1
+}
+
+get_pool_config() {
+  # also present in zfsexpandknowledge
+  local poolconfigtemp
+  local poolconfigoutput
+  poolconfigtemp=`mktemp`
+  @sbindir@/zdb -C "$1" > "$poolconfigtemp" 2>&1
+  if [ "$?" != "0" ] ; then
+    poolconfigoutput=`cat "$poolconfigtemp"`
+    dinfo "zfssystemd: pool $1 not in zpool.cache: $poolconfigoutput"
+    @sbindir@/zdb -eC "$1" > "$poolconfigtemp" 2>&1
+    if [ "$?" != "0" ] ; then
+      poolconfigoutput=`cat "$poolconfigtemp"`
+      dinfo "zfssystemd: pool $1 not found at all: $poolconfigoutput"
+      echo -n > "$poolconfigtemp"
+    fi
+  fi
+  cat "$poolconfigtemp"
+  rm -f "$poolconfigtemp"
 }
 
 set_up_initrd_systemd_for_pool() {
@@ -63,7 +85,9 @@ set_up_initrd_systemd_for_pool() {
     local rest
     local poolnameunit
     local pooldevs
+    local poolconfig
 
+    poolconfig=$(get_pool_config "$1")
     pooldevs=
     while read key rest ; do
         if [ "$key" == "path:" ] ; then
@@ -72,7 +96,7 @@ set_up_initrd_systemd_for_pool() {
             _dev=`systemd_escape "$_dev"`.device
             pooldevs="${pooldevs}${_dev} "
         fi
-    done < <(@sbindir@/zdb -C "$1")
+    done < <(echo "$poolconfig")
 
     poolnameunit=zpool-import-`systemd_escape "$1"`.service
 
@@ -121,6 +145,8 @@ install() {
 
         if [[ "$hostonly" ]] ; then
 
+    dinfo "zfssystemd: host-only setup"
+
     declare -a neededpools
 
     # First step: determine if any pools contain devices that systemd is
@@ -128,9 +154,11 @@ install() {
 
     # are there any physical devices needed for boot that reside on pools?
     for fs in "${host_devs[@]}"; do
+        dinfo "zfssystemd: examining device $fs"
         zvoldev=`get_zvol_device_name $fs`
         if [ -n "$zvoldev" ] ; then
             _pdev=$(get_persistent_dev /dev/zvol/$zvoldev 2>/dev/null) || continue
+            dinfo "zfssystemd: persistent device for $fs: $_pdev"
             [ -n "$_pdev" ] || continue
             is_device_required_by_initrd_target "$_pdev" || continue
             # if we reached here then yes, this zvol is needed
@@ -139,6 +167,7 @@ install() {
 
             # now we will create the units representing the pool and
             # all backing devices as well, of course
+            dinfo "zfssystemd: setting up initrd for pool $pool"
             poolnameunit=`set_up_initrd_systemd_for_pool "$pool"`
 
             # this will now link the zvol devices to pool import

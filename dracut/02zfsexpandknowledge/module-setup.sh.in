@@ -9,6 +9,26 @@ get_devtype() {
   echo "$typ"
 }
 
+get_pool_config() {
+  # also present in 99zfssystemd
+  local poolconfigtemp
+  local poolconfigoutput
+  poolconfigtemp=`mktemp`
+  @sbindir@/zdb -C "$1" > "$poolconfigtemp" 2>&1
+  if [ "$?" != "0" ] ; then
+    poolconfigoutput=`cat "$poolconfigtemp"`
+    dinfo "zfsexpandknowledge: pool $1 not in zpool.cache: $poolconfigoutput"
+    @sbindir@/zdb -eC "$1" > "$poolconfigtemp" 2>&1
+    if [ "$?" != "0" ] ; then
+      poolconfigoutput=`cat "$poolconfigtemp"`
+      dinfo "zfsexpandknowledge: pool $1 not found at all: $poolconfigoutput"
+      echo -n > "$poolconfigtemp"
+    fi
+  fi
+  cat "$poolconfigtemp"
+  rm -f "$poolconfigtemp"
+}
+
 find_zfs_block_devices() {
     local dev
     local blockdev
@@ -17,6 +37,7 @@ find_zfs_block_devices() {
     local pool
     local key
     local n
+    local poolconfigoutput
     numfields=`head -1 /proc/self/mountinfo | awk '{print NF}'`
     if [ "$numfields" == "10" ] ; then
         fields="n n n n mp n n fstype dev n"
@@ -27,12 +48,13 @@ find_zfs_block_devices() {
        if [ "$fstype" != "zfs" ]; then continue ; fi
        if [ "$mp" == "$1" ]; then
            pool=$(echo "$dev" | cut -d / -f 1)
+           poolconfig=$(get_pool_config "$pool")
            while read key rest ; do
                if [ "$key" == "path:" ] ; then
                     blockdev=`eval echo $rest`
                     echo `readlink -f $blockdev`
                fi
-           done < <(@sbindir@/zdb -C "$pool")
+           done < <(echo "$poolconfig")
        fi
     done < /proc/self/mountinfo
 }
@@ -68,7 +90,7 @@ if [[ $hostonly ]]; then
         mp=$(readlink -f "$mp")
         mountpoint "$mp" >/dev/null 2>&1 || continue
         blockdevs=$(find_zfs_block_devices "$mp")
-        dinfo "$_module_name: block devices backing ZFS dataset $mp: $blockdevs"
+        dinfo "zfsexpandknowledge: block devices backing ZFS dataset $mp: $blockdevs"
         for dev in $blockdevs
         do
             push host_devs "$dev"
@@ -90,7 +112,7 @@ if [[ $hostonly ]]; then
     done
     for a in "${!host_fs_types[@]}"
         do
-        dinfo "$_module_name: device $a of type ${host_fs_types[$a]}"
+        dinfo "zfsexpandknowledge: device $a of type ${host_fs_types[$a]}"
     done
 
 fi
