@@ -9,23 +9,28 @@ get_devtype() {
   echo "$typ"
 }
 
-get_pool_config() {
+get_pool_devices() {
   # also present in 99zfssystemd
   local poolconfigtemp
   local poolconfigoutput
+  local pooldev
+  local prefix
   poolconfigtemp=`mktemp`
-  @sbindir@/zdb -C "$1" > "$poolconfigtemp" 2>&1
+  @sbindir@/zpool list -v -H "$1" > "$poolconfigtemp" 2>&1
   if [ "$?" != "0" ] ; then
-    poolconfigoutput=`cat "$poolconfigtemp"`
-    dinfo "zfsexpandknowledge: pool $1 not in zpool.cache: $poolconfigoutput"
-    @sbindir@/zdb -eC "$1" > "$poolconfigtemp" 2>&1
-    if [ "$?" != "0" ] ; then
-      poolconfigoutput=`cat "$poolconfigtemp"`
-      dinfo "zfsexpandknowledge: pool $1 not found at all: $poolconfigoutput"
-      echo -n > "$poolconfigtemp"
-    fi
+    poolconfigoutput=$(cat "$poolconfigtemp")
+    dinfo "zfsexpandknowledge: pool $1 cannot be listed: $poolconfigoutput"
+  else
+    while read pooldev ; do
+      for prefix in /dev/disk/* /dev/mapper ; do
+        if [ -e "$prefix"/"$pooldev" ] ; then
+          dinfo "zfsexpandknowledge: pool $1 has device $prefix/$pooldev"
+          echo `readlink -f "$prefix"/"$pooldev"`
+          break
+        fi
+      done
+    done < <(cat "$poolconfigtemp" | awk -F '\t' 'NR>1 { print $2 }')
   fi
-  cat "$poolconfigtemp"
   rm -f "$poolconfigtemp"
 }
 
@@ -48,13 +53,7 @@ find_zfs_block_devices() {
        if [ "$fstype" != "zfs" ]; then continue ; fi
        if [ "$mp" == "$1" ]; then
            pool=$(echo "$dev" | cut -d / -f 1)
-           poolconfig=$(get_pool_config "$pool")
-           while read key rest ; do
-               if [ "$key" == "path:" ] ; then
-                    blockdev=`eval echo $rest`
-                    echo `readlink -f $blockdev`
-               fi
-           done < <(echo "$poolconfig")
+           get_pool_devices "$pool"
        fi
     done < /proc/self/mountinfo
 }
@@ -90,6 +89,7 @@ if [[ $hostonly ]]; then
         mp=$(readlink -f "$mp")
         mountpoint "$mp" >/dev/null 2>&1 || continue
         blockdevs=$(find_zfs_block_devices "$mp")
+        if [ -z "$blockdevs" ] ; then continue ; fi
         dinfo "zfsexpandknowledge: block devices backing ZFS dataset $mp: $blockdevs"
         for dev in $blockdevs
         do
