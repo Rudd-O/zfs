@@ -184,6 +184,7 @@ Summary:        Dracut module
 Group:          System Environment/Kernel
 Requires:       %{name}%{?_isa} = %{version}-%{release}
 Requires:       dracut
+Requires:       %{name}-kmod = %{version}
 
 %description dracut
 This package contains a dracut module used to construct an initramfs
