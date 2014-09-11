@@ -5,7 +5,7 @@ You can rpmbuild a set of GRUB2 RPMs by using the two files in this folder:
 1. rpm -ivh the src.rpm of grub2 downloaded from Koji
 2. apply the patch file grub.spec.diff in the SPECS directory of your
    RPM build %_topdir
-3. copy file 0485-Ensure-proper-boot-configuration-in-the-case-of-Linu.patch
+3. copy file 0486-Ensure-proper-boot-configuration-in-the-case-of-Linu.patch
    to the SOURCES directory of your RPM build %_topdir
 4. rpmbuild -bs (or -ba) path/to/patched/grub2.spec
 
