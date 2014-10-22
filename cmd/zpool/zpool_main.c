@@ -486,6 +486,21 @@ add_prop_list(const char *propname, char *propval, nvlist_t **props,
 }
 
 /*
+ * Set a default property pair (name, string-value) in a property nvlist
+ */
+static int
+add_prop_list_default(const char *propname, char *propval, nvlist_t **props,
+    boolean_t poolprop)
+{
+	char *pval;
+
+	if (nvlist_lookup_string(*props, propname, &pval) == 0)
+		return (0);
+
+	return (add_prop_list(propname, propval, props, B_TRUE));
+}
+
+/*
  * zpool add [-fn] [-o property=value] <pool> <vdev> ...
  *
  *	-f	Force addition of devices, even if they appear in use
@@ -807,7 +822,7 @@ zpool_do_create(int argc, char **argv)
 	char *propval;
 
 	/* check options */
-	while ((c = getopt(argc, argv, ":fndR:m:o:O:")) != -1) {
+	while ((c = getopt(argc, argv, ":fndR:m:o:O:t:")) != -1) {
 		switch (c) {
 		case 'f':
 			force = B_TRUE;
@@ -823,11 +838,7 @@ zpool_do_create(int argc, char **argv)
 			if (add_prop_list(zpool_prop_to_name(
 			    ZPOOL_PROP_ALTROOT), optarg, &props, B_TRUE))
 				goto errout;
-			if (nvlist_lookup_string(props,
-			    zpool_prop_to_name(ZPOOL_PROP_CACHEFILE),
-			    &propval) == 0)
-				break;
-			if (add_prop_list(zpool_prop_to_name(
+			if (add_prop_list_default(zpool_prop_to_name(
 			    ZPOOL_PROP_CACHEFILE), "none", &props, B_TRUE))
 				goto errout;
 			break;
@@ -883,6 +894,26 @@ zpool_do_create(int argc, char **argv)
 			    B_FALSE)) {
 				goto errout;
 			}
+			break;
+		case 't':
+			/*
+			 * Sanity check temporary pool name.
+			 */
+			if (strchr(optarg, '/') != NULL) {
+				(void) fprintf(stderr, gettext("cannot create "
+				    "'%s': invalid character '/' in temporary "
+				    "name\n"), optarg);
+				(void) fprintf(stderr, gettext("use 'zfs "
+				    "create' to create a dataset\n"));
+				goto errout;
+			}
+
+			if (add_prop_list(zpool_prop_to_name(
+			    ZPOOL_PROP_TNAME), optarg, &props, B_TRUE))
+				goto errout;
+			if (add_prop_list_default(zpool_prop_to_name(
+			    ZPOOL_PROP_CACHEFILE), "none", &props, B_TRUE))
+				goto errout;
 			break;
 		case ':':
 			(void) fprintf(stderr, gettext("missing argument for "
@@ -1883,37 +1914,30 @@ do_import(nvlist_t *config, const char *newname, const char *mntopts,
 		return (1);
 	} else if (state != POOL_STATE_EXPORTED &&
 	    !(flags & ZFS_IMPORT_ANY_HOST)) {
-		uint64_t hostid;
+		uint64_t hostid = 0;
+		unsigned long system_hostid = gethostid() & 0xffffffff;
 
-		if (nvlist_lookup_uint64(config, ZPOOL_CONFIG_HOSTID,
-		    &hostid) == 0) {
-			unsigned long system_hostid = gethostid() & 0xffffffff;
+		(void) nvlist_lookup_uint64(config, ZPOOL_CONFIG_HOSTID,
+		    &hostid);
 
-			if ((unsigned long)hostid != system_hostid) {
-				char *hostname;
-				uint64_t timestamp;
-				time_t t;
+		if (hostid != 0 && (unsigned long)hostid != system_hostid) {
+			char *hostname;
+			uint64_t timestamp;
+			time_t t;
 
-				verify(nvlist_lookup_string(config,
-				    ZPOOL_CONFIG_HOSTNAME, &hostname) == 0);
-				verify(nvlist_lookup_uint64(config,
-				    ZPOOL_CONFIG_TIMESTAMP, &timestamp) == 0);
-				t = timestamp;
-				(void) fprintf(stderr, gettext("cannot import "
-				    "'%s': pool may be in use from other "
-				    "system, it was last accessed by %s "
-				    "(hostid: 0x%lx) on %s"), name, hostname,
-				    (unsigned long)hostid,
-				    asctime(localtime(&t)));
-				(void) fprintf(stderr, gettext("use '-f' to "
-				    "import anyway\n"));
-				return (1);
-			}
-		} else {
-			(void) fprintf(stderr, gettext("cannot import '%s': "
-			    "pool may be in use from other system\n"), name);
-			(void) fprintf(stderr, gettext("use '-f' to import "
-			    "anyway\n"));
+			verify(nvlist_lookup_string(config,
+			    ZPOOL_CONFIG_HOSTNAME, &hostname) == 0);
+			verify(nvlist_lookup_uint64(config,
+			    ZPOOL_CONFIG_TIMESTAMP, &timestamp) == 0);
+			t = timestamp;
+			(void) fprintf(stderr, gettext("cannot import "
+			    "'%s': pool may be in use from other "
+			    "system, it was last accessed by %s "
+			    "(hostid: 0x%lx) on %s"), name, hostname,
+			    (unsigned long)hostid,
+			    asctime(localtime(&t)));
+			(void) fprintf(stderr, gettext("use '-f' to "
+			    "import anyway\n"));
 			return (1);
 		}
 	}
@@ -2068,16 +2092,15 @@ zpool_do_import(int argc, char **argv)
 			if (add_prop_list(zpool_prop_to_name(
 			    ZPOOL_PROP_ALTROOT), optarg, &props, B_TRUE))
 				goto error;
-			if (nvlist_lookup_string(props,
-			    zpool_prop_to_name(ZPOOL_PROP_CACHEFILE),
-			    &propval) == 0)
-				break;
-			if (add_prop_list(zpool_prop_to_name(
+			if (add_prop_list_default(zpool_prop_to_name(
 			    ZPOOL_PROP_CACHEFILE), "none", &props, B_TRUE))
 				goto error;
 			break;
 		case 't':
 			flags |= ZFS_IMPORT_TEMP_NAME;
+			if (add_prop_list_default(zpool_prop_to_name(
+			    ZPOOL_PROP_CACHEFILE), "none", &props, B_TRUE))
+				goto error;
 			break;
 
 		case 'T':

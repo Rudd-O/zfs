@@ -40,11 +40,13 @@ parameters passed in from the boot loader:
 attribute.  If an explicitly set root is desired, you may use
 `root=ZFS:pool/dataset`
 
-* `zfs_force=0`: This parameter does not exist anymore.  All pools are
-forcibly imported, always.  If you keep a disk connected to two machines
-at the same time, and that disk is part of a pool that is active in one
-of the machines, booting the other machine with an initramfs prepared
-using this software will likely hose the pool.
+* `zfs_force=0`: If set to 1, the initramfs will run `zpool import -f` when
+attempting to import pools if the required pool isn't automatically imported
+by the zfs module.  This can save you a trip to a bootcd if hostid has
+changed, but is dangerous and can lead to zpool corruption, particularly in
+cases where storage is on a shared fabric such as iSCSI where multiple hosts
+can access storage devices concurrently.  _Please understand the implications
+of force-importing a pool before enabling this option!_
 
 * `zfs_not_by_id=0`: If set to 1, the initramfs will run `zpool import -d /dev`
 when attempting to import pools.  This restores the old behavior of importing
@@ -83,6 +85,9 @@ command line and determine if ZFS is the active root filesystem.
 
 * `mount-zfs.sh`: Run later in initramfs boot process after udev has settled
 to mount the root dataset.
+
+* `export-zfs.sh`: Run on shutdown after dracut has restored the initramfs
+and pivoted to it, allowing for a clean unmount and export of the ZFS root.
 
 `module-setup.sh`
 ---------------
@@ -149,11 +154,14 @@ zpool and friends, we can proceed to find the bootfs attribute if necessary.
 If the root parameter was explicitly set on the command line, no parsing is
 necessary.  The list of imported pools is checked to see if the desired pool
 is already imported.  If it's not, and attempt is made to import the pool
-explicitly, though no force is attempted.
+explicitly, though no force is attempted.  Finally the specified dataset
+is mounted on `$NEWROOT`, first using the `-o zfsutil` option to handle
+non-legacy mounts, then if that fails, without zfsutil to handle legacy
+mount points.
 
-Then, the specified dataset is mounted on `$NEWROOT`.  Finally, if the `/usr`
-volume is a child of the specified dataset, it is mounted on `$NEWROOT/usr`,
-to accommodate for systems that have a separate `/usr` volume.
+After this process, if the `/usr` volume is a child of the specified dataset,
+it is mounted on `$NEWROOT/usr`, to accommodate for systems that have a
+separate `/usr` volume.
 
 If no root parameter was specified, this script attempts to find a pool with
 its bootfs attribute set.  First, already-imported pools are scanned and if
@@ -172,3 +180,25 @@ import can lead to serious data corruption and loss of pools, so this option
 should be used with extreme caution.  Note that even with this flag set, if
 the required zpool was auto-imported by the kernel module, no additional
 `zpool import` commands are run, so nothing is forced.
+
+`export-zfs.sh`
+-------------
+
+Normally the zpool containing the root dataset cannot be exported on
+shutdown as it is still in use by the init process. To work around this,
+Dracut is able to restore the initramfs on shutdown and pivot to it.
+All remaining process are then running from a ramdisk, allowing for a
+clean unmount and export of the ZFS root. The theory of operation is
+described in detail in the [Dracut manual](https://www.kernel.org/pub/linux/utils/boot/dracut/dracut.html#_dracut_on_shutdown).
+
+This script will try to export all remaining zpools after Dracut has
+pivoted to the initramfs. If an initial regular export is not successful,
+Dracut will call this script once more with the `final` option,
+in which case a forceful export is attempted.
+
+Other Dracut modules include similar shutdown scripts and Dracut
+invokes these scripts round-robin until they succeed. In particular,
+the `90dm` module installs a script which tries to close and remove
+all device mapper targets. Thus, if there are ZVOLs containing
+dm-crypt volumes or if the zpool itself is backed by a dm-crypt
+volume, the shutdown scripts will try to untangle this.
