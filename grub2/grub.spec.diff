@@ -5,9 +5,9 @@
  Patch0484: 0484-Use-2-instead-of-1-for-our-right-hand-margin-so-line.patch
  Patch0485: 0485-Don-t-require-a-password-to-boot-entries-generated-b.patch
 +Patch0486: 0486-Ensure-proper-boot-configuration-in-the-case-of-Linu.patch
+ Patch0486: 0001-Update-to-minilzo-2.08.patch
  
  BuildRequires:  flex bison binutils python
- BuildRequires:  ncurses-devel xz-devel
 @@ -554,6 +555,7 @@
  BuildRequires:	texinfo
  BuildRequires:	dejavu-sans-fonts
