@@ -474,15 +474,6 @@ zfs_read(struct inode *ip, uio_t *uio, int ioflag, cred_t *cr)
 	}
 
 	/*
-	 * Check for mandatory locks
-	 */
-	if (mandatory_lock(ip) &&
-	    !lock_may_read(ip, uio->uio_loffset, uio->uio_resid)) {
-		ZFS_EXIT(zsb);
-		return (SET_ERROR(EAGAIN));
-	}
-
-	/*
 	 * If we're in FRSYNC mode, sync out this znode before reading it.
 	 */
 	if (ioflag & FRSYNC || zsb->z_os->os_sync == ZFS_SYNC_ALWAYS)
@@ -648,15 +639,6 @@ zfs_write(struct inode *ip, uio_t *uio, int ioflag, cred_t *cr)
 	if (woff < 0) {
 		ZFS_EXIT(zsb);
 		return (SET_ERROR(EINVAL));
-	}
-
-	/*
-	 * Check for mandatory locks before calling zfs_range_lock()
-	 * in order to prevent a deadlock with locks set via fcntl().
-	 */
-	if (mandatory_lock(ip) && !lock_may_write(ip, woff, n)) {
-		ZFS_EXIT(zsb);
-		return (SET_ERROR(EAGAIN));
 	}
 
 	/*
@@ -3917,14 +3899,13 @@ zfs_putpage(struct inode *ip, struct page *pp, struct writeback_control *wbc)
 	}
 #endif
 
+	rl = zfs_range_lock(zp, pgoff, pglen, RL_WRITER);
+
 	set_page_writeback(pp);
 	unlock_page(pp);
 
-	rl = zfs_range_lock(zp, pgoff, pglen, RL_WRITER);
 	tx = dmu_tx_create(zsb->z_os);
-
 	dmu_tx_hold_write(tx, zp->z_id, pgoff, pglen);
-
 	dmu_tx_hold_sa(tx, zp->z_sa_hdl, B_FALSE);
 	zfs_sa_upgrade_txholds(tx, zp);
 	err = dmu_tx_assign(tx, TXG_NOWAIT);
@@ -3992,6 +3973,9 @@ zfs_dirty_inode(struct inode *ip, int flags)
 	sa_bulk_attr_t	bulk[4];
 	int		error;
 	int		cnt = 0;
+
+	if (zfs_is_readonly(zsb) || dmu_objset_is_snapshot(zsb->z_os))
+		return (0);
 
 	ZFS_ENTER(zsb);
 	ZFS_VERIFY_ZP(zp);

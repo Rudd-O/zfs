@@ -814,6 +814,7 @@ zpool_do_create(int argc, char **argv)
 	int c;
 	nvlist_t *nvroot = NULL;
 	char *poolname;
+	char *tname = NULL;
 	int ret = 1;
 	char *altroot = NULL;
 	char *mountpoint = NULL;
@@ -914,6 +915,7 @@ zpool_do_create(int argc, char **argv)
 			if (add_prop_list_default(zpool_prop_to_name(
 			    ZPOOL_PROP_CACHEFILE), "none", &props, B_TRUE))
 				goto errout;
+			tname = optarg;
 			break;
 		case ':':
 			(void) fprintf(stderr, gettext("missing argument for "
@@ -1086,8 +1088,8 @@ zpool_do_create(int argc, char **argv)
 		ret = 1;
 		if (zpool_create(g_zfs, poolname,
 		    nvroot, props, fsprops) == 0) {
-			zfs_handle_t *pool = zfs_open(g_zfs, poolname,
-			    ZFS_TYPE_FILESYSTEM);
+			zfs_handle_t *pool = zfs_open(g_zfs,
+			    tname ? tname : poolname, ZFS_TYPE_FILESYSTEM);
 			if (pool != NULL) {
 				if (zfs_mount(pool, NULL, 0) == 0)
 					ret = zfs_shareall(pool);
@@ -4683,8 +4685,8 @@ upgrade_version(zpool_handle_t *zhp, uint64_t version)
 		return (ret);
 
 	if (unsupp_fs) {
-		(void) printf(gettext("Upgrade not performed due to %d "
-		    "unsupported filesystems (max v%d).\n"),
+		(void) fprintf(stderr, gettext("Upgrade not performed due "
+		    "to %d unsupported filesystems (max v%d).\n"),
 		    unsupp_fs, (int) ZPL_VERSION);
 		return (1);
 	}
@@ -4898,7 +4900,7 @@ upgrade_one(zpool_handle_t *zhp, void *data)
 	int ret;
 
 	if (strcmp("log", zpool_get_name(zhp)) == 0) {
-		(void) printf(gettext("'log' is now a reserved word\n"
+		(void) fprintf(stderr, gettext("'log' is now a reserved word\n"
 		    "Pool 'log' must be renamed using export and import"
 		    " to upgrade.\n"));
 		return (1);
