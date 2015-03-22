@@ -184,7 +184,6 @@ Summary:        Dracut module
 Group:          System Environment/Kernel
 Requires:       %{name}%{?_isa} = %{version}-%{release}
 Requires:       dracut
-Requires:       %{name}-kmod = %{version}
 
 %description dracut
 This package contains a dracut module used to construct an initramfs
@@ -225,8 +224,6 @@ make %{?_smp_mflags}
 %{__rm} -rf $RPM_BUILD_ROOT
 make install DESTDIR=%{?buildroot}
 find %{?buildroot}%{_libdir} -name '*.la' -exec rm -f {} \;
-mkdir -p %{?buildroot}%{_docdir}/zfs/
-cp -R grub2 %{?buildroot}%{_docdir}/zfs/
 
 %post
 %if 0%{?_systemd}
@@ -251,21 +248,7 @@ exit 0
 %systemd_postun zfs.target
 %endif
 
-%post dracut
-[ "$1" = 1 ] && {
-       for kernel in /boot/vmlinuz-* ; do
-               kernel=`echo "$kernel" | sed -r 's|^/boot/vmlinuz-(.*)|\1|'`
-               if [ -f "/boot/initramfs-$kernel.img" -a -x  /sbin/new-kernel-pkg ] ; then
-                       /sbin/new-kernel-pkg --package kernel --mkinitrd --dracut --depmod --update "$kernel" || continue
-                       /sbin/new-kernel-pkg --package kernel --rpmposttrans "$kernel" || continue
-               fi
-       done
-}
-exit 0
-
 %files
-%doc AUTHORS COPYRIGHT DISCLAIMER
-%doc OPENSOLARIS.LICENSE README.markdown
 %{_sbindir}/*
 %{_bindir}/*
 %{_libexecdir}/%{name}
@@ -303,14 +286,12 @@ exit 0
 %{_includedir}/*
 %doc AUTHORS COPYRIGHT DISCLAIMER
 %doc OPENSOLARIS.LICENSE README.markdown
-%{_docdir}/zfs/grub2/*
 
 %files test
 %{_datadir}/%{name}
 
 %files dracut
 %doc dracut/README.dracut.markdown
-%{_dracutdir}/systemd-escaping.sh
 %{_dracutdir}/modules.d/*
 
 %changelog

@@ -30,7 +30,8 @@
  * CDDL HEADER END
  */
 
-AC_INIT
+AC_INIT(m4_esyscmd(grep Name META | cut -d ':' -f 2 | tr -d ' \n'),
+	m4_esyscmd(grep Version META | cut -d ':' -f 2 | tr -d ' \n'))
 AC_LANG(C)
 ZFS_AC_META
 AC_CONFIG_AUX_DIR([config])
@@ -38,7 +39,7 @@ AC_CONFIG_MACRO_DIR([config])
 AC_CANONICAL_SYSTEM
 AM_MAINTAINER_MODE
 m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])
-AM_INIT_AUTOMAKE([$ZFS_META_NAME], [$ZFS_META_VERSION])
+AM_INIT_AUTOMAKE
 AC_CONFIG_HEADERS([zfs_config.h], [
 	(mv zfs_config.h zfs_config.h.tmp &&
 	awk -f ${ac_srcdir}/config/config.awk zfs_config.h.tmp >zfs_config.h &&
@@ -58,9 +59,7 @@ ZFS_AC_DEBUG_DMU_TX
 AC_CONFIG_FILES([ 
 	Makefile
 	dracut/Makefile
-	dracut/89zfs/Makefile
-	dracut/02zfsexpandknowledge/Makefile
-	dracut/99zfssystemd/Makefile
+	dracut/90zfs/Makefile
 	udev/Makefile
 	udev/rules.d/Makefile
 	etc/Makefile
@@ -112,6 +111,7 @@ AC_CONFIG_FILES([
 	cmd/vdev_id/Makefile
 	cmd/arcstat/Makefile
 	cmd/dbufstat/Makefile
+	cmd/arc_summary/Makefile
 	cmd/zed/Makefile
 	contrib/Makefile
 	contrib/bash_completion.d/Makefile

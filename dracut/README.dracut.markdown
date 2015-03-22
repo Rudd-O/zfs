@@ -6,10 +6,7 @@ to the /usr/share/dracut/modules.d/ directory which allows dracut to
 create an initramfs which is zfs aware.
 
 2) Set the bootfs property for the bootable dataset in the pool.  Then set
-the dataset mountpoint property to `/`.  This will require you to import your
-pool with the -R (altroot) parameter first -- otherwise `zfs set mountpoint`
-will predictably fail because something else will already be mounted at the
-`/` mountpoint.
+the dataset mountpoint property to '/'.
 
     $ zpool set bootfs=pool/dataset pool
     $ zfs set mountpoint=/ pool/dataset
@@ -47,12 +44,6 @@ changed, but is dangerous and can lead to zpool corruption, particularly in
 cases where storage is on a shared fabric such as iSCSI where multiple hosts
 can access storage devices concurrently.  _Please understand the implications
 of force-importing a pool before enabling this option!_
-
-* `zfs_not_by_id=0`: If set to 1, the initramfs will run `zpool import -d /dev`
-when attempting to import pools.  This restores the old behavior of importing
-pools from /dev rather than from /dev/disk/by-id, enhancing portability of
-root/boot ZFS pools between machines.  _Please understand the implications
-of importing a pool in this manner before enabling this option!_
 
 * `spl_hostid`: By default, the hostid used by the SPL module is read from
 /etc/hostid inside the initramfs.  This file is placed there from the host
@@ -158,10 +149,6 @@ explicitly, though no force is attempted.  Finally the specified dataset
 is mounted on `$NEWROOT`, first using the `-o zfsutil` option to handle
 non-legacy mounts, then if that fails, without zfsutil to handle legacy
 mount points.
-
-After this process, if the `/usr` volume is a child of the specified dataset,
-it is mounted on `$NEWROOT/usr`, to accommodate for systems that have a
-separate `/usr` volume.
 
 If no root parameter was specified, this script attempts to find a pool with
 its bootfs attribute set.  First, already-imported pools are scanned and if

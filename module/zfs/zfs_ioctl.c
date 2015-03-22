@@ -186,7 +186,6 @@
 #include <sys/zfeature.h>
 
 #include <linux/miscdevice.h>
-#include <linux/module_compat.h>
 
 #include "zfs_namecheck.h"
 #include "zfs_prop.h"
@@ -254,7 +253,7 @@ __dprintf(const char *file, const char *func, int line, const char *fmt, ...)
 {
 	const char *newfile;
 	size_t size = 4096;
-	char *buf = kmem_alloc(size, KM_PUSHPAGE);
+	char *buf = kmem_alloc(size, KM_SLEEP);
 	char *nl;
 	va_list adx;
 
@@ -311,7 +310,7 @@ history_str_get(zfs_cmd_t *zc)
 	if (zc->zc_history == 0)
 		return (NULL);
 
-	buf = kmem_alloc(HIS_MAX_RECORD_LEN, KM_SLEEP | KM_NODEBUG);
+	buf = kmem_alloc(HIS_MAX_RECORD_LEN, KM_SLEEP);
 	if (copyinstr((void *)(uintptr_t)zc->zc_history,
 	    buf, HIS_MAX_RECORD_LEN, NULL) != 0) {
 		history_str_free(buf);
@@ -1328,20 +1327,20 @@ get_nvlist(uint64_t nvl, uint64_t size, int iflag, nvlist_t **nvp)
 	if (size == 0)
 		return (SET_ERROR(EINVAL));
 
-	packed = kmem_alloc(size, KM_SLEEP | KM_NODEBUG);
+	packed = vmem_alloc(size, KM_SLEEP);
 
 	if ((error = ddi_copyin((void *)(uintptr_t)nvl, packed, size,
 	    iflag)) != 0) {
-		kmem_free(packed, size);
+		vmem_free(packed, size);
 		return (error);
 	}
 
 	if ((error = nvlist_unpack(packed, size, &list, 0)) != 0) {
-		kmem_free(packed, size);
+		vmem_free(packed, size);
 		return (error);
 	}
 
-	kmem_free(packed, size);
+	vmem_free(packed, size);
 
 	*nvp = list;
 	return (0);
@@ -2443,8 +2442,7 @@ zfs_prop_set_special(const char *dsname, zprop_source_t source,
 		if (err == 0 && intval >= ZPL_VERSION_USERSPACE) {
 			zfs_cmd_t *zc;
 
-			zc = kmem_zalloc(sizeof (zfs_cmd_t),
-			    KM_SLEEP | KM_NODEBUG);
+			zc = kmem_zalloc(sizeof (zfs_cmd_t), KM_SLEEP);
 			(void) strcpy(zc->zc_name, dsname);
 			(void) zfs_ioc_userspace_upgrade(zc);
 			kmem_free(zc, sizeof (zfs_cmd_t));
@@ -3875,7 +3873,7 @@ zfs_check_clearable(char *dataset, nvlist_t *props, nvlist_t **errlist)
 
 	VERIFY(nvlist_alloc(&errors, NV_UNIQUE_NAME, KM_SLEEP) == 0);
 
-	zc = kmem_alloc(sizeof (zfs_cmd_t), KM_SLEEP | KM_NODEBUG);
+	zc = kmem_alloc(sizeof (zfs_cmd_t), KM_SLEEP);
 	(void) strcpy(zc->zc_name, dataset);
 	pair = nvlist_next_nvpair(props, NULL);
 	while (pair != NULL) {
@@ -5452,9 +5450,9 @@ zfs_ioctl_init(void)
 	 * does the logging of those commands.
 	 */
 	zfs_ioctl_register_pool(ZFS_IOC_POOL_DESTROY, zfs_ioc_pool_destroy,
-	    zfs_secpolicy_config, B_FALSE, POOL_CHECK_NONE);
+	    zfs_secpolicy_config, B_FALSE, POOL_CHECK_SUSPENDED);
 	zfs_ioctl_register_pool(ZFS_IOC_POOL_EXPORT, zfs_ioc_pool_export,
-	    zfs_secpolicy_config, B_FALSE, POOL_CHECK_NONE);
+	    zfs_secpolicy_config, B_FALSE, POOL_CHECK_SUSPENDED);
 
 	zfs_ioctl_register_pool(ZFS_IOC_POOL_STATS, zfs_ioc_pool_stats,
 	    zfs_secpolicy_read, B_FALSE, POOL_CHECK_NONE);
@@ -5748,7 +5746,7 @@ zfsdev_ioctl(struct file *filp, unsigned cmd, unsigned long arg)
 	if (vec->zvec_func == NULL && vec->zvec_legacy_func == NULL)
 		return (-SET_ERROR(EINVAL));
 
-	zc = kmem_zalloc(sizeof (zfs_cmd_t), KM_SLEEP | KM_NODEBUG);
+	zc = kmem_zalloc(sizeof (zfs_cmd_t), KM_SLEEP);
 
 	error = ddi_copyin((void *)arg, zc, sizeof (zfs_cmd_t), flag);
 	if (error != 0) {
@@ -5828,7 +5826,7 @@ zfsdev_ioctl(struct file *filp, unsigned cmd, unsigned long arg)
 			}
 		}
 
-		VERIFY0(nvlist_alloc(&outnvl, NV_UNIQUE_NAME, KM_PUSHPAGE));
+		outnvl = fnvlist_alloc();
 		error = vec->zvec_func(zc->zc_name, innvl, outnvl);
 
 		if (error == 0 && vec->zvec_allow_log &&
@@ -5955,10 +5953,17 @@ zfs_allow_log_destroy(void *arg)
 #define	ZFS_DEBUG_STR	""
 #endif
 
-int
+static int __init
 _init(void)
 {
 	int error;
+
+	error = vn_set_pwd("/");
+	if (error) {
+		printk(KERN_NOTICE
+		    "ZFS: Warning unable to set pwd to '/': %d\n", error);
+		return (error);
+	}
 
 	spa_init(FREAD | FWRITE);
 	zfs_init();
@@ -5997,7 +6002,7 @@ out1:
 	return (error);
 }
 
-int
+static void __exit
 _fini(void)
 {
 	zfs_detach();
@@ -6011,13 +6016,11 @@ _fini(void)
 
 	printk(KERN_NOTICE "ZFS: Unloaded module v%s-%s%s\n",
 	    ZFS_META_VERSION, ZFS_META_RELEASE, ZFS_DEBUG_STR);
-
-	return (0);
 }
 
 #ifdef HAVE_SPL
-spl_module_init(_init);
-spl_module_exit(_fini);
+module_init(_init);
+module_exit(_fini);
 
 MODULE_DESCRIPTION("ZFS");
 MODULE_AUTHOR(ZFS_META_AUTHOR);

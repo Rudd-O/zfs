@@ -248,7 +248,7 @@ zpl_aio_read(struct kiocb *kiocb, const struct iovec *iovp,
 	size_t count = kiocb->ki_nbytes;
 	ssize_t read;
 	size_t alloc_size = sizeof (struct iovec) * nr_segs;
-	struct iovec *iov_tmp = kmem_alloc(alloc_size, KM_SLEEP | KM_NODEBUG);
+	struct iovec *iov_tmp = kmem_alloc(alloc_size, KM_SLEEP);
 	bcopy(iovp, iov_tmp, alloc_size);
 
 	ASSERT(iovp);
@@ -271,6 +271,9 @@ zpl_write_common_iovec(struct inode *ip, const struct iovec *iovp, size_t count,
 	ssize_t wrote;
 	uio_t uio;
 	int error;
+
+	if (flags & O_APPEND)
+		*ppos = i_size_read(ip);
 
 	uio.uio_iov = (struct iovec *)iovp;
 	uio.uio_resid = count;
@@ -325,7 +328,7 @@ zpl_aio_write(struct kiocb *kiocb, const struct iovec *iovp,
 	size_t count = kiocb->ki_nbytes;
 	ssize_t wrote;
 	size_t alloc_size = sizeof (struct iovec) * nr_segs;
-	struct iovec *iov_tmp = kmem_alloc(alloc_size, KM_SLEEP | KM_NODEBUG);
+	struct iovec *iov_tmp = kmem_alloc(alloc_size, KM_SLEEP);
 	bcopy(iovp, iov_tmp, alloc_size);
 
 	ASSERT(iovp);
@@ -481,19 +484,14 @@ int
 zpl_putpage(struct page *pp, struct writeback_control *wbc, void *data)
 {
 	struct address_space *mapping = data;
+	fstrans_cookie_t cookie;
 
 	ASSERT(PageLocked(pp));
 	ASSERT(!PageWriteback(pp));
-	ASSERT(!(current->flags & PF_NOFS));
 
-	/*
-	 * Annotate this call path with a flag that indicates that it is
-	 * unsafe to use KM_SLEEP during memory allocations due to the
-	 * potential for a deadlock.  KM_PUSHPAGE should be used instead.
-	 */
-	current->flags |= PF_NOFS;
+	cookie = spl_fstrans_mark();
 	(void) zfs_putpage(mapping->host, pp, wbc);
-	current->flags &= ~PF_NOFS;
+	spl_fstrans_unmark(cookie);
 
 	return (0);
 }
@@ -622,7 +620,7 @@ zpl_fallocate(struct file *filp, int mode, loff_t offset, loff_t len)
 static int
 zpl_ioctl_getflags(struct file *filp, void __user *arg)
 {
-	struct inode *ip = filp->f_dentry->d_inode;
+	struct inode *ip = file_inode(filp);
 	unsigned int ioctl_flags = 0;
 	uint64_t zfs_flags = ITOZ(ip)->z_pflags;
 	int error;
@@ -658,7 +656,7 @@ zpl_ioctl_getflags(struct file *filp, void __user *arg)
 static int
 zpl_ioctl_setflags(struct file *filp, void __user *arg)
 {
-	struct inode	*ip = filp->f_dentry->d_inode;
+	struct inode	*ip = file_inode(filp);
 	uint64_t	zfs_flags = ITOZ(ip)->z_pflags;
 	unsigned int	ioctl_flags;
 	cred_t		*cr = CRED();

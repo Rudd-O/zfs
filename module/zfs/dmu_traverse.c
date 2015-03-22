@@ -288,7 +288,7 @@ traverse_visitbp(traverse_data_t *td, const dnode_phys_t *dnp,
 		if (err != 0)
 			goto post;
 
-		czb = kmem_alloc(sizeof (zbookmark_phys_t), KM_PUSHPAGE);
+		czb = kmem_alloc(sizeof (zbookmark_phys_t), KM_SLEEP);
 
 		for (i = 0; i < epb; i++) {
 			SET_BOOKMARK(czb, zb->zb_objset, zb->zb_object,
@@ -438,7 +438,7 @@ traverse_dnode(traverse_data_t *td, const dnode_phys_t *dnp,
 			break;
 	}
 
-	if (dnp->dn_flags & DNODE_FLAG_SPILL_BLKPTR) {
+	if (err == 0 && dnp->dn_flags & DNODE_FLAG_SPILL_BLKPTR) {
 		SET_BOOKMARK(&czb, objset, object, 0, DMU_SPILL_BLKID);
 		err = traverse_visitbp(td, dnp, &dnp->dn_spill, &czb);
 	}
@@ -517,9 +517,9 @@ traverse_impl(spa_t *spa, dsl_dataset_t *ds, uint64_t objset, blkptr_t *rootbp,
 	 */
 	ASSERT(resume == NULL || !(flags & TRAVERSE_PREFETCH_DATA));
 
-	td = kmem_alloc(sizeof (traverse_data_t), KM_PUSHPAGE);
-	pd = kmem_zalloc(sizeof (prefetch_data_t), KM_PUSHPAGE);
-	czb = kmem_alloc(sizeof (zbookmark_phys_t), KM_PUSHPAGE);
+	td = kmem_alloc(sizeof (traverse_data_t), KM_SLEEP);
+	pd = kmem_zalloc(sizeof (prefetch_data_t), KM_SLEEP);
+	czb = kmem_alloc(sizeof (zbookmark_phys_t), KM_SLEEP);
 
 	td->td_spa = spa;
 	td->td_objset = objset;
