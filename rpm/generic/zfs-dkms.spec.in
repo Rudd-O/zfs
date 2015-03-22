@@ -37,6 +37,7 @@ if [ "$RPM_BUILD_ROOT" != "/" ]; then
 fi
 mkdir -p $RPM_BUILD_ROOT/usr/src/
 cp -rf ${RPM_BUILD_DIR}/%{module}-%{version} $RPM_BUILD_ROOT/usr/src/
+sed -i 's|sbin/runscript|bin/bash|' $RPM_BUILD_ROOT/usr/src/%{module}-%{version}/etc/init.d/zfs.gentoo.in
 
 %clean
 if [ "$RPM_BUILD_ROOT" != "/" ]; then
