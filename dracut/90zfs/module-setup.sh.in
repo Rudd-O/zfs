@@ -43,12 +43,25 @@ install() {
 	inst_hook mount 98 "$moddir/mount-zfs.sh"
 	inst_hook shutdown 30 "$moddir/export-zfs.sh"
 
+	if dracut_module_included "systemd"; then
+		mkdir -p "${initdir}/$systemdsystemunitdir/initrd.target.wants"
+		for _item in scan cache ; do
+			dracut_install @systemdunitdir@/zfs-import-$_item.service
+			if ! [ -L "${initdir}/$systemdsystemunitdir/initrd.target.wants"/zfs-import-$_item.service ]; then
+				ln -s ../zfs-import-$_item.service "${initdir}/$systemdsystemunitdir/initrd.target.wants"/zfs-import-$_item.service
+				type mark_hostonly >/dev/null 2>&1 && mark_hostonly @systemdunitdir@/zfs-import-$_item.service
+			fi
+		done
+	fi
+
 	if [ -e @sysconfdir@/zfs/zpool.cache ]; then
 		inst @sysconfdir@/zfs/zpool.cache
+		type mark_hostonly >/dev/null 2>&1 && mark_hostonly @sysconfdir@/zfs/zpool.cache
 	fi
 
 	if [ -e @sysconfdir@/zfs/vdev_id.conf ]; then
 		inst @sysconfdir@/zfs/vdev_id.conf
+		type mark_hostonly >/dev/null 2>&1 && mark_hostonly @sysconfdir@/zfs/vdev_id.conf
 	fi
 
 	# Synchronize initramfs and system hostid

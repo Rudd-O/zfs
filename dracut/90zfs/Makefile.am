@@ -17,6 +17,7 @@ $(pkgdracut_SCRIPTS):
 		-e 's,@udevdir\@,$(udevdir),g' \
 		-e 's,@udevruledir\@,$(udevruledir),g' \
 		-e 's,@sysconfdir\@,$(sysconfdir),g' \
+		-e 's,@systemdunitdir\@,$(systemdunitdir),g' \
 		'$@.in' >'$@'
 
 distclean-local::

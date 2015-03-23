@@ -104,6 +104,7 @@ if [[ $hostonly ]]; then
                     _slavedevname=$(udevadm info --query=property --name="$_slavedev" | grep "^DEVNAME=" | sed 's|^DEVNAME=||')
                     _slavedevtype=$(get_devtype "$_slavedevname")
                     _slavemajmin=$(get_maj_min "$_slavedevname")
+                    dinfo "zfsexpandknowledge: slave block device backing ZFS dataset $mp: $_slavedevname"
                     push host_devs "$_slavedevname"
                     host_fs_types["$_slavedevname"]="$_slavedevtype"
                 done
