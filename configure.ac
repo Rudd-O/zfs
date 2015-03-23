@@ -59,6 +59,7 @@ ZFS_AC_DEBUG_DMU_TX
 AC_CONFIG_FILES([ 
 	Makefile
 	dracut/Makefile
+	dracut/02zfsexpandknowledge/Makefile
 	dracut/90zfs/Makefile
 	udev/Makefile
 	udev/rules.d/Makefile
