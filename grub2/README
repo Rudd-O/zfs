@@ -1,13 +1,8 @@
-BUILDING A PROPER GRUB RPM
+ATTENTION
+=========
 
-You can rpmbuild a set of GRUB2 RPMs by using the two files in this folder:
+The patches in this directory were obsoleted by:
 
-1. rpm -ivh the src.rpm of grub2 downloaded from Koji
-2. apply the patch file grub.spec.diff in the SPECS directory of your
-   RPM build %_topdir
-3. copy file 0486-Ensure-proper-boot-configuration-in-the-case-of-Linu.patch
-   to the SOURCES directory of your RPM build %_topdir
-4. rpmbuild -bs (or -ba) path/to/patched/grub2.spec
+https://github.com/Rudd-O/zfs-fedora-installer/tree/master/grub-zfs-fixer
 
-This is the recommended way of building a GRUB2 set of RPMs with ZFS boot
-support.
+Build and install that RPM on your system to avoid the need to rebuild GRUB for ZFS.
