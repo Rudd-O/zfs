@@ -20,7 +20,7 @@ $(pkgdracut_SCRIPTS):
 		-e 's,@udevruledir\@,$(udevruledir),g' \
 		-e 's,@sysconfdir\@,$(sysconfdir),g' \
 		-e 's,@systemdunitdir\@,$(systemdunitdir),g' \
-		"$(top_srcdir)/contrib/dracut/90zfs/$@.in" >'$@'
+		"$@.in" >'$@'
 
 distclean-local::
 	-$(RM) $(pkgdracut_SCRIPTS)

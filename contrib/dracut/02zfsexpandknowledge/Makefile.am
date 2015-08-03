@@ -1,6 +1,6 @@
 pkgdracutdir = $(dracutdir)/modules.d/02zfsexpandknowledge
 pkgdracut_SCRIPTS = \
-	$(top_srcdir)/dracut/02zfsexpandknowledge/module-setup.sh
+	module-setup.sh
 
 EXTRA_DIST = \
 	$(top_srcdir)/dracut/02zfsexpandknowledge/module-setup.sh.in
