@@ -6,3 +6,5 @@ The patches in this directory were obsoleted by:
 https://github.com/Rudd-O/zfs-fedora-installer/tree/master/grub-zfs-fixer
 
 Build and install that RPM on your system to avoid the need to rebuild GRUB for ZFS.
+
+Instructions on how to build and install that RPM are available there.
