@@ -44,17 +44,6 @@ install() {
 	inst_hook shutdown 30 "${moddir}/export-zfs.sh"
 
 	inst_simple "${moddir}/zfs-lib.sh" "/lib/dracut-zfs-lib.sh"
-
-	if dracut_module_included "systemd"; then
-		mkdir -p "${initdir}/$systemdsystemunitdir/initrd.target.wants"
-		for _item in scan cache ; do
-			dracut_install @systemdunitdir@/zfs-import-$_item.service
-			if ! [ -L "${initdir}/$systemdsystemunitdir/initrd.target.wants"/zfs-import-$_item.service ]; then
-				ln -s ../zfs-import-$_item.service "${initdir}/$systemdsystemunitdir/initrd.target.wants"/zfs-import-$_item.service
-				type mark_hostonly >/dev/null 2>&1 && mark_hostonly @systemdunitdir@/zfs-import-$_item.service
-			fi
-		done
-	fi
 	if [ -e @sysconfdir@/zfs/zpool.cache ]; then
 		inst @sysconfdir@/zfs/zpool.cache
 		type mark_hostonly >/dev/null 2>&1 && mark_hostonly @sysconfdir@/zfs/zpool.cache
@@ -71,4 +60,15 @@ install() {
 	CC=`hostid | cut -b 5,6`
 	DD=`hostid | cut -b 7,8`
 	printf "\x${DD}\x${CC}\x${BB}\x${AA}" > "${initdir}/etc/hostid"
+
+	if dracut_module_included "systemd"; then
+		mkdir -p "${initdir}/$systemdsystemunitdir/initrd.target.wants"
+		for _item in scan cache ; do
+			dracut_install @systemdunitdir@/zfs-import-$_item.service
+			if ! [ -L "${initdir}/$systemdsystemunitdir/initrd.target.wants"/zfs-import-$_item.service ]; then
+				ln -s ../zfs-import-$_item.service "${initdir}/$systemdsystemunitdir/initrd.target.wants"/zfs-import-$_item.service
+				type mark_hostonly >/dev/null 2>&1 && mark_hostonly @systemdunitdir@/zfs-import-$_item.service
+			fi
+		done
+	fi
 }

@@ -88,6 +88,8 @@
 #define	MNTOPT_LOUD	"loud"		/* verbose mount */
 #define	MNTOPT_BIND	"bind"		/* remount part of a tree */
 #define	MNTOPT_RBIND	"rbind"		/* include subtrees */
+#define	MNTOPT_DIRXATTR	"dirxattr"	/* enable directory xattrs */
+#define	MNTOPT_SAXATTR	"saxattr"	/* enable system-attribute xattrs */
 #define	MNTOPT_XATTR	"xattr"		/* enable extended attributes */
 #define	MNTOPT_NOXATTR	"noxattr"	/* disable extended attributes */
 #define	MNTOPT_COMMENT	"comment"	/* comment */
@@ -95,8 +97,6 @@
 #define	MNTOPT_ACL	"acl"		/* passed by util-linux-2.24 mount */
 #define	MNTOPT_NOACL	"noacl"		/* likewise */
 #define	MNTOPT_POSIXACL	"posixacl"	/* likewise */
-
-#define	ZS_COMMENT	0x00000000	/* comment */
-#define	ZS_ZFSUTIL	0x00000001	/* caller is zfs(8) */
+#define	MNTOPT_MNTPOINT	"mntpoint"	/* mount point hint */
 
 #endif	/* _SYS_MNTENT_H */

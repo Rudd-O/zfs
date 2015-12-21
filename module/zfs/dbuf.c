@@ -303,7 +303,7 @@ dbuf_verify_user(dmu_buf_impl_t *db, dbvu_verify_type_t verify_type)
 		 */
 		ASSERT3U(holds, >=, db->db_dirtycnt);
 	} else {
-		if (db->db_immediate_evict == TRUE)
+		if (db->db_user_immediate_evict == TRUE)
 			ASSERT3U(holds, >=, db->db_dirtycnt);
 		else
 			ASSERT3U(holds, >, 0);
@@ -376,10 +376,11 @@ dbuf_init(void)
 
 	/*
 	 * The hash table is big enough to fill all of physical memory
-	 * with an average 4K block size.  The table will take up
-	 * totalmem*sizeof(void*)/4K (i.e. 2MB/GB with 8-byte pointers).
+	 * with an average block size of zfs_arc_average_blocksize (default 8K).
+	 * By default, the table will take up
+	 * totalmem * sizeof(void*) / 8K (1MB per GB with 8-byte pointers).
 	 */
-	while (hsize * 4096 < physmem * PAGESIZE)
+	while (hsize * zfs_arc_average_blocksize < physmem * PAGESIZE)
 		hsize <<= 1;
 
 retry:
@@ -1614,6 +1615,11 @@ dmu_buf_write_embedded(dmu_buf_t *dbuf, void *data,
 	struct dirty_leaf *dl;
 	dmu_object_type_t type;
 
+	if (etype == BP_EMBEDDED_TYPE_DATA) {
+		ASSERT(spa_feature_is_active(dmu_objset_spa(db->db_objset),
+		    SPA_FEATURE_EMBEDDED_DATA));
+	}
+
 	DB_DNODE_ENTER(db);
 	type = DB_DNODE(db)->dn_type;
 	DB_DNODE_EXIT(db);
@@ -1879,8 +1885,9 @@ dbuf_create(dnode_t *dn, uint8_t level, uint64_t blkid,
 	db->db_blkptr = blkptr;
 
 	db->db_user = NULL;
-	db->db_immediate_evict = 0;
-	db->db_freed_in_flight = 0;
+	db->db_user_immediate_evict = FALSE;
+	db->db_freed_in_flight = FALSE;
+	db->db_pending_evict = FALSE;
 
 	if (blkid == DMU_BONUS_BLKID) {
 		ASSERT3P(parent, ==, dn->dn_dbuf);
@@ -2317,12 +2324,13 @@ dbuf_rele_and_unlock(dmu_buf_impl_t *db, void *tag)
 		arc_buf_freeze(db->db_buf);
 
 	if (holds == db->db_dirtycnt &&
-	    db->db_level == 0 && db->db_immediate_evict)
+	    db->db_level == 0 && db->db_user_immediate_evict)
 		dbuf_evict_user(db);
 
 	if (holds == 0) {
 		if (db->db_blkid == DMU_BONUS_BLKID) {
 			dnode_t *dn;
+			boolean_t evict_dbuf = db->db_pending_evict;
 
 			/*
 			 * If the dnode moves here, we cannot cross this
@@ -2337,7 +2345,7 @@ dbuf_rele_and_unlock(dmu_buf_impl_t *db, void *tag)
 			 * Decrementing the dbuf count means that the bonus
 			 * buffer's dnode hold is no longer discounted in
 			 * dnode_move(). The dnode cannot move until after
-			 * the dnode_rele_and_unlock() below.
+			 * the dnode_rele() below.
 			 */
 			DB_DNODE_EXIT(db);
 
@@ -2347,35 +2355,10 @@ dbuf_rele_and_unlock(dmu_buf_impl_t *db, void *tag)
 			 */
 			mutex_exit(&db->db_mtx);
 
-			/*
-			 * If the dnode has been freed, evict the bonus
-			 * buffer immediately.	The data in the bonus
-			 * buffer is no longer relevant and this prevents
-			 * a stale bonus buffer from being associated
-			 * with this dnode_t should the dnode_t be reused
-			 * prior to being destroyed.
-			 */
-			mutex_enter(&dn->dn_mtx);
-			if (dn->dn_type == DMU_OT_NONE ||
-			    dn->dn_free_txg != 0) {
-				/*
-				 * Drop dn_mtx.  It is a leaf lock and
-				 * cannot be held when dnode_evict_bonus()
-				 * acquires other locks in order to
-				 * perform the eviction.
-				 *
-				 * Freed dnodes cannot be reused until the
-				 * last hold is released.  Since this bonus
-				 * buffer has a hold, the dnode will remain
-				 * in the free state, even without dn_mtx
-				 * held, until the dnode_rele_and_unlock()
-				 * below.
-				 */
-				mutex_exit(&dn->dn_mtx);
+			if (evict_dbuf)
 				dnode_evict_bonus(dn);
-				mutex_enter(&dn->dn_mtx);
-			}
-			dnode_rele_and_unlock(dn, db);
+
+			dnode_rele(dn, db);
 		} else if (db->db_buf == NULL) {
 			/*
 			 * This is a special case: we never associated this
@@ -2422,7 +2405,7 @@ dbuf_rele_and_unlock(dmu_buf_impl_t *db, void *tag)
 				} else {
 					dbuf_clear(db);
 				}
-			} else if (db->db_objset->os_evicting ||
+			} else if (db->db_pending_evict ||
 			    arc_buf_eviction_needed(db->db_buf)) {
 				dbuf_clear(db);
 			} else {
@@ -2470,7 +2453,7 @@ dmu_buf_set_user_ie(dmu_buf_t *db_fake, dmu_buf_user_t *user)
 {
 	dmu_buf_impl_t *db = (dmu_buf_impl_t *)db_fake;
 
-	db->db_immediate_evict = TRUE;
+	db->db_user_immediate_evict = TRUE;
 	return (dmu_buf_set_user(db_fake, user));
 }
 

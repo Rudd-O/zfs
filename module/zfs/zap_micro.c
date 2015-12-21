@@ -484,7 +484,7 @@ zap_lockdir(objset_t *os, uint64_t obj, dmu_tx_t *tx,
 		/* it was upgraded, now we only need reader */
 		ASSERT(lt == RW_WRITER);
 		ASSERT(RW_READER ==
-		    (!zap->zap_ismicro && fatreader) ? RW_READER : lti);
+		    ((!zap->zap_ismicro && fatreader) ? RW_READER : lti));
 		rw_downgrade(&zap->zap_rwlock);
 		lt = RW_READER;
 	}
@@ -808,6 +808,28 @@ zap_lookup_norm(objset_t *os, uint64_t zapobj, const char *name,
 			}
 		}
 	}
+	zap_name_free(zn);
+	zap_unlockdir(zap);
+	return (err);
+}
+
+int
+zap_prefetch(objset_t *os, uint64_t zapobj, const char *name)
+{
+	zap_t *zap;
+	int err;
+	zap_name_t *zn;
+
+	err = zap_lockdir(os, zapobj, NULL, RW_READER, TRUE, FALSE, &zap);
+	if (err)
+		return (err);
+	zn = zap_name_alloc(zap, name, MT_EXACT);
+	if (zn == NULL) {
+		zap_unlockdir(zap);
+		return (SET_ERROR(ENOTSUP));
+	}
+
+	fzap_prefetch(zn);
 	zap_name_free(zn);
 	zap_unlockdir(zap);
 	return (err);
@@ -1427,6 +1449,7 @@ EXPORT_SYMBOL(zap_lookup);
 EXPORT_SYMBOL(zap_lookup_norm);
 EXPORT_SYMBOL(zap_lookup_uint64);
 EXPORT_SYMBOL(zap_contains);
+EXPORT_SYMBOL(zap_prefetch);
 EXPORT_SYMBOL(zap_prefetch_uint64);
 EXPORT_SYMBOL(zap_count_write);
 EXPORT_SYMBOL(zap_add);

@@ -51,6 +51,9 @@ typedef void arc_done_func_t(zio_t *zio, arc_buf_t *buf, void *private);
 typedef void arc_prune_func_t(int64_t bytes, void *private);
 typedef int arc_evict_func_t(void *private);
 
+/* Shared module parameters */
+extern int zfs_arc_average_blocksize;
+
 /* generic arc_done_func_t's which you can use */
 arc_done_func_t arc_bcopy_func;
 arc_done_func_t arc_getbuf_func;
@@ -102,20 +105,6 @@ typedef enum arc_flags
 	/* Flags specifying whether optional hdr struct fields are defined */
 	ARC_FLAG_HAS_L1HDR		= 1 << 17,
 	ARC_FLAG_HAS_L2HDR		= 1 << 18,
-
-	/*
-	 * The arc buffer's compression mode is stored in the top 7 bits of the
-	 * flags field, so these dummy flags are included so that MDB can
-	 * interpret the enum properly.
-	 */
-	ARC_FLAG_COMPRESS_0		= 1 << 24,
-	ARC_FLAG_COMPRESS_1		= 1 << 25,
-	ARC_FLAG_COMPRESS_2		= 1 << 26,
-	ARC_FLAG_COMPRESS_3		= 1 << 27,
-	ARC_FLAG_COMPRESS_4		= 1 << 28,
-	ARC_FLAG_COMPRESS_5		= 1 << 29,
-	ARC_FLAG_COMPRESS_6		= 1 << 30
-
 } arc_flags_t;
 
 struct arc_buf {

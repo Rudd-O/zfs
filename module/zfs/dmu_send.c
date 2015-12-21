@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2011 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2015 by Delphix. All rights reserved.
  * Copyright 2011 Nexenta Systems, Inc. All rights reserved.
  * Copyright (c) 2014, Joyent, Inc. All rights reserved.
  * Copyright (c) 2011, 2014 by Delphix. All rights reserved.
@@ -67,7 +67,7 @@ typedef struct dump_bytes_io {
 } dump_bytes_io_t;
 
 static void
-dump_bytes_strategy(void *arg)
+dump_bytes_cb(void *arg)
 {
 	dump_bytes_io_t *dbi = (dump_bytes_io_t *)arg;
 	dmu_sendarg_t *dsp = dbi->dbi_dsp;
@@ -94,6 +94,9 @@ dump_bytes(dmu_sendarg_t *dsp, void *buf, int len)
 	dbi.dbi_buf = buf;
 	dbi.dbi_len = len;
 
+#if defined(HAVE_LARGE_STACKS)
+	dump_bytes_cb(&dbi);
+#else
 	/*
 	 * The vn_rdwr() call is performed in a taskq to ensure that there is
 	 * always enough stack space to write safely to the target filesystem.
@@ -101,7 +104,8 @@ dump_bytes(dmu_sendarg_t *dsp, void *buf, int len)
 	 * them and they are used in vdev_file.c for a similar purpose.
 	 */
 	spa_taskq_dispatch_sync(dmu_objset_spa(dsp->dsa_os), ZIO_TYPE_FREE,
-	    ZIO_TASKQ_ISSUE, dump_bytes_strategy, &dbi, TQ_SLEEP);
+	    ZIO_TASKQ_ISSUE, dump_bytes_cb, &dbi, TQ_SLEEP);
+#endif /* HAVE_LARGE_STACKS */
 
 	return (dsp->dsa_err);
 }
@@ -611,7 +615,7 @@ dmu_send_impl(void *tag, dsl_pool_t *dp, dsl_dataset_t *ds,
 	}
 #endif
 
-	if (large_block_ok && ds->ds_large_blocks)
+	if (large_block_ok && ds->ds_feature_inuse[SPA_FEATURE_LARGE_BLOCKS])
 		featureflags |= DMU_BACKUP_FEATURE_LARGE_BLOCKS;
 	if (embedok &&
 	    spa_feature_is_active(dp->dp_spa, SPA_FEATURE_EMBEDDED_DATA)) {
@@ -1225,13 +1229,6 @@ dmu_recv_begin_sync(void *arg, dmu_tx_t *tx)
 		drba->drba_cookie->drc_newfs = B_TRUE;
 	}
 	VERIFY0(dsl_dataset_own_obj(dp, dsobj, dmu_recv_tag, &newds));
-
-	if ((DMU_GET_FEATUREFLAGS(drrb->drr_versioninfo) &
-	    DMU_BACKUP_FEATURE_LARGE_BLOCKS) &&
-	    !newds->ds_large_blocks) {
-		dsl_dataset_activate_large_blocks_sync_impl(dsobj, tx);
-		newds->ds_large_blocks = B_TRUE;
-	}
 
 	dmu_buf_will_dirty(newds->ds_dbuf, tx);
 	dsl_dataset_phys(newds)->ds_flags |= DS_FLAG_INCONSISTENT;

@@ -23,6 +23,7 @@
  * Copyright (c) 2011, 2014 by Delphix. All rights reserved.
  * Copyright (c) 2013 by Saso Kiselkov. All rights reserved.
  * Copyright (c) 2014, Nexenta Systems, Inc. All rights reserved.
+ * Copyright (c) 2015 by Chunwei Chen. All rights reserved.
  */
 
 #include <sys/dmu.h>
@@ -933,7 +934,7 @@ dmu_xuio_init(xuio_t *xuio, int nblk)
 	priv = kmem_zalloc(sizeof (dmu_xuio_t), KM_SLEEP);
 	priv->cnt = nblk;
 	priv->bufs = kmem_zalloc(nblk * sizeof (arc_buf_t *), KM_SLEEP);
-	priv->iovp = uio->uio_iov;
+	priv->iovp = (iovec_t *)uio->uio_iov;
 	XUIO_XUZC_PRIV(xuio) = priv;
 
 	if (XUIO_XUZC_RW(xuio) == UIO_READ)
@@ -974,7 +975,7 @@ dmu_xuio_add(xuio_t *xuio, arc_buf_t *abuf, offset_t off, size_t n)
 
 	ASSERT(i < priv->cnt);
 	ASSERT(off + n <= arc_buf_size(abuf));
-	iov = uio->uio_iov + i;
+	iov = (iovec_t *)uio->uio_iov + i;
 	iov->iov_base = (char *)abuf->b_data + off;
 	iov->iov_len = n;
 	priv->bufs[i] = abuf;
@@ -1040,169 +1041,6 @@ xuio_stat_wbuf_nocopy()
 }
 
 #ifdef _KERNEL
-
-/*
- * Copy up to size bytes between arg_buf and req based on the data direction
- * described by the req.  If an entire req's data cannot be transfered in one
- * pass, you should pass in @req_offset to indicate where to continue. The
- * return value is the number of bytes successfully copied to arg_buf.
- */
-static int
-dmu_req_copy(void *arg_buf, int size, struct request *req, size_t req_offset)
-{
-	struct bio_vec bv, *bvp;
-	struct req_iterator iter;
-	char *bv_buf;
-	int tocpy, bv_len, bv_offset;
-	int offset = 0;
-
-	rq_for_each_segment4(bv, bvp, req, iter) {
-		/*
-		 * Fully consumed the passed arg_buf. We use goto here because
-		 * rq_for_each_segment is a double loop
-		 */
-		ASSERT3S(offset, <=, size);
-		if (size == offset)
-			goto out;
-
-		/* Skip already copied bv */
-		if (req_offset >=  bv.bv_len) {
-			req_offset -= bv.bv_len;
-			continue;
-		}
-
-		bv_len = bv.bv_len - req_offset;
-		bv_offset = bv.bv_offset + req_offset;
-		req_offset = 0;
-
-		tocpy = MIN(bv_len, size - offset);
-		ASSERT3S(tocpy, >=, 0);
-
-		bv_buf = page_address(bv.bv_page) + bv_offset;
-		ASSERT3P(bv_buf, !=, NULL);
-
-		if (rq_data_dir(req) == WRITE)
-			memcpy(arg_buf + offset, bv_buf, tocpy);
-		else
-			memcpy(bv_buf, arg_buf + offset, tocpy);
-
-		offset += tocpy;
-	}
-out:
-	return (offset);
-}
-
-int
-dmu_read_req(objset_t *os, uint64_t object, struct request *req)
-{
-	uint64_t size = blk_rq_bytes(req);
-	uint64_t offset = blk_rq_pos(req) << 9;
-	dmu_buf_t **dbp;
-	int numbufs, i, err;
-	size_t req_offset;
-
-	/*
-	 * NB: we could do this block-at-a-time, but it's nice
-	 * to be reading in parallel.
-	 */
-	err = dmu_buf_hold_array(os, object, offset, size, TRUE, FTAG,
-	    &numbufs, &dbp);
-	if (err)
-		return (err);
-
-	req_offset = 0;
-	for (i = 0; i < numbufs; i++) {
-		uint64_t tocpy;
-		int64_t bufoff;
-		int didcpy;
-		dmu_buf_t *db = dbp[i];
-
-		bufoff = offset - db->db_offset;
-		ASSERT3S(bufoff, >=, 0);
-
-		tocpy = MIN(db->db_size - bufoff, size);
-		if (tocpy == 0)
-			break;
-
-		didcpy = dmu_req_copy(db->db_data + bufoff, tocpy, req,
-		    req_offset);
-
-		if (didcpy < tocpy)
-			err = EIO;
-
-		if (err)
-			break;
-
-		size -= tocpy;
-		offset += didcpy;
-		req_offset += didcpy;
-		err = 0;
-	}
-	dmu_buf_rele_array(dbp, numbufs, FTAG);
-
-	return (err);
-}
-
-int
-dmu_write_req(objset_t *os, uint64_t object, struct request *req, dmu_tx_t *tx)
-{
-	uint64_t size = blk_rq_bytes(req);
-	uint64_t offset = blk_rq_pos(req) << 9;
-	dmu_buf_t **dbp;
-	int numbufs, i, err;
-	size_t req_offset;
-
-	if (size == 0)
-		return (0);
-
-	err = dmu_buf_hold_array(os, object, offset, size, FALSE, FTAG,
-	    &numbufs, &dbp);
-	if (err)
-		return (err);
-
-	req_offset = 0;
-	for (i = 0; i < numbufs; i++) {
-		uint64_t tocpy;
-		int64_t bufoff;
-		int didcpy;
-		dmu_buf_t *db = dbp[i];
-
-		bufoff = offset - db->db_offset;
-		ASSERT3S(bufoff, >=, 0);
-
-		tocpy = MIN(db->db_size - bufoff, size);
-		if (tocpy == 0)
-			break;
-
-		ASSERT(i == 0 || i == numbufs-1 || tocpy == db->db_size);
-
-		if (tocpy == db->db_size)
-			dmu_buf_will_fill(db, tx);
-		else
-			dmu_buf_will_dirty(db, tx);
-
-		didcpy = dmu_req_copy(db->db_data + bufoff, tocpy, req,
-		    req_offset);
-
-		if (tocpy == db->db_size)
-			dmu_buf_fill_done(db, tx);
-
-		if (didcpy < tocpy)
-			err = EIO;
-
-		if (err)
-			break;
-
-		size -= tocpy;
-		offset += didcpy;
-		req_offset += didcpy;
-		err = 0;
-	}
-
-	dmu_buf_rele_array(dbp, numbufs, FTAG);
-	return (err);
-}
-
 static int
 dmu_read_uio_dnode(dnode_t *dn, uio_t *uio, uint64_t size)
 {

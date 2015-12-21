@@ -274,9 +274,6 @@ zfs_inode_destroy(struct inode *ip)
 	znode_t *zp = ITOZ(ip);
 	zfs_sb_t *zsb = ZTOZSB(zp);
 
-	if (zfsctl_is_node(ip))
-		zfsctl_inode_destroy(ip);
-
 	mutex_enter(&zsb->z_znodes_lock);
 	if (list_link_active(&zp->z_link_node)) {
 		list_remove(&zsb->z_all_znodes, zp);
@@ -413,7 +410,7 @@ zfs_znode_alloc(zfs_sb_t *zsb, dmu_buf_t *db, int blksz,
 	if (sa_bulk_lookup(zp->z_sa_hdl, bulk, count) != 0 || zp->z_gen == 0) {
 		if (hdl == NULL)
 			sa_handle_destroy(zp->z_sa_hdl);
-
+		zp->z_sa_hdl = NULL;
 		goto error;
 	}
 
@@ -451,7 +448,6 @@ zfs_znode_alloc(zfs_sb_t *zsb, dmu_buf_t *db, int blksz,
 	return (zp);
 
 error:
-	unlock_new_inode(ip);
 	iput(ip);
 	return (NULL);
 }
@@ -488,6 +484,7 @@ zfs_inode_update(znode_t *zp)
 	zfs_sb_t	*zsb;
 	struct inode	*ip;
 	uint32_t	blksize;
+	u_longlong_t	i_blocks;
 	uint64_t	atime[2], mtime[2], ctime[2];
 
 	ASSERT(zp != NULL);
@@ -502,6 +499,8 @@ zfs_inode_update(znode_t *zp)
 	sa_lookup(zp->z_sa_hdl, SA_ZPL_MTIME(zsb), &mtime, 16);
 	sa_lookup(zp->z_sa_hdl, SA_ZPL_CTIME(zsb), &ctime, 16);
 
+	dmu_object_size_from_db(sa_get_db(zp->z_sa_hdl), &blksize, &i_blocks);
+
 	spin_lock(&ip->i_lock);
 	ip->i_generation = zp->z_gen;
 	ip->i_uid = SUID_TO_KUID(zp->z_uid);
@@ -510,8 +509,7 @@ zfs_inode_update(znode_t *zp)
 	ip->i_mode = zp->z_mode;
 	zfs_set_inode_flags(zp, ip);
 	ip->i_blkbits = SPA_MINBLOCKSHIFT;
-	dmu_object_size_from_db(sa_get_db(zp->z_sa_hdl), &blksize,
-	    (u_longlong_t *)&ip->i_blocks);
+	ip->i_blocks = i_blocks;
 
 	ZFS_TIME_DECODE(&ip->i_atime, atime);
 	ZFS_TIME_DECODE(&ip->i_mtime, mtime);
@@ -1014,7 +1012,16 @@ zfs_rezget(znode_t *zp)
 	}
 	mutex_exit(&zp->z_acl_lock);
 
-	rw_enter(&zp->z_xattr_lock, RW_WRITER);
+	/*
+	 * Lock inversion with zpl_xattr_get->__zpl_xattr_get->zfs_lookup
+	 * between z_xattr_lock and z_teardown_lock.  Detect this case and
+	 * return EBUSY so zfs_resume_fs() will mark the inode stale and it
+	 * will safely be revalidated on next access.
+	 */
+	err = rw_tryenter(&zp->z_xattr_lock, RW_WRITER);
+	if (!err)
+		return (SET_ERROR(EBUSY));
+
 	if (zp->z_xattr_cached) {
 		nvlist_free(zp->z_xattr_cached);
 		zp->z_xattr_cached = NULL;
