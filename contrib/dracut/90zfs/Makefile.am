@@ -4,6 +4,7 @@ pkgdracut_SCRIPTS = \
 	module-setup.sh \
 	mount-zfs.sh \
 	parse-zfs.sh \
+	zfs-generator.sh \
 	zfs-lib.sh
 
 EXTRA_DIST = \
@@ -11,6 +12,7 @@ EXTRA_DIST = \
 	$(top_srcdir)/contrib/dracut/90zfs/module-setup.sh.in \
 	$(top_srcdir)/contrib/dracut/90zfs/mount-zfs.sh.in \
 	$(top_srcdir)/contrib/dracut/90zfs/parse-zfs.sh.in \
+	$(top_srcdir)/contrib/dracut/90zfs/zfs-generator.sh.in \
 	$(top_srcdir)/contrib/dracut/90zfs/zfs-lib.sh.in
 
 $(pkgdracut_SCRIPTS):
