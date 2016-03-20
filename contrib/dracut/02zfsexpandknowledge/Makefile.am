@@ -13,7 +13,7 @@ $(pkgdracut_SCRIPTS):
 		-e 's,@udevdir\@,$(udevdir),g' \
 		-e 's,@udevruledir\@,$(udevruledir),g' \
 		-e 's,@sysconfdir\@,$(sysconfdir),g' \
-		'$@.in' >'$@'
+		"$(top_srcdir)/contrib/dracut/02zfsexpandknowledge/$@.in" >'$@'
 
 clean-local::
 	-$(RM) $(pkgdracut_SCRIPTS)
