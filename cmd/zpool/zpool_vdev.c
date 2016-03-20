@@ -78,12 +78,7 @@
 #include <sys/vtoc.h>
 #include <sys/mntent.h>
 #include <uuid/uuid.h>
-#ifdef HAVE_LIBBLKID
 #include <blkid/blkid.h>
-#else
-#define	blkid_cache void *
-#endif /* HAVE_LIBBLKID */
-
 #include "zpool_util.h"
 #include <sys/zfs_context.h>
 
@@ -374,7 +369,6 @@ static int
 check_slice(const char *path, blkid_cache cache, int force, boolean_t isspare)
 {
 	int err;
-#ifdef HAVE_LIBBLKID
 	char *value;
 
 	/* No valid type detected device is safe to use */
@@ -400,16 +394,21 @@ check_slice(const char *path, blkid_cache cache, int force, boolean_t isspare)
 	}
 
 	free(value);
-#else
-	err = check_file(path, force, isspare);
-#endif /* HAVE_LIBBLKID */
 
 	return (err);
 }
 
 /*
- * Validate a whole disk.  Iterate over all slices on the disk and make sure
- * that none is in use by calling check_slice().
+ * Validate that a disk including all partitions are safe to use.
+ *
+ * For EFI labeled disks this can done relatively easily with the libefi
+ * library.  The partition numbers are extracted from the label and used
+ * to generate the expected /dev/ paths.  Each partition can then be
+ * checked for conflicts.
+ *
+ * For non-EFI labeled disks (MBR/EBR/etc) the same process is possible
+ * but due to the lack of a readily available libraries this scanning is
+ * not implemented.  Instead only the device path as given is checked.
  */
 static int
 check_disk(const char *path, blkid_cache cache, int force,
@@ -420,34 +419,22 @@ check_disk(const char *path, blkid_cache cache, int force,
 	int err = 0;
 	int fd, i;
 
-	/* This is not a wholedisk we only check the given partition */
 	if (!iswholedisk)
 		return (check_slice(path, cache, force, isspare));
 
-	/*
-	 * When the device is a whole disk try to read the efi partition
-	 * label.  If this is successful we safely check the all of the
-	 * partitions.  However, when it fails it may simply be because
-	 * the disk is partitioned via the MBR.  Since we currently can
-	 * not easily decode the MBR return a failure and prompt to the
-	 * user to use force option since we cannot check the partitions.
-	 */
 	if ((fd = open(path, O_RDONLY|O_DIRECT)) < 0) {
 		check_error(errno);
 		return (-1);
 	}
 
-	if ((err = efi_alloc_and_read(fd, &vtoc)) != 0) {
+	/*
+	 * Expected to fail for non-EFI labled disks.  Just check the device
+	 * as given and do not attempt to detect and scan partitions.
+	 */
+	err = efi_alloc_and_read(fd, &vtoc);
+	if (err) {
 		(void) close(fd);
-
-		if (force) {
-			return (0);
-		} else {
-			vdev_error(gettext("%s does not contain an EFI "
-			    "label but it may contain partition\n"
-			    "information in the MBR.\n"), path);
-			return (-1);
-		}
+		return (check_slice(path, cache, force, isspare));
 	}
 
 	/*
@@ -500,7 +487,6 @@ check_device(const char *path, boolean_t force,
 {
 	static blkid_cache cache = NULL;
 
-#ifdef HAVE_LIBBLKID
 	/*
 	 * There is no easy way to add a correct blkid_put_cache() call,
 	 * memory will be reclaimed when the command exits.
@@ -519,7 +505,6 @@ check_device(const char *path, boolean_t force,
 			return (-1);
 		}
 	}
-#endif /* HAVE_LIBBLKID */
 
 	return (check_disk(path, cache, force, isspare, iswholedisk));
 }

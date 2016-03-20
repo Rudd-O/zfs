@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016 Actifio, Inc. All rights reserved.
  */
 
 #include <assert.h>
@@ -29,6 +30,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <zlib.h>
+#include <libgen.h>
 #include <sys/signal.h>
 #include <sys/spa.h>
 #include <sys/stat.h>
@@ -50,6 +52,9 @@ char hw_serial[HW_HOSTID_LEN];
 struct utsname hw_utsname;
 vmem_t *zio_arena = NULL;
 
+/* If set, all blocks read will be copied to the specified directory. */
+char *vn_dumpdir = NULL;
+
 /* this only exists to have its address taken */
 struct proc p0;
 
@@ -64,7 +69,7 @@ pthread_mutex_t kthread_lock = PTHREAD_MUTEX_INITIALIZER;
 pthread_key_t kthread_key;
 int kthread_nr = 0;
 
-static void
+void
 thread_init(void)
 {
 	kthread_t *kt;
@@ -83,7 +88,7 @@ thread_init(void)
 	kthread_nr = 1;
 }
 
-static void
+void
 thread_fini(void)
 {
 	kthread_t *kt = curthread;
@@ -588,6 +593,7 @@ int
 vn_open(char *path, int x1, int flags, int mode, vnode_t **vpp, int x2, int x3)
 {
 	int fd;
+	int dump_fd;
 	vnode_t *vp;
 	int old_umask = 0;
 	char *realpath;
@@ -655,13 +661,31 @@ vn_open(char *path, int x1, int flags, int mode, vnode_t **vpp, int x2, int x3)
 	 * FREAD and FWRITE to the corresponding O_RDONLY, O_WRONLY, and O_RDWR.
 	 */
 	fd = open64(realpath, flags - FREAD, mode);
-	free(realpath);
+	err = errno;
 
 	if (flags & FCREAT)
 		(void) umask(old_umask);
 
+	if (vn_dumpdir != NULL) {
+		char *dumppath = umem_zalloc(MAXPATHLEN, UMEM_NOFAIL);
+		(void) snprintf(dumppath, MAXPATHLEN,
+		    "%s/%s", vn_dumpdir, basename(realpath));
+		dump_fd = open64(dumppath, O_CREAT | O_WRONLY, 0666);
+		umem_free(dumppath, MAXPATHLEN);
+		if (dump_fd == -1) {
+			err = errno;
+			free(realpath);
+			close(fd);
+			return (err);
+		}
+	} else {
+		dump_fd = -1;
+	}
+
+	free(realpath);
+
 	if (fd == -1)
-		return (errno);
+		return (err);
 
 	if (fstat64_blk(fd, &st) == -1) {
 		err = errno;
@@ -676,6 +700,7 @@ vn_open(char *path, int x1, int flags, int mode, vnode_t **vpp, int x2, int x3)
 	vp->v_fd = fd;
 	vp->v_size = st.st_size;
 	vp->v_path = spa_strdup(path);
+	vp->v_dump_fd = dump_fd;
 
 	return (0);
 }
@@ -708,6 +733,11 @@ vn_rdwr(int uio, vnode_t *vp, void *addr, ssize_t len, offset_t offset,
 
 	if (uio == UIO_READ) {
 		rc = pread64(vp->v_fd, addr, len, offset);
+		if (vp->v_dump_fd != -1) {
+			int status;
+			status = pwrite64(vp->v_dump_fd, addr, rc, offset);
+			ASSERT(status != -1);
+		}
 	} else {
 		/*
 		 * To simulate partial disk writes, we split writes into two
@@ -750,6 +780,8 @@ void
 vn_close(vnode_t *vp)
 {
 	close(vp->v_fd);
+	if (vp->v_dump_fd != -1)
+		close(vp->v_dump_fd);
 	spa_strfree(vp->v_path);
 	umem_free(vp, sizeof (vnode_t));
 }
@@ -966,8 +998,9 @@ kobj_read_file(struct _buf *file, char *buf, unsigned size, unsigned off)
 {
 	ssize_t resid;
 
-	vn_rdwr(UIO_READ, (vnode_t *)file->_fd, buf, size, (offset_t)off,
-	    UIO_SYSSPACE, 0, 0, 0, &resid);
+	if (vn_rdwr(UIO_READ, (vnode_t *)file->_fd, buf, size, (offset_t)off,
+	    UIO_SYSSPACE, 0, 0, 0, &resid) != 0)
+		return (-1);
 
 	return (size - resid);
 }
@@ -1321,4 +1354,25 @@ int
 spl_fstrans_check(void)
 {
 	return (0);
+}
+
+void
+zvol_create_minors(spa_t *spa, const char *name, boolean_t async)
+{
+}
+
+void
+zvol_remove_minor(spa_t *spa, const char *name, boolean_t async)
+{
+}
+
+void
+zvol_remove_minors(spa_t *spa, const char *name, boolean_t async)
+{
+}
+
+void
+zvol_rename_minors(spa_t *spa, const char *oldname, const char *newname,
+    boolean_t async)
+{
 }

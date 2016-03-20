@@ -21,7 +21,7 @@
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2011, 2015 by Delphix. All rights reserved.
- * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2011, 2014 by Delphix. All rights reserved.
  * Copyright (c) 2013 Steven Hartland. All rights reserved.
  * Copyright (c) 2014 Spectra Logic Corporation, All rights reserved.
  */
@@ -183,6 +183,9 @@ typedef struct dsl_dataset {
 
 	kmutex_t ds_sendstream_lock;
 	list_t ds_sendstreams;
+
+	/* Protected by our dsl_dir's dd_lock */
+	list_t ds_prop_cbs;
 
 	/*
 	 * For ZFEATURE_FLAG_PER_DATASET features, set if this dataset

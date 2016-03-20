@@ -20,7 +20,8 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2013 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2015 by Delphix. All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2015 by Chunwei Chen. All rights reserved.
  */
 
@@ -417,6 +418,7 @@ mappedread(struct inode *ip, int nbytes, uio_t *uio)
 #endif /* _KERNEL */
 
 unsigned long zfs_read_chunk_size = 1024 * 1024; /* Tunable */
+unsigned long zfs_delete_blocks = DMU_MAX_DELETEBLKCNT;
 
 /*
  * Read bytes from specified file into supplied buffer.
@@ -620,6 +622,15 @@ zfs_write(struct inode *ip, uio_t *uio, int ioflag, cred_t *cr)
 	SA_ADD_BULK_ATTR(bulk, count, SA_ZPL_SIZE(zsb), NULL, &zp->z_size, 8);
 	SA_ADD_BULK_ATTR(bulk, count, SA_ZPL_FLAGS(zsb), NULL,
 	    &zp->z_pflags, 8);
+
+	/*
+	 * Callers might not be able to detect properly that we are read-only,
+	 * so check it explicitly here.
+	 */
+	if (zfs_is_readonly(zsb)) {
+		ZFS_EXIT(zsb);
+		return (SET_ERROR(EROFS));
+	}
 
 	/*
 	 * If immutable or not appending then return EPERM
@@ -1510,12 +1521,13 @@ zfs_remove(struct inode *dip, char *name, cred_t *cr)
 	struct inode	*ip;
 	zfs_sb_t	*zsb = ITOZSB(dip);
 	zilog_t		*zilog;
-	uint64_t	xattr_obj;
+	uint64_t	acl_obj, xattr_obj;
 	uint64_t	xattr_obj_unlinked = 0;
 	uint64_t	obj = 0;
 	zfs_dirlock_t	*dl;
 	dmu_tx_t	*tx;
-	boolean_t	unlinked;
+	boolean_t	may_delete_now, delete_now = FALSE;
+	boolean_t	unlinked, toobig = FALSE;
 	uint64_t	txtype;
 	pathname_t	*realnmp = NULL;
 #ifdef HAVE_PN_UTILS
@@ -1574,10 +1586,15 @@ top:
 		dnlc_remove(dvp, name);
 #endif /* HAVE_DNLC */
 
+	mutex_enter(&zp->z_lock);
+	may_delete_now = atomic_read(&ip->i_count) == 1 && !(zp->z_is_mapped);
+	mutex_exit(&zp->z_lock);
+
 	/*
-	 * We never delete the znode and always place it in the unlinked
-	 * set.  The dentry cache will always hold the last reference and
-	 * is responsible for safely freeing the znode.
+	 * We may delete the znode now, or we may put it in the unlinked set;
+	 * it depends on whether we're the last link, and on whether there are
+	 * other holds on the inode.  So we dmu_tx_hold() the right things to
+	 * allow for either case.
 	 */
 	obj = zp->z_id;
 	tx = dmu_tx_create(zsb->z_os);
@@ -1585,6 +1602,12 @@ top:
 	dmu_tx_hold_sa(tx, zp->z_sa_hdl, B_FALSE);
 	zfs_sa_upgrade_txholds(tx, zp);
 	zfs_sa_upgrade_txholds(tx, dzp);
+	if (may_delete_now) {
+		toobig = zp->z_size > zp->z_blksz * zfs_delete_blocks;
+		/* if the file is too big, only hold_free a token amount */
+		dmu_tx_hold_free(tx, zp->z_id, 0,
+		    (toobig ? DMU_MAX_ACCESS : DMU_OBJECT_END));
+	}
 
 	/* are there any extended attributes? */
 	error = sa_lookup(zp->z_sa_hdl, SA_ZPL_XATTR(zsb),
@@ -1596,8 +1619,18 @@ top:
 		dmu_tx_hold_sa(tx, xzp->z_sa_hdl, B_FALSE);
 	}
 
+	mutex_enter(&zp->z_lock);
+	if ((acl_obj = zfs_external_acl(zp)) != 0 && may_delete_now)
+		dmu_tx_hold_free(tx, acl_obj, 0, DMU_OBJECT_END);
+	mutex_exit(&zp->z_lock);
+
 	/* charge as an update -- would be nice not to charge at all */
 	dmu_tx_hold_zap(tx, zsb->z_unlinkedobj, FALSE, NULL);
+
+	/*
+	 * Mark this transaction as typically resulting in a net free of space
+	 */
+	dmu_tx_mark_netfree(tx);
 
 	error = dmu_tx_assign(tx, waited ? TXG_WAITED : TXG_NOWAIT);
 	if (error) {
@@ -1639,6 +1672,42 @@ top:
 		mutex_enter(&zp->z_lock);
 		(void) sa_lookup(zp->z_sa_hdl, SA_ZPL_XATTR(zsb),
 		    &xattr_obj_unlinked, sizeof (xattr_obj_unlinked));
+		delete_now = may_delete_now && !toobig &&
+		    atomic_read(&ip->i_count) == 1 && !(zp->z_is_mapped) &&
+		    xattr_obj == xattr_obj_unlinked && zfs_external_acl(zp) ==
+		    acl_obj;
+	}
+
+	if (delete_now) {
+		if (xattr_obj_unlinked) {
+			ASSERT3U(xzp->z_links, ==, 2);
+			mutex_enter(&xzp->z_lock);
+			xzp->z_unlinked = 1;
+			xzp->z_links = 0;
+			error = sa_update(xzp->z_sa_hdl, SA_ZPL_LINKS(zsb),
+			    &xzp->z_links, sizeof (xzp->z_links), tx);
+			ASSERT3U(error,  ==,  0);
+			mutex_exit(&xzp->z_lock);
+			zfs_unlinked_add(xzp, tx);
+
+			if (zp->z_is_sa)
+				error = sa_remove(zp->z_sa_hdl,
+				    SA_ZPL_XATTR(zsb), tx);
+			else
+				error = sa_update(zp->z_sa_hdl,
+				    SA_ZPL_XATTR(zsb), &null_xattr,
+				    sizeof (uint64_t), tx);
+			ASSERT0(error);
+		}
+		/*
+		 * Add to the unlinked set because a new reference could be
+		 * taken concurrently resulting in a deferred destruction.
+		 */
+		zfs_unlinked_add(zp, tx);
+		mutex_exit(&zp->z_lock);
+		zfs_inode_update(zp);
+		iput(ip);
+	} else if (unlinked) {
 		mutex_exit(&zp->z_lock);
 		zfs_unlinked_add(zp, tx);
 	}
@@ -1659,13 +1728,16 @@ out:
 
 	zfs_dirent_unlock(dl);
 	zfs_inode_update(dzp);
-	zfs_inode_update(zp);
-	if (xzp)
-		zfs_inode_update(xzp);
 
-	iput(ip);
-	if (xzp)
-		iput(ZTOI(xzp));
+	if (!delete_now) {
+		zfs_inode_update(zp);
+		zfs_iput_async(ip);
+	}
+
+	if (xzp) {
+		zfs_inode_update(xzp);
+		zfs_iput_async(ZTOI(xzp));
+	}
 
 	if (zsb->z_os->os_sync == ZFS_SYNC_ALWAYS)
 		zil_commit(zilog, 0);
@@ -2118,7 +2190,8 @@ zfs_readdir(struct inode *ip, struct dir_context *ctx, cred_t *cr)
 
 		/* Prefetch znode */
 		if (prefetch) {
-			dmu_prefetch(os, objnum, 0, 0);
+			dmu_prefetch(os, objnum, 0, 0, 0,
+			    ZIO_PRIORITY_SYNC_READ);
 		}
 
 		/*
@@ -3196,13 +3269,18 @@ zfs_rename(struct inode *sdip, char *snm, struct inode *tdip, char *tnm,
 	ZFS_VERIFY_ZP(sdzp);
 	zilog = zsb->z_log;
 
+	tdzp = ITOZ(tdip);
+	ZFS_VERIFY_ZP(tdzp);
+
+	/*
+	 * We check i_sb because snapshots and the ctldir must have different
+	 * super blocks.
+	 */
 	if (tdip->i_sb != sdip->i_sb || zfsctl_is_node(tdip)) {
 		ZFS_EXIT(zsb);
 		return (SET_ERROR(EXDEV));
 	}
 
-	tdzp = ITOZ(tdip);
-	ZFS_VERIFY_ZP(tdzp);
 	if (zsb->z_utf8 && u8_validate(tnm,
 	    strlen(tnm), NULL, U8_VALIDATE_ENTIRE, &error) < 0) {
 		ZFS_EXIT(zsb);
@@ -3740,13 +3818,17 @@ zfs_link(struct inode *tdip, struct inode *sip, char *name, cred_t *cr)
 		return (SET_ERROR(EPERM));
 	}
 
+	szp = ITOZ(sip);
+	ZFS_VERIFY_ZP(szp);
+
+	/*
+	 * We check i_sb because snapshots and the ctldir must have different
+	 * super blocks.
+	 */
 	if (sip->i_sb != tdip->i_sb || zfsctl_is_node(sip)) {
 		ZFS_EXIT(zsb);
 		return (SET_ERROR(EXDEV));
 	}
-
-	szp = ITOZ(sip);
-	ZFS_VERIFY_ZP(szp);
 
 	/* Prevent links to .zfs/shares files */
 
@@ -4377,6 +4459,15 @@ zfs_space(struct inode *ip, int cmd, flock64_t *bfp, int flag,
 		return (SET_ERROR(EINVAL));
 	}
 
+	/*
+	 * Callers might not be able to detect properly that we are read-only,
+	 * so check it explicitly here.
+	 */
+	if (zfs_is_readonly(zsb)) {
+		ZFS_EXIT(zsb);
+		return (SET_ERROR(EROFS));
+	}
+
 	if ((error = convoff(ip, bfp, 0, offset))) {
 		ZFS_EXIT(zsb);
 		return (error);
@@ -4668,6 +4759,8 @@ zfs_retzcbuf(struct inode *ip, xuio_t *xuio, cred_t *cr)
 #endif /* HAVE_UIO_ZEROCOPY */
 
 #if defined(_KERNEL) && defined(HAVE_SPL)
+module_param(zfs_delete_blocks, ulong, 0644);
+MODULE_PARM_DESC(zfs_delete_blocks, "Delete files larger than N blocks async");
 module_param(zfs_read_chunk_size, long, 0644);
 MODULE_PARM_DESC(zfs_read_chunk_size, "Bytes to read per chunk");
 #endif

@@ -19,9 +19,10 @@
  * CDDL HEADER END
  */
 /*
+ * Copyright 2015 Nexenta Systems, Inc. All rights reserved.
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2012 by Delphix. All rights reserved.
- * Copyright 2014 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2015 RackTop Systems.
  */
 
 /*
@@ -54,12 +55,8 @@
 #include <sys/vtoc.h>
 #include <sys/dktp/fdisk.h>
 #include <sys/efi_partition.h>
-
 #include <sys/vdev_impl.h>
-#ifdef HAVE_LIBBLKID
 #include <blkid/blkid.h>
-#endif
-
 #include "libzfs.h"
 #include "libzfs_impl.h"
 
@@ -203,8 +200,10 @@ fix_paths(nvlist_t *nv, name_entry_t *names)
 	if ((devid = get_devid(best->ne_name)) == NULL) {
 		(void) nvlist_remove_all(nv, ZPOOL_CONFIG_DEVID);
 	} else {
-		if (nvlist_add_string(nv, ZPOOL_CONFIG_DEVID, devid) != 0)
+		if (nvlist_add_string(nv, ZPOOL_CONFIG_DEVID, devid) != 0) {
+			devid_str_free(devid);
 			return (-1);
+		}
 		devid_str_free(devid);
 	}
 
@@ -675,8 +674,10 @@ get_configs(libzfs_handle_t *hdl, pool_list_t *pl, boolean_t active_ok)
 				    nvlist_add_uint64(holey,
 				    ZPOOL_CONFIG_ID, c) != 0 ||
 				    nvlist_add_uint64(holey,
-				    ZPOOL_CONFIG_GUID, 0ULL) != 0)
+				    ZPOOL_CONFIG_GUID, 0ULL) != 0) {
+					nvlist_free(holey);
 					goto nomem;
+				}
 				child[c] = holey;
 			}
 		}
@@ -933,6 +934,239 @@ zpool_read_label(int fd, nvlist_t **config, int *num_labels)
 	return (0);
 }
 
+typedef struct rdsk_node {
+	char *rn_name;
+	int rn_num_labels;
+	int rn_dfd;
+	libzfs_handle_t *rn_hdl;
+	nvlist_t *rn_config;
+	avl_tree_t *rn_avl;
+	avl_node_t rn_node;
+	boolean_t rn_nozpool;
+} rdsk_node_t;
+
+static int
+slice_cache_compare(const void *arg1, const void *arg2)
+{
+	const char  *nm1 = ((rdsk_node_t *)arg1)->rn_name;
+	const char  *nm2 = ((rdsk_node_t *)arg2)->rn_name;
+	char *nm1slice, *nm2slice;
+	int rv;
+
+	/*
+	 * partitions one and three (slices zero and two) are the most
+	 * likely to provide results, so put those first
+	 */
+	nm1slice = strstr(nm1, "part1");
+	nm2slice = strstr(nm2, "part1");
+	if (nm1slice && !nm2slice) {
+		return (-1);
+	}
+	if (!nm1slice && nm2slice) {
+		return (1);
+	}
+	nm1slice = strstr(nm1, "part3");
+	nm2slice = strstr(nm2, "part3");
+	if (nm1slice && !nm2slice) {
+		return (-1);
+	}
+	if (!nm1slice && nm2slice) {
+		return (1);
+	}
+
+	rv = strcmp(nm1, nm2);
+	if (rv == 0)
+		return (0);
+	return (rv > 0 ? 1 : -1);
+}
+
+#ifndef __linux__
+static void
+check_one_slice(avl_tree_t *r, char *diskname, uint_t partno,
+    diskaddr_t size, uint_t blksz)
+{
+	rdsk_node_t tmpnode;
+	rdsk_node_t *node;
+	char sname[MAXNAMELEN];
+
+	tmpnode.rn_name = &sname[0];
+	(void) snprintf(tmpnode.rn_name, MAXNAMELEN, "%s%u",
+	    diskname, partno);
+	/* too small to contain a zpool? */
+	if ((size < (SPA_MINDEVSIZE / blksz)) &&
+	    (node = avl_find(r, &tmpnode, NULL)))
+		node->rn_nozpool = B_TRUE;
+}
+#endif
+
+static void
+nozpool_all_slices(avl_tree_t *r, const char *sname)
+{
+#ifndef __linux__
+	char diskname[MAXNAMELEN];
+	char *ptr;
+	int i;
+
+	(void) strncpy(diskname, sname, MAXNAMELEN);
+	if (((ptr = strrchr(diskname, 's')) == NULL) &&
+	    ((ptr = strrchr(diskname, 'p')) == NULL))
+		return;
+	ptr[0] = 's';
+	ptr[1] = '\0';
+	for (i = 0; i < NDKMAP; i++)
+		check_one_slice(r, diskname, i, 0, 1);
+	ptr[0] = 'p';
+	for (i = 0; i <= FD_NUMPART; i++)
+		check_one_slice(r, diskname, i, 0, 1);
+#endif
+}
+
+static void
+check_slices(avl_tree_t *r, int fd, const char *sname)
+{
+#ifndef __linux__
+	struct extvtoc vtoc;
+	struct dk_gpt *gpt;
+	char diskname[MAXNAMELEN];
+	char *ptr;
+	int i;
+
+	(void) strncpy(diskname, sname, MAXNAMELEN);
+	if ((ptr = strrchr(diskname, 's')) == NULL || !isdigit(ptr[1]))
+		return;
+	ptr[1] = '\0';
+
+	if (read_extvtoc(fd, &vtoc) >= 0) {
+		for (i = 0; i < NDKMAP; i++)
+			check_one_slice(r, diskname, i,
+			    vtoc.v_part[i].p_size, vtoc.v_sectorsz);
+	} else if (efi_alloc_and_read(fd, &gpt) >= 0) {
+		/*
+		 * on x86 we'll still have leftover links that point
+		 * to slices s[9-15], so use NDKMAP instead
+		 */
+		for (i = 0; i < NDKMAP; i++)
+			check_one_slice(r, diskname, i,
+			    gpt->efi_parts[i].p_size, gpt->efi_lbasize);
+		/* nodes p[1-4] are never used with EFI labels */
+		ptr[0] = 'p';
+		for (i = 1; i <= FD_NUMPART; i++)
+			check_one_slice(r, diskname, i, 0, 1);
+		efi_free(gpt);
+	}
+#endif
+}
+
+static void
+zpool_open_func(void *arg)
+{
+	rdsk_node_t *rn = arg;
+	struct stat64 statbuf;
+	nvlist_t *config;
+	int num_labels;
+	int fd;
+
+	if (rn->rn_nozpool)
+		return;
+#ifdef __linux__
+	/*
+	 * Skip devices with well known prefixes there can be side effects
+	 * when opening devices which need to be avoided.
+	 *
+	 * core     - Symlink to /proc/kcore
+	 * fd*      - Floppy interface.
+	 * fuse     - Fuse control device.
+	 * hpet     - High Precision Event Timer
+	 * lp*      - Printer interface.
+	 * parport* - Parallel port interface.
+	 * ppp      - Generic PPP driver.
+	 * random   - Random device
+	 * rtc      - Real Time Clock
+	 * tty*     - Generic serial interface.
+	 * urandom  - Random device.
+	 * usbmon*  - USB IO monitor.
+	 * vcs*     - Virtual console memory.
+	 * watchdog - Watchdog must be closed in a special way.
+	 */
+	if ((strncmp(rn->rn_name, "core", 4) == 0) ||
+	    (strncmp(rn->rn_name, "fd", 2) == 0) ||
+	    (strncmp(rn->rn_name, "fuse", 4) == 0) ||
+	    (strncmp(rn->rn_name, "hpet", 4) == 0) ||
+	    (strncmp(rn->rn_name, "lp", 2) == 0) ||
+	    (strncmp(rn->rn_name, "parport", 7) == 0) ||
+	    (strncmp(rn->rn_name, "ppp", 3) == 0) ||
+	    (strncmp(rn->rn_name, "random", 6) == 0) ||
+	    (strncmp(rn->rn_name, "rtc", 3) == 0) ||
+	    (strncmp(rn->rn_name, "tty", 3) == 0) ||
+	    (strncmp(rn->rn_name, "urandom", 7) == 0) ||
+	    (strncmp(rn->rn_name, "usbmon", 6) == 0) ||
+	    (strncmp(rn->rn_name, "vcs", 3) == 0) ||
+	    (strncmp(rn->rn_name, "watchdog", 8) == 0))
+		return;
+
+	/*
+	 * Ignore failed stats.  We only want regular files and block devices.
+	 */
+	if (fstatat64(rn->rn_dfd, rn->rn_name, &statbuf, 0) != 0 ||
+	    (!S_ISREG(statbuf.st_mode) && !S_ISBLK(statbuf.st_mode)))
+		return;
+
+	if ((fd = openat64(rn->rn_dfd, rn->rn_name, O_RDONLY)) < 0) {
+		/* symlink to a device that's no longer there */
+		if (errno == ENOENT)
+			nozpool_all_slices(rn->rn_avl, rn->rn_name);
+		return;
+	}
+#else
+	if ((fd = openat64(rn->rn_dfd, rn->rn_name, O_RDONLY)) < 0) {
+		/* symlink to a device that's no longer there */
+		if (errno == ENOENT)
+			nozpool_all_slices(rn->rn_avl, rn->rn_name);
+		return;
+	}
+	/*
+	 * Ignore failed stats.  We only want regular
+	 * files, character devs and block devs.
+	 */
+	if (fstat64(fd, &statbuf) != 0 ||
+	    (!S_ISREG(statbuf.st_mode) &&
+	    !S_ISCHR(statbuf.st_mode) &&
+	    !S_ISBLK(statbuf.st_mode))) {
+		(void) close(fd);
+		return;
+	}
+#endif
+	/* this file is too small to hold a zpool */
+	if (S_ISREG(statbuf.st_mode) &&
+	    statbuf.st_size < SPA_MINDEVSIZE) {
+		(void) close(fd);
+		return;
+	} else if (!S_ISREG(statbuf.st_mode)) {
+		/*
+		 * Try to read the disk label first so we don't have to
+		 * open a bunch of minor nodes that can't have a zpool.
+		 */
+		check_slices(rn->rn_avl, fd, rn->rn_name);
+	}
+
+	if ((zpool_read_label(fd, &config, &num_labels)) != 0) {
+		(void) close(fd);
+		(void) no_memory(rn->rn_hdl);
+		return;
+	}
+
+	if (num_labels == 0) {
+		(void) close(fd);
+		nvlist_free(config);
+		return;
+	}
+
+	(void) close(fd);
+
+	rn->rn_config = config;
+	rn->rn_num_labels = num_labels;
+}
+
 /*
  * Given a file descriptor, clear (zero) the label information.  This function
  * is used in the appliance stack as part of the ZFS sysevent module and
@@ -965,7 +1199,6 @@ zpool_clear_label(int fd)
 	return (0);
 }
 
-#ifdef HAVE_LIBBLKID
 /*
  * Use libblkid to quickly search for zfs devices
  */
@@ -1035,16 +1268,17 @@ err_blkid2:
 err_blkid1:
 	return (err);
 }
-#endif /* HAVE_LIBBLKID */
 
 char *
 zpool_default_import_path[DEFAULT_IMPORT_PATH_SIZE] = {
 	"/dev/disk/by-vdev",	/* Custom rules, use first if they exist */
 	"/dev/mapper",		/* Use multipath devices before components */
+	"/dev/disk/by-partlabel", /* Single unique entry set by user */
+	"/dev/disk/by-partuuid", /* Generated partition uuid */
+	"/dev/disk/by-label",	/* Custom persistent labels */
 	"/dev/disk/by-uuid",	/* Single unique entry and persistent */
 	"/dev/disk/by-id",	/* May be multiple entries and persistent */
 	"/dev/disk/by-path",	/* Encodes physical location and persistent */
-	"/dev/disk/by-label",	/* Custom persistent labels */
 	"/dev"			/* UNSAFE device names will change */
 };
 
@@ -1058,33 +1292,31 @@ zpool_default_import_path[DEFAULT_IMPORT_PATH_SIZE] = {
 static nvlist_t *
 zpool_find_import_impl(libzfs_handle_t *hdl, importargs_t *iarg)
 {
-	int i, num_labels, dirs = iarg->paths;
-	DIR *dirp = NULL;
+	int i, dirs = iarg->paths;
 	struct dirent64 *dp;
 	char path[MAXPATHLEN];
 	char *end, **dir = iarg->path;
 	size_t pathleft;
-	struct stat64 statbuf;
-	nvlist_t *ret = NULL, *config;
-	int fd;
+	nvlist_t *ret = NULL;
 	pool_list_t pools = { 0 };
 	pool_entry_t *pe, *penext;
 	vdev_entry_t *ve, *venext;
 	config_entry_t *ce, *cenext;
 	name_entry_t *ne, *nenext;
+	avl_tree_t slice_cache;
+	rdsk_node_t *slice;
+	void *cookie;
 
 	verify(iarg->poolname == NULL || iarg->guid == 0);
 
+	/*
+	 * Prefer to locate pool member vdevs using libblkid.  Only fall
+	 * back to legacy directory scanning when explicitly requested or
+	 * if an error is encountered when consulted the libblkid cache.
+	 */
 	if (dirs == 0) {
-#ifdef HAVE_LIBBLKID
-		/* Use libblkid to scan all device for their type */
-		if (zpool_find_import_blkid(hdl, &pools) == 0)
+		if (!iarg->scan && (zpool_find_import_blkid(hdl, &pools) == 0))
 			goto skip_scanning;
-
-		(void) zfs_error_fmt(hdl, EZFS_BADCACHE,
-		    dgettext(TEXT_DOMAIN, "blkid failure falling back "
-		    "to manual probing"));
-#endif /* HAVE_LIBBLKID */
 
 		dir = zpool_default_import_path;
 		dirs = DEFAULT_IMPORT_PATH_SIZE;
@@ -1096,8 +1328,11 @@ zpool_find_import_impl(libzfs_handle_t *hdl, importargs_t *iarg)
 	 * and toplevel GUID.
 	 */
 	for (i = 0; i < dirs; i++) {
+		taskq_t *t;
 		char *rdsk;
 		int dfd;
+		boolean_t config_failed = B_FALSE;
+		DIR *dirp;
 
 		/* use realpath to normalize the path */
 		if (realpath(dir[i], path) == 0) {
@@ -1128,12 +1363,17 @@ zpool_find_import_impl(libzfs_handle_t *hdl, importargs_t *iarg)
 
 		if ((dfd = open64(rdsk, O_RDONLY)) < 0 ||
 		    (dirp = fdopendir(dfd)) == NULL) {
+			if (dfd >= 0)
+				(void) close(dfd);
 			zfs_error_aux(hdl, strerror(errno));
 			(void) zfs_error_fmt(hdl, EZFS_BADPATH,
 			    dgettext(TEXT_DOMAIN, "cannot open '%s'"),
 			    rdsk);
 			goto error;
 		}
+
+		avl_create(&slice_cache, slice_cache_compare,
+		    sizeof (rdsk_node_t), offsetof(rdsk_node_t, rn_node));
 
 		/*
 		 * This is not MT-safe, but we have no MT consumers of libzfs
@@ -1144,65 +1384,49 @@ zpool_find_import_impl(libzfs_handle_t *hdl, importargs_t *iarg)
 			    (name[1] == 0 || (name[1] == '.' && name[2] == 0)))
 				continue;
 
-			/*
-			 * Skip checking devices with well known prefixes:
-			 * watchdog - A special close is required to avoid
-			 *            triggering it and resetting the system.
-			 * fuse     - Fuse control device.
-			 * ppp      - Generic PPP driver.
-			 * tty*     - Generic serial interface.
-			 * vcs*     - Virtual console memory.
-			 * parport* - Parallel port interface.
-			 * lp*      - Printer interface.
-			 * fd*      - Floppy interface.
-			 * hpet     - High Precision Event Timer, crashes qemu
-			 *            when accessed from a virtual machine.
-			 * core     - Symlink to /proc/kcore, causes a crash
-			 *            when access from Xen dom0.
-			 */
-			if ((strncmp(name, "watchdog", 8) == 0) ||
-			    (strncmp(name, "fuse", 4) == 0) ||
-			    (strncmp(name, "ppp", 3) == 0) ||
-			    (strncmp(name, "tty", 3) == 0) ||
-			    (strncmp(name, "vcs", 3) == 0) ||
-			    (strncmp(name, "parport", 7) == 0) ||
-			    (strncmp(name, "lp", 2) == 0) ||
-			    (strncmp(name, "fd", 2) == 0) ||
-			    (strncmp(name, "hpet", 4) == 0) ||
-			    (strncmp(name, "core", 4) == 0))
-				continue;
+			slice = zfs_alloc(hdl, sizeof (rdsk_node_t));
+			slice->rn_name = zfs_strdup(hdl, name);
+			slice->rn_avl = &slice_cache;
+			slice->rn_dfd = dfd;
+			slice->rn_hdl = hdl;
+			slice->rn_nozpool = B_FALSE;
+			avl_add(&slice_cache, slice);
+		}
+		/*
+		 * create a thread pool to do all of this in parallel;
+		 * rn_nozpool is not protected, so this is racy in that
+		 * multiple tasks could decide that the same slice can
+		 * not hold a zpool, which is benign.  Also choose
+		 * double the number of processors; we hold a lot of
+		 * locks in the kernel, so going beyond this doesn't
+		 * buy us much.
+		 */
+		thread_init();
+		t = taskq_create("z_import", 2 * boot_ncpus, defclsyspri,
+		    2 * boot_ncpus, INT_MAX, TASKQ_PREPOPULATE);
+		for (slice = avl_first(&slice_cache); slice;
+		    (slice = avl_walk(&slice_cache, slice,
+		    AVL_AFTER)))
+			(void) taskq_dispatch(t, zpool_open_func, slice,
+			    TQ_SLEEP);
+		taskq_wait(t);
+		taskq_destroy(t);
+		thread_fini();
 
-			/*
-			 * Ignore failed stats.  We only want regular
-			 * files and block devices.
-			 */
-			if ((fstatat64(dfd, name, &statbuf, 0) != 0) ||
-			    (!S_ISREG(statbuf.st_mode) &&
-			    !S_ISBLK(statbuf.st_mode)))
-				continue;
-
-			if ((fd = openat64(dfd, name, O_RDONLY)) < 0)
-				continue;
-
-			if ((zpool_read_label(fd, &config, &num_labels))) {
-				(void) close(fd);
-				(void) no_memory(hdl);
-				goto error;
-			}
-
-			(void) close(fd);
-
-			if (config != NULL) {
+		cookie = NULL;
+		while ((slice = avl_destroy_nodes(&slice_cache,
+		    &cookie)) != NULL) {
+			if (slice->rn_config != NULL && !config_failed) {
+				nvlist_t *config = slice->rn_config;
 				boolean_t matched = B_TRUE;
-				char *pname;
 
-				if ((iarg->poolname != NULL) &&
-				    (nvlist_lookup_string(config,
-				    ZPOOL_CONFIG_POOL_NAME, &pname) == 0)) {
+				if (iarg->poolname != NULL) {
+					char *pname;
 
-					if (strcmp(iarg->poolname, pname))
-						matched = B_FALSE;
-
+					matched = nvlist_lookup_string(config,
+					    ZPOOL_CONFIG_POOL_NAME,
+					    &pname) == 0 &&
+					    strcmp(iarg->poolname, pname) == 0;
 				} else if (iarg->guid != 0) {
 					uint64_t this_guid;
 
@@ -1213,24 +1437,29 @@ zpool_find_import_impl(libzfs_handle_t *hdl, importargs_t *iarg)
 				}
 				if (!matched) {
 					nvlist_free(config);
-					config = NULL;
-					continue;
+				} else {
+					/*
+					 * use the non-raw path for the config
+					 */
+					(void) strlcpy(end, slice->rn_name,
+					    pathleft);
+					if (add_config(hdl, &pools, path, i+1,
+					    slice->rn_num_labels, config) != 0)
+						config_failed = B_TRUE;
 				}
-				/* use the non-raw path for the config */
-				(void) strlcpy(end, name, pathleft);
-				if (add_config(hdl, &pools, path, i+1,
-				    num_labels, config))
-					goto error;
 			}
+			free(slice->rn_name);
+			free(slice);
 		}
+		avl_destroy(&slice_cache);
 
 		(void) closedir(dirp);
-		dirp = NULL;
+
+		if (config_failed)
+			goto error;
 	}
 
-#ifdef HAVE_LIBBLKID
 skip_scanning:
-#endif
 	ret = get_configs(hdl, &pools, iarg->can_be_active);
 
 error:
@@ -1251,13 +1480,9 @@ error:
 
 	for (ne = pools.names; ne != NULL; ne = nenext) {
 		nenext = ne->ne_next;
-		if (ne->ne_name)
-			free(ne->ne_name);
+		free(ne->ne_name);
 		free(ne);
 	}
-
-	if (dirp)
-		(void) closedir(dirp);
 
 	return (ret);
 }
@@ -1616,9 +1841,9 @@ zpool_in_use(libzfs_handle_t *hdl, int fd, pool_state_t *state, char **namestr,
 		cb.cb_type = ZPOOL_CONFIG_SPARES;
 		if (zpool_iter(hdl, find_aux, &cb) == 1) {
 			name = (char *)zpool_get_name(cb.cb_zhp);
-			ret = TRUE;
+			ret = B_TRUE;
 		} else {
-			ret = FALSE;
+			ret = B_FALSE;
 		}
 		break;
 
@@ -1632,9 +1857,9 @@ zpool_in_use(libzfs_handle_t *hdl, int fd, pool_state_t *state, char **namestr,
 		cb.cb_type = ZPOOL_CONFIG_L2CACHE;
 		if (zpool_iter(hdl, find_aux, &cb) == 1) {
 			name = (char *)zpool_get_name(cb.cb_zhp);
-			ret = TRUE;
+			ret = B_TRUE;
 		} else {
-			ret = FALSE;
+			ret = B_FALSE;
 		}
 		break;
 

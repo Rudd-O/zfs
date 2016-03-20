@@ -162,8 +162,9 @@ zap_table_grow(zap_t *zap, zap_table_phys_t *tbl,
 		newblk = zap_allocate_blocks(zap, tbl->zt_numblks * 2);
 		tbl->zt_nextblk = newblk;
 		ASSERT0(tbl->zt_blks_copied);
-		dmu_prefetch(zap->zap_objset, zap->zap_object,
-		    tbl->zt_blk << bs, tbl->zt_numblks << bs);
+		dmu_prefetch(zap->zap_objset, zap->zap_object, 0,
+		    tbl->zt_blk << bs, tbl->zt_numblks << bs,
+		    ZIO_PRIORITY_SYNC_READ);
 	}
 
 	/*
@@ -404,7 +405,7 @@ zap_create_leaf(zap_t *zap, dmu_tx_t *tx)
 
 	ASSERT(RW_WRITE_HELD(&zap->zap_rwlock));
 
-	rw_init(&l->l_rwlock, NULL, RW_DEFAULT, NULL);
+	rw_init(&l->l_rwlock, NULL, RW_NOLOCKDEP, NULL);
 	rw_enter(&l->l_rwlock, RW_WRITER);
 	l->l_blkid = zap_allocate_blocks(zap, 1);
 	l->l_dbuf = NULL;
@@ -503,6 +504,16 @@ zap_get_leaf_byblk(zap_t *zap, uint64_t blkid, dmu_tx_t *tx, krw_t lt,
 	int err;
 
 	ASSERT(RW_LOCK_HELD(&zap->zap_rwlock));
+
+	/*
+	 * If system crashed just after dmu_free_long_range in zfs_rmnode, we
+	 * would be left with an empty xattr dir in delete queue. blkid=0
+	 * would be passed in when doing zfs_purgedir. If that's the case we
+	 * should just return immediately. The underlying objects should
+	 * already be freed, so this should be perfectly fine.
+	 */
+	if (blkid == 0)
+		return (ENOENT);
 
 	err = dmu_buf_hold(zap->zap_objset, zap->zap_object,
 	    blkid << bs, NULL, &db, DMU_READ_NO_PREFETCH);
@@ -939,7 +950,8 @@ fzap_prefetch(zap_name_t *zn)
 	if (zap_idx_to_blk(zap, idx, &blk) != 0)
 		return;
 	bs = FZAP_BLOCK_SHIFT(zap);
-	dmu_prefetch(zap->zap_objset, zap->zap_object, blk << bs, 1 << bs);
+	dmu_prefetch(zap->zap_objset, zap->zap_object, 0, blk << bs, 1 << bs,
+	    ZIO_PRIORITY_SYNC_READ);
 }
 
 /*
@@ -1285,9 +1297,10 @@ fzap_get_stats(zap_t *zap, zap_stats_t *zs)
 	} else {
 		int b;
 
-		dmu_prefetch(zap->zap_objset, zap->zap_object,
+		dmu_prefetch(zap->zap_objset, zap->zap_object, 0,
 		    zap_f_phys(zap)->zap_ptrtbl.zt_blk << bs,
-		    zap_f_phys(zap)->zap_ptrtbl.zt_numblks << bs);
+		    zap_f_phys(zap)->zap_ptrtbl.zt_numblks << bs,
+		    ZIO_PRIORITY_SYNC_READ);
 
 		for (b = 0; b < zap_f_phys(zap)->zap_ptrtbl.zt_numblks;
 		    b++) {

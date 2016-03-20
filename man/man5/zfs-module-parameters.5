@@ -82,6 +82,20 @@ Default value: \fB200\fR.
 .sp
 .ne 2
 .na
+\fBl2arc_max_block_size\fR (ulong)
+.ad
+.RS 12n
+The maximum block size which may be written to an L2ARC device, after
+compression and other factors.  This setting is used to prevent a small
+number of large blocks from pushing a larger number of small blocks out
+of the cache.
+.sp
+Default value: \fB16,777,216\fR.
+.RE
+
+.sp
+.ne 2
+.na
 \fBl2arc_nocompress\fR (int)
 .ad
 .RS 12n
@@ -331,12 +345,12 @@ Default value: \fB1,048,576\fR.
 .sp
 .ne 2
 .na
-\fBzfetch_block_cap\fR (uint)
+\fBzfetch_max_distance\fR (uint)
 .ad
 .RS 12n
-Max number of blocks to prefetch at a time
+Max bytes to prefetch per stream (default 8MB).
 .sp
-Default value: \fB256\fR.
+Default value: \fB8,388,608\fR.
 .RE
 
 .sp
@@ -718,6 +732,21 @@ Default value: \fB500,000\fR.
 .sp
 .ne 2
 .na
+\fBzfs_delete_blocks\fR (ulong)
+.ad
+.RS 12n
+This is the used to define a large file for the purposes of delete.  Files
+containing more than \fBzfs_delete_blocks\fR will be deleted asynchronously
+while smaller files are deleted synchronously.  Decreasing this value will
+reduce the time spent in an unlink(2) system call at the expense of a longer
+delay before the freed space is available.
+.sp
+Default value: \fB20,480\fR.
+.RE
+
+.sp
+.ne 2
+.na
 \fBzfs_dirty_data_max\fR (int)
 .ad
 .RS 12n
@@ -782,6 +811,17 @@ Default value: 10%, subject to \fBzfs_dirty_data_max_max\fR.
 Start syncing out a transaction group if there is at least this much dirty data.
 .sp
 Default value: \fB67,108,864\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs_free_bpobj_enabled\fR (int)
+.ad
+.RS 12n
+Enable/disable the processing of the free_bpobj object.
+.sp
+Default value: \fB1\fR.
 .RE
 
 .sp
@@ -1246,7 +1286,10 @@ Default value: \fB52,428,800\fR.
 \fBzfs_prefetch_disable\fR (int)
 .ad
 .RS 12n
-Disable all ZFS prefetching
+This tunable disables predictive prefetch.  Note that it leaves "prescient"
+prefetch (e.g. prefetch for zfs send) intact.  Unlike predictive prefetch,
+prescient prefetch never issues i/os that end up not being needed, so it
+can't hurt performance.
 .sp
 Use \fB1\fR for yes and \fB0\fR for no (default).
 .RE
@@ -1480,12 +1523,71 @@ Default value: \fB0\fR.
 .sp
 .ne 2
 .na
-\fBzfs_vdev_mirror_switch_us\fR (int)
+\fBzfs_vdev_mirror_rotating_inc\fR (int)
 .ad
 .RS 12n
-Switch mirrors every N usecs
+A number by which the balancing algorithm increments the load calculation for
+the purpose of selecting the least busy mirror member when an I/O immediately
+follows its predecessor on rotational vdevs for the purpose of making decisions
+based on load.
 .sp
-Default value: \fB10,000\fR.
+Default value: \fB0\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs_vdev_mirror_rotating_seek_inc\fR (int)
+.ad
+.RS 12n
+A number by which the balancing algorithm increments the load calculation for
+the purpose of selecting the least busy mirror member when an I/O lacks
+locality as defined by the zfs_vdev_mirror_rotating_seek_offset.  I/Os within
+this that are not immediately following the previous I/O are incremented by
+half.
+.sp
+Default value: \fB5\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs_vdev_mirror_rotating_seek_offset\fR (int)
+.ad
+.RS 12n
+The maximum distance for the last queued I/O in which the balancing algorithm
+considers an I/O to have locality.
+See the section "ZFS I/O SCHEDULER".
+.sp
+Default value: \fB1048576\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs_vdev_mirror_non_rotating_inc\fR (int)
+.ad
+.RS 12n
+A number by which the balancing algorithm increments the load calculation for
+the purpose of selecting the least busy mirror member on non-rotational vdevs
+when I/Os do not immediately follow one another.
+.sp
+Default value: \fB0\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs_vdev_mirror_non_rotating_seek_inc\fR (int)
+.ad
+.RS 12n
+A number by which the balancing algorithm increments the load calculation for
+the purpose of selecting the least busy mirror member when an I/O lacks
+locality as defined by the zfs_vdev_mirror_rotating_seek_offset. I/Os within
+this that are not immediately following the previous I/O are incremented by
+half.
+.sp
+Default value: \fB1\fR.
 .RE
 
 .sp

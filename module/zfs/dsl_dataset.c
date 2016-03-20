@@ -24,6 +24,7 @@
  * Copyright (c) 2014, Joyent, Inc. All rights reserved.
  * Copyright (c) 2014 RackTop Systems.
  * Copyright (c) 2014 Spectra Logic Corporation, All rights reserved.
+ * Copyright (c) 2016 Actifio, Inc. All rights reserved.
  */
 
 #include <sys/dmu_objset.h>
@@ -284,6 +285,7 @@ dsl_dataset_evict(void *dbu)
 
 	ASSERT(!list_link_active(&ds->ds_synced_link));
 
+	list_destroy(&ds->ds_prop_cbs);
 	mutex_destroy(&ds->ds_lock);
 	mutex_destroy(&ds->ds_opening_lock);
 	mutex_destroy(&ds->ds_sendstream_lock);
@@ -433,6 +435,9 @@ dsl_dataset_hold_obj(dsl_pool_t *dp, uint64_t dsobj, void *tag,
 		list_create(&ds->ds_sendstreams, sizeof (dmu_sendarg_t),
 		    offsetof(dmu_sendarg_t, dsa_link));
 
+		list_create(&ds->ds_prop_cbs, sizeof (dsl_prop_cb_record_t),
+		    offsetof(dsl_prop_cb_record_t, cbr_ds_node));
+
 		if (doi.doi_type == DMU_OTN_ZAP_METADATA) {
 			spa_feature_t f;
 
@@ -547,6 +552,7 @@ dsl_dataset_hold(dsl_pool_t *dp, const char *name,
 	const char *snapname;
 	uint64_t obj;
 	int err = 0;
+	dsl_dataset_t *ds;
 
 	err = dsl_dir_hold(dp, name, FTAG, &dd, &snapname);
 	if (err != 0)
@@ -555,36 +561,37 @@ dsl_dataset_hold(dsl_pool_t *dp, const char *name,
 	ASSERT(dsl_pool_config_held(dp));
 	obj = dsl_dir_phys(dd)->dd_head_dataset_obj;
 	if (obj != 0)
-		err = dsl_dataset_hold_obj(dp, obj, tag, dsp);
+		err = dsl_dataset_hold_obj(dp, obj, tag, &ds);
 	else
 		err = SET_ERROR(ENOENT);
 
 	/* we may be looking for a snapshot */
 	if (err == 0 && snapname != NULL) {
-		dsl_dataset_t *ds;
+		dsl_dataset_t *snap_ds;
 
 		if (*snapname++ != '@') {
-			dsl_dataset_rele(*dsp, tag);
+			dsl_dataset_rele(ds, tag);
 			dsl_dir_rele(dd, FTAG);
 			return (SET_ERROR(ENOENT));
 		}
 
 		dprintf("looking for snapshot '%s'\n", snapname);
-		err = dsl_dataset_snap_lookup(*dsp, snapname, &obj);
+		err = dsl_dataset_snap_lookup(ds, snapname, &obj);
 		if (err == 0)
-			err = dsl_dataset_hold_obj(dp, obj, tag, &ds);
-		dsl_dataset_rele(*dsp, tag);
+			err = dsl_dataset_hold_obj(dp, obj, tag, &snap_ds);
+		dsl_dataset_rele(ds, tag);
 
 		if (err == 0) {
-			mutex_enter(&ds->ds_lock);
-			if (ds->ds_snapname[0] == 0)
-				(void) strlcpy(ds->ds_snapname, snapname,
-				    sizeof (ds->ds_snapname));
-			mutex_exit(&ds->ds_lock);
-			*dsp = ds;
+			mutex_enter(&snap_ds->ds_lock);
+			if (snap_ds->ds_snapname[0] == 0)
+				(void) strlcpy(snap_ds->ds_snapname, snapname,
+				    sizeof (snap_ds->ds_snapname));
+			mutex_exit(&snap_ds->ds_lock);
+			ds = snap_ds;
 		}
 	}
-
+	if (err == 0)
+		*dsp = ds;
 	dsl_dir_rele(dd, FTAG);
 	return (err);
 }
@@ -1418,6 +1425,7 @@ dsl_dataset_snapshot_sync(void *arg, dmu_tx_t *tx)
 			dsl_props_set_sync_impl(ds->ds_prev,
 			    ZPROP_SRC_LOCAL, ddsa->ddsa_props, tx);
 		}
+		zvol_create_minors(dp->dp_spa, nvpair_name(pair), B_TRUE);
 		dsl_dataset_rele(ds, FTAG);
 	}
 }
@@ -1491,16 +1499,6 @@ dsl_dataset_snapshot(nvlist_t *snaps, nvlist_t *props, nvlist_t *errors)
 		}
 		fnvlist_free(suspended);
 	}
-
-#ifdef _KERNEL
-	if (error == 0) {
-		for (pair = nvlist_next_nvpair(snaps, NULL); pair != NULL;
-		    pair = nvlist_next_nvpair(snaps, pair)) {
-			char *snapname = nvpair_name(pair);
-			zvol_create_minors(snapname);
-		}
-	}
-#endif
 
 	return (error);
 }
@@ -1674,8 +1672,8 @@ fail:
 void
 dsl_dataset_stats(dsl_dataset_t *ds, nvlist_t *nv)
 {
+	dsl_pool_t *dp = ds->ds_dir->dd_pool;
 	uint64_t refd, avail, uobjs, aobjs, ratio;
-	ASSERTV(dsl_pool_t *dp = ds->ds_dir->dd_pool);
 
 	ASSERT(dsl_pool_config_held(dp));
 
@@ -1693,6 +1691,12 @@ dsl_dataset_stats(dsl_dataset_t *ds, nvlist_t *nv)
 		    dsl_dataset_phys(ds)->ds_unique_bytes);
 		get_clones_stat(ds, nv);
 	} else {
+		if (ds->ds_prev != NULL && ds->ds_prev != dp->dp_origin_snap) {
+			char buf[MAXNAMELEN];
+			dsl_dataset_name(ds->ds_prev, buf);
+			dsl_prop_nvlist_add_string(nv, ZFS_PROP_PREV_SNAP, buf);
+		}
+
 		dsl_dir_stats(ds->ds_dir, nv);
 	}
 
@@ -1918,6 +1922,8 @@ dsl_dataset_rename_snapshot_sync_impl(dsl_pool_t *dp,
 	VERIFY0(zap_add(dp->dp_meta_objset,
 	    dsl_dataset_phys(hds)->ds_snapnames_zapobj,
 	    ds->ds_snapname, 8, 1, &ds->ds_object, tx));
+	zvol_rename_minors(dp->dp_spa, ddrsa->ddrsa_oldsnapname,
+	    ddrsa->ddrsa_newsnapname, B_TRUE);
 
 	dsl_dataset_rele(ds, FTAG);
 	return (0);
@@ -1946,11 +1952,6 @@ int
 dsl_dataset_rename_snapshot(const char *fsname,
     const char *oldsnapname, const char *newsnapname, boolean_t recursive)
 {
-#ifdef _KERNEL
-	char *oldname, *newname;
-#endif
-	int error;
-
 	dsl_dataset_rename_snapshot_arg_t ddrsa;
 
 	ddrsa.ddrsa_fsname = fsname;
@@ -1958,22 +1959,9 @@ dsl_dataset_rename_snapshot(const char *fsname,
 	ddrsa.ddrsa_newsnapname = newsnapname;
 	ddrsa.ddrsa_recursive = recursive;
 
-	error = dsl_sync_task(fsname, dsl_dataset_rename_snapshot_check,
+	return (dsl_sync_task(fsname, dsl_dataset_rename_snapshot_check,
 	    dsl_dataset_rename_snapshot_sync, &ddrsa,
-	    1, ZFS_SPACE_CHECK_RESERVED);
-
-	if (error)
-	    return (SET_ERROR(error));
-
-#ifdef _KERNEL
-	oldname = kmem_asprintf("%s@%s", fsname, oldsnapname);
-	newname = kmem_asprintf("%s@%s", fsname, newsnapname);
-	zvol_rename_minors(oldname, newname);
-	strfree(newname);
-	strfree(oldname);
-#endif
-
-	return (0);
+	    1, ZFS_SPACE_CHECK_RESERVED));
 }
 
 /*

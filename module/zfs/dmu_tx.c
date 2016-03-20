@@ -332,7 +332,8 @@ dmu_tx_count_write(dmu_tx_hold_t *txh, uint64_t off, uint64_t len)
 			dmu_buf_impl_t *db;
 
 			rw_enter(&dn->dn_struct_rwlock, RW_READER);
-			err = dbuf_hold_impl(dn, 0, start, FALSE, FTAG, &db);
+			err = dbuf_hold_impl(dn, 0, start,
+			    FALSE, FALSE, FTAG, &db);
 			rw_exit(&dn->dn_struct_rwlock);
 
 			if (err) {
@@ -533,7 +534,8 @@ dmu_tx_count_free(dmu_tx_hold_t *txh, uint64_t off, uint64_t len)
 		blkoff = P2PHASE(blkid, epb);
 		tochk = MIN(epb - blkoff, nblks);
 
-		err = dbuf_hold_impl(dn, 1, blkid >> epbs, FALSE, FTAG, &dbuf);
+		err = dbuf_hold_impl(dn, 1, blkid >> epbs,
+		    FALSE, FALSE, FTAG, &dbuf);
 		if (err) {
 			txh->txh_tx->tx_err = err;
 			break;
@@ -606,6 +608,32 @@ dmu_tx_count_free(dmu_tx_hold_t *txh, uint64_t off, uint64_t len)
 	}
 	txh->txh_space_tofree += space;
 	txh->txh_space_tounref += unref;
+}
+
+/*
+ * This function marks the transaction as being a "net free".  The end
+ * result is that refquotas will be disabled for this transaction, and
+ * this transaction will be able to use half of the pool space overhead
+ * (see dsl_pool_adjustedsize()).  Therefore this function should only
+ * be called for transactions that we expect will not cause a net increase
+ * in the amount of space used (but it's OK if that is occasionally not true).
+ */
+void
+dmu_tx_mark_netfree(dmu_tx_t *tx)
+{
+	dmu_tx_hold_t *txh;
+
+	txh = dmu_tx_hold_object_impl(tx, tx->tx_objset,
+	    DMU_NEW_OBJECT, THT_FREE, 0, 0);
+
+	/*
+	 * Pretend that this operation will free 1GB of space.  This
+	 * should be large enough to cancel out the largest write.
+	 * We don't want to use something like UINT64_MAX, because that would
+	 * cause overflows when doing math with these values (e.g. in
+	 * dmu_tx_try_assign()).
+	 */
+	txh->txh_space_tofree = txh->txh_space_tounref = 1024 * 1024 * 1024;
 }
 
 void

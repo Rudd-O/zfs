@@ -24,6 +24,7 @@
  * Copyright (c) 2013 Martin Matuska. All rights reserved.
  * Copyright (c) 2014 Joyent, Inc. All rights reserved.
  * Copyright (c) 2014 Spectra Logic Corporation, All rights reserved.
+ * Copyright (c) 2016 Actifio, Inc. All rights reserved.
  */
 
 #include <sys/dmu.h>
@@ -147,11 +148,7 @@ dsl_dir_evict(void *dbu)
 
 	spa_async_close(dd->dd_pool->dp_spa, dd);
 
-	/*
-	 * The props callback list should have been cleaned up by
-	 * objset_evict().
-	 */
-	list_destroy(&dd->dd_prop_cbs);
+	dsl_prop_fini(dd);
 	mutex_destroy(&dd->dd_lock);
 	kmem_free(dd, sizeof (dsl_dir_t));
 }
@@ -186,9 +183,7 @@ dsl_dir_hold_obj(dsl_pool_t *dp, uint64_t ddobj,
 		dd->dd_dbuf = dbuf;
 		dd->dd_pool = dp;
 		mutex_init(&dd->dd_lock, NULL, MUTEX_DEFAULT, NULL);
-
-		list_create(&dd->dd_prop_cbs, sizeof (dsl_prop_cb_record_t),
-		    offsetof(dsl_prop_cb_record_t, cbr_node));
+		dsl_prop_init(dd);
 
 		dsl_dir_snap_cmtime_update(dd);
 
@@ -246,6 +241,7 @@ dsl_dir_hold_obj(dsl_pool_t *dp, uint64_t ddobj,
 		if (winner != NULL) {
 			if (dd->dd_parent)
 				dsl_dir_rele(dd->dd_parent, dd);
+			dsl_prop_fini(dd);
 			mutex_destroy(&dd->dd_lock);
 			kmem_free(dd, sizeof (dsl_dir_t));
 			dd = winner;
@@ -273,6 +269,7 @@ dsl_dir_hold_obj(dsl_pool_t *dp, uint64_t ddobj,
 errout:
 	if (dd->dd_parent)
 		dsl_dir_rele(dd->dd_parent, dd);
+	dsl_prop_fini(dd);
 	mutex_destroy(&dd->dd_lock);
 	kmem_free(dd, sizeof (dsl_dir_t));
 	dmu_buf_rele(dbuf, tag);
@@ -1913,9 +1910,8 @@ dsl_dir_rename_sync(void *arg, dmu_tx_t *tx)
 	VERIFY0(zap_add(mos, dsl_dir_phys(newparent)->dd_child_dir_zapobj,
 	    dd->dd_myname, 8, 1, &dd->dd_object, tx));
 
-#ifdef _KERNEL
-	zvol_rename_minors(ddra->ddra_oldname, ddra->ddra_newname);
-#endif
+	zvol_rename_minors(dp->dp_spa, ddra->ddra_oldname,
+	    ddra->ddra_newname, B_TRUE);
 
 	dsl_prop_notify_all(dd);
 
