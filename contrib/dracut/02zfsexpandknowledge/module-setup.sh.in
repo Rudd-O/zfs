@@ -58,6 +58,12 @@ find_zfs_block_devices() {
     done < /proc/self/mountinfo
 }
 
+array_contains () {
+  local e
+  for e in "${@:2}"; do [[ "$e" == "$1" ]] && return 0; done
+  return 1
+}
+
 check() {
     local mp
     local dev
@@ -93,7 +99,7 @@ if [[ $hostonly ]]; then
         dinfo "zfsexpandknowledge: block devices backing ZFS dataset $mp: $blockdevs"
         for dev in $blockdevs
         do
-            push host_devs "$dev"
+            array_contains "$dev" "${host_devs[@]}" || host_devs+=("$dev")
             fstype=$(get_devtype "$dev")
             host_fs_types["$dev"]="$fstype"
             majmin=$(get_maj_min "$dev")
@@ -105,11 +111,15 @@ if [[ $hostonly ]]; then
                     _slavedevtype=$(get_devtype "$_slavedevname")
                     _slavemajmin=$(get_maj_min "$_slavedevname")
                     dinfo "zfsexpandknowledge: slave block device backing ZFS dataset $mp: $_slavedevname"
-                    push host_devs "$_slavedevname"
+                    array_contains "$_slavedevname" "${host_devs[@]}" || host_devs+=("$_slavedevname")
                     host_fs_types["$_slavedevname"]="$_slavedevtype"
                 done
             fi
         done
+    done
+    for a in "${host_devs[@]}"
+        do
+        dinfo "zfsexpandknowledge: host device $a"
     done
     for a in "${!host_fs_types[@]}"
         do
