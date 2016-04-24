@@ -165,7 +165,7 @@ OPTIONS:
 	-k          Disable cleanup after test failure
 	-f          Use files only, disables block device tests
 	-d DIR      Use DIR for files and loopback devices
-	-s SIZE     Use vdevs of SIZE (default: 4G)
+	-s SIZE     Use vdevs of SIZE (default: 2G)
 	-r RUNFILE  Run tests in RUNFILE (default: linux.run)
 
 EXAMPLES:
@@ -177,7 +177,7 @@ $0 -r linux-fast
 
 # Cleanup a previous run of the test suite prior to testing, run the
 # default (linux) suite of tests and perform no cleanup on exit.
-$0 -c
+$0 -x
 
 EOF
 }
@@ -248,6 +248,13 @@ fi
 
 if [ $(sudo whoami) != "root" ]; then
 	fail "Passwordless sudo access required."
+fi
+
+#
+# Check if ksh exists
+#
+if [ -z "$(which ksh 2>/dev/null)" ]; then
+	fail "This test suite requires ksh."
 fi
 
 #

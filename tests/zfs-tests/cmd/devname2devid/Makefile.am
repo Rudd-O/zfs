@@ -1,7 +1,9 @@
 include $(top_srcdir)/config/Rules.am
 
-pkgdatadir = $(datadir)/@PACKAGE@/zfs-tests/bin
+pkgexecdir = $(datadir)/@PACKAGE@/zfs-tests/bin
 
-# DISABLED: Not supported under Linux
-# pkgdata_PROGRAMS = devname2devid
-# devname2devid_SOURCES = devname2devid.c
+if WANT_DEVNAME2DEVID
+pkgexec_PROGRAMS = devname2devid
+devname2devid_SOURCES = devname2devid.c
+devname2devid_LDADD = -ludev
+endif

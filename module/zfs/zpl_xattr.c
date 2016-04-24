@@ -465,7 +465,7 @@ zpl_xattr_set_dir(struct inode *ip, const char *name, const void *value,
 	/* Remove a specific name xattr when value is set to NULL. */
 	if (value == NULL) {
 		if (xip)
-			error = -zfs_remove(dxip, (char *)name, cr);
+			error = -zfs_remove(dxip, (char *)name, cr, 0);
 
 		goto out;
 	}
@@ -969,7 +969,7 @@ zpl_set_acl(struct inode *ip, int type, struct posix_acl *acl)
 		break;
 
 	case ACL_TYPE_DEFAULT:
-		name = XATTR_NAME_POSIX_ACL_ACCESS;
+		name = XATTR_NAME_POSIX_ACL_DEFAULT;
 		if (!S_ISDIR(ip->i_mode))
 			return (acl ? -EACCES : 0);
 		break;
