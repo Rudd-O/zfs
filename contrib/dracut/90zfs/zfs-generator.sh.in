@@ -23,6 +23,10 @@ else
     rootflags=zfsutil
 fi
 
+if [ "${root}" = "zfs:AUTO" ] ; then
+  exit 0
+fi
+
 root="${root##zfs:}"
 root="${root##ZFS=}"
 
