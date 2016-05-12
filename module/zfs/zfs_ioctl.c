@@ -26,7 +26,7 @@
  * Copyright (c) 2012, Joyent, Inc. All rights reserved.
  * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2014, Joyent, Inc. All rights reserved.
- * Copyright (c) 2011, 2014 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2015 by Delphix. All rights reserved.
  * Copyright (c) 2013 by Saso Kiselkov. All rights reserved.
  * Copyright (c) 2013 Steven Hartland. All rights reserved.
  * Copyright (c) 2016 Actifio, Inc. All rights reserved.
@@ -1536,9 +1536,7 @@ zfs_ioc_pool_import(zfs_cmd_t *zc)
 	}
 
 	nvlist_free(config);
-
-	if (props)
-		nvlist_free(props);
+	nvlist_free(props);
 
 	return (error);
 }
@@ -3768,7 +3766,7 @@ zfs_check_settable(const char *dsname, nvpair_t *pair, cred_t *cr)
 			 */
 			if (zfs_is_bootfs(dsname) &&
 			    intval > SPA_OLD_MAXBLOCKSIZE) {
-				return (SET_ERROR(EDOM));
+				return (SET_ERROR(ERANGE));
 			}
 
 			/*
@@ -3777,7 +3775,7 @@ zfs_check_settable(const char *dsname, nvpair_t *pair, cred_t *cr)
 			 */
 			if (intval > zfs_max_recordsize ||
 			    intval > SPA_MAXBLOCKSIZE)
-				return (SET_ERROR(EDOM));
+				return (SET_ERROR(ERANGE));
 
 			if ((err = spa_open(dsname, &spa, FTAG)) != 0)
 				return (err);
@@ -5831,8 +5829,11 @@ zfsdev_ioctl(struct file *filp, unsigned cmd, unsigned long arg)
 	}
 
 
-	if (error == 0 && !(flag & FKIOCTL))
+	if (error == 0 && !(flag & FKIOCTL)) {
+		cookie = spl_fstrans_mark();
 		error = vec->zvec_secpolicy(zc, innvl, CRED());
+		spl_fstrans_unmark(cookie);
+	}
 
 	if (error != 0)
 		goto out;

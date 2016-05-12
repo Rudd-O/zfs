@@ -51,13 +51,14 @@ else
 fi
 
 set -A args "" "-?" "-f" "nonexistpool" "$TESTPOOL/$TESTFS" \
-	"$testpool 1.23" "$testpool 0" "$testpool -1" "$testpool 1 0" \
-	"$testpool 0 0"
+	"$testpool 0" "$testpool -1" "$testpool 1 0" \
+	"$testpool 0 0" "$testpool -wl" "$testpool -wq"
 
 log_assert "Executing 'zpool iostat' with bad options fails"
 
 typeset -i i=1
 while [[ $i -lt ${#args[*]} ]]; do
+	log_assert "doing $ZPOOL iostat ${args[i]}"
 	log_mustnot $ZPOOL iostat ${args[i]}
 	((i = i + 1))
 done

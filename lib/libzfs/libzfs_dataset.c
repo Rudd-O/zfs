@@ -2079,8 +2079,7 @@ get_numeric_property(zfs_handle_t *zhp, zfs_prop_t prop, zprop_source_t *src,
 			zcmd_free_nvlists(&zc);
 			return (-1);
 		}
-		if (zplprops)
-			nvlist_free(zplprops);
+		nvlist_free(zplprops);
 		zcmd_free_nvlists(&zc);
 		break;
 
@@ -2373,8 +2372,8 @@ zfs_prop_get(zfs_handle_t *zhp, zfs_prop_t prop, char *propbuf, size_t proplen,
 			}
 
 			if ((zpool_get_prop(zhp->zpool_hdl,
-			    ZPOOL_PROP_ALTROOT, buf, MAXPATHLEN, NULL)) ||
-			    (strcmp(root, "-") == 0))
+			    ZPOOL_PROP_ALTROOT, buf, MAXPATHLEN, NULL,
+			    B_FALSE)) || (strcmp(root, "-") == 0))
 				root[0] = '\0';
 			/*
 			 * Special case an alternate root of '/'. This will
@@ -3448,13 +3447,15 @@ int
 zfs_destroy_snaps_nvl(libzfs_handle_t *hdl, nvlist_t *snaps, boolean_t defer)
 {
 	int ret;
-	nvlist_t *errlist;
+	nvlist_t *errlist = NULL;
 	nvpair_t *pair;
 
 	ret = lzc_destroy_snaps(snaps, defer, &errlist);
 
-	if (ret == 0)
+	if (ret == 0) {
+		nvlist_free(errlist);
 		return (0);
+	}
 
 	if (nvlist_empty(errlist)) {
 		char errbuf[1024];
@@ -3482,6 +3483,7 @@ zfs_destroy_snaps_nvl(libzfs_handle_t *hdl, nvlist_t *snaps, boolean_t defer)
 		}
 	}
 
+	nvlist_free(errlist);
 	return (ret);
 }
 
@@ -4269,8 +4271,7 @@ zfs_smb_acl_mgmt(libzfs_handle_t *hdl, char *dataset, char *path,
 		return (-1);
 	}
 	error = ioctl(hdl->libzfs_fd, ZFS_IOC_SMB_ACL, &zc);
-	if (nvlist)
-		nvlist_free(nvlist);
+	nvlist_free(nvlist);
 	return (error);
 }
 

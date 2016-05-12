@@ -365,6 +365,8 @@ extern void cv_broadcast(kcondvar_t *cv);
 #define	cv_timedwait_sig(cv, mp, at)		cv_timedwait(cv, mp, at)
 #define	cv_wait_sig(cv, mp)			cv_wait(cv, mp)
 #define	cv_wait_io(cv, mp)			cv_wait(cv, mp)
+#define	cv_timedwait_sig_hires(cv, mp, t, r, f) \
+	cv_timedwait_hires(cv, mp, t, r, f)
 
 /*
  * Thread-specific data
@@ -647,6 +649,7 @@ extern void delay(clock_t ticks);
 extern uint64_t physmem;
 
 extern int highbit64(uint64_t i);
+extern int lowbit64(uint64_t i);
 extern int random_get_bytes(uint8_t *ptr, size_t len);
 extern int random_get_pseudo_bytes(uint8_t *ptr, size_t len);
 
