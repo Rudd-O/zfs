@@ -5,3 +5,6 @@ dist_pkgdata_SCRIPTS = \
 	libtest.shlib \
 	math.shlib \
 	properties.shlib
+
+EXTRA_DIST = \
+	zfs_commands.cfg
