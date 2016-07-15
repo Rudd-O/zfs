@@ -40,6 +40,7 @@
 #include <sys/utsname.h>
 #include <sys/time.h>
 #include <sys/systeminfo.h>
+#include <zfs_fletcher.h>
 
 /*
  * Emulation of kernel services in userland.
@@ -1236,12 +1237,15 @@ kernel_init(int mode)
 
 	spa_init(mode);
 
+	fletcher_4_init();
+
 	tsd_create(&rrw_tsd_key, rrw_tsd_destroy);
 }
 
 void
 kernel_fini(void)
 {
+	fletcher_4_fini();
 	spa_fini();
 
 	system_taskq_fini();
@@ -1298,6 +1302,12 @@ zfs_secpolicy_rename_perms(const char *from, const char *to, cred_t *cr)
 
 int
 zfs_secpolicy_destroy_perms(const char *name, cred_t *cr)
+{
+	return (0);
+}
+
+int
+secpolicy_zfs(const cred_t *cr)
 {
 	return (0);
 }
@@ -1397,6 +1407,8 @@ spl_fstrans_check(void)
 {
 	return (0);
 }
+
+void *zvol_tag = "zvol_tag";
 
 void
 zvol_create_minors(spa_t *spa, const char *name, boolean_t async)

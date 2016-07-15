@@ -48,7 +48,6 @@
 #include <sys/zio_compress.h>
 #include <sys/zfeature.h>
 #include <sys/dmu_tx.h>
-#undef ZFS_MAXNAMELEN
 #include <libzfs.h>
 
 extern boolean_t zfeature_checks_disable;
@@ -464,7 +463,7 @@ zhack_do_feature_ref(int argc, char **argv)
 	if (decr) {
 		uint64_t count;
 		if (feature_get_refcount_from_disk(spa, &feature,
-		    &count) == 0 && count != 0) {
+		    &count) == 0 && count == 0) {
 			fatal(spa, FTAG, "feature refcount already 0: %s",
 			    feature.fi_guid);
 		}

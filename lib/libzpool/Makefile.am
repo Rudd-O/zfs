@@ -22,6 +22,7 @@ KERNEL_C = \
 	zfs_comutil.c \
 	zfs_deleg.c \
 	zfs_fletcher.c \
+	zfs_fletcher_intel.c \
 	zfs_namecheck.c \
 	zfs_prop.c \
 	zfs_uio.c \
@@ -91,6 +92,11 @@ KERNEL_C = \
 	vdev_missing.c \
 	vdev_queue.c \
 	vdev_raidz.c \
+	vdev_raidz_math.c \
+	vdev_raidz_math_scalar.c \
+	vdev_raidz_math_sse2.c \
+	vdev_raidz_math_ssse3.c \
+	vdev_raidz_math_avx2.c \
 	vdev_root.c \
 	zap.c \
 	zap_leaf.c \
@@ -103,6 +109,7 @@ KERNEL_C = \
 	zfs_fuid.c \
 	zfs_sa.c \
 	zfs_znode.c \
+	zfs_rlock.c \
 	zil.c \
 	zio.c \
 	zio_checksum.c \
