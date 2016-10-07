@@ -41,6 +41,7 @@
 #include <sys/time.h>
 #include <sys/systeminfo.h>
 #include <zfs_fletcher.h>
+#include <sys/crypto/icp.h>
 
 /*
  * Emulation of kernel services in userland.
@@ -508,7 +509,7 @@ cv_timedwait(kcondvar_t *cv, kmutex_t *mp, clock_t abstime)
 	VERIFY(gettimeofday(&tv, NULL) == 0);
 
 	ts.tv_sec = tv.tv_sec + delta / hz;
-	ts.tv_nsec = tv.tv_usec * 1000 + (delta % hz) * (NANOSEC / hz);
+	ts.tv_nsec = tv.tv_usec * NSEC_PER_USEC + (delta % hz) * (NANOSEC / hz);
 	if (ts.tv_nsec >= NANOSEC) {
 		ts.tv_sec++;
 		ts.tv_nsec -= NANOSEC;
@@ -533,6 +534,7 @@ cv_timedwait_hires(kcondvar_t *cv, kmutex_t *mp, hrtime_t tim, hrtime_t res,
     int flag)
 {
 	int error;
+	struct timeval tv;
 	timestruc_t ts;
 	hrtime_t delta;
 
@@ -545,11 +547,17 @@ cv_timedwait_hires(kcondvar_t *cv, kmutex_t *mp, hrtime_t tim, hrtime_t res,
 	if (delta <= 0)
 		return (-1);
 
-	ts.tv_sec = delta / NANOSEC;
-	ts.tv_nsec = delta % NANOSEC;
+	VERIFY(gettimeofday(&tv, NULL) == 0);
+
+	ts.tv_sec = tv.tv_sec + delta / NANOSEC;
+	ts.tv_nsec = tv.tv_usec * NSEC_PER_USEC + (delta % NANOSEC);
+	if (ts.tv_nsec >= NANOSEC) {
+		ts.tv_sec++;
+		ts.tv_nsec -= NANOSEC;
+	}
 
 	ASSERT(mutex_owner(mp) == curthread);
-	mp->m_owner = NULL;
+	mp->m_owner = MTX_INIT;
 	error = pthread_cond_timedwait(&cv->cv, &mp->m_lock, &ts);
 	mp->m_owner = curthread;
 
@@ -591,8 +599,8 @@ cv_broadcast(kcondvar_t *cv)
 int
 vn_open(char *path, int x1, int flags, int mode, vnode_t **vpp, int x2, int x3)
 {
-	int fd;
-	int dump_fd;
+	int fd = -1;
+	int dump_fd = -1;
 	vnode_t *vp;
 	int old_umask = 0;
 	char *realpath;
@@ -660,7 +668,11 @@ vn_open(char *path, int x1, int flags, int mode, vnode_t **vpp, int x2, int x3)
 	 * FREAD and FWRITE to the corresponding O_RDONLY, O_WRONLY, and O_RDWR.
 	 */
 	fd = open64(realpath, flags - FREAD, mode);
-	err = errno;
+	if (fd == -1) {
+		err = errno;
+		free(realpath);
+		return (err);
+	}
 
 	if (flags & FCREAT)
 		(void) umask(old_umask);
@@ -683,12 +695,11 @@ vn_open(char *path, int x1, int flags, int mode, vnode_t **vpp, int x2, int x3)
 
 	free(realpath);
 
-	if (fd == -1)
-		return (err);
-
 	if (fstat64_blk(fd, &st) == -1) {
 		err = errno;
 		close(fd);
+		if (dump_fd != -1)
+			close(dump_fd);
 		return (err);
 	}
 
@@ -732,7 +743,7 @@ vn_rdwr(int uio, vnode_t *vp, void *addr, ssize_t len, offset_t offset,
 
 	if (uio == UIO_READ) {
 		rc = pread64(vp->v_fd, addr, len, offset);
-		if (vp->v_dump_fd != -1) {
+		if (vp->v_dump_fd != -1 && rc != -1) {
 			int status;
 			status = pwrite64(vp->v_dump_fd, addr, rc, offset);
 			ASSERT(status != -1);
@@ -995,7 +1006,7 @@ kobj_open_file(char *name)
 int
 kobj_read_file(struct _buf *file, char *buf, unsigned size, unsigned off)
 {
-	ssize_t resid;
+	ssize_t resid = 0;
 
 	if (vn_rdwr(UIO_READ, (vnode_t *)file->_fd, buf, size, (offset_t)off,
 	    UIO_SYSSPACE, 0, 0, 0, &resid) != 0)
@@ -1113,8 +1124,95 @@ lowbit64(uint64_t i)
 	return (h);
 }
 
+/*
+ * Find highest one bit set.
+ * Returns bit number + 1 of highest bit that is set, otherwise returns 0.
+ * High order bit is 31 (or 63 in _LP64 kernel).
+ */
+int
+highbit(ulong_t i)
+{
+register int h = 1;
+
+	if (i == 0)
+		return (0);
+#ifdef _LP64
+	if (i & 0xffffffff00000000ul) {
+		h += 32; i >>= 32;
+	}
+#endif
+	if (i & 0xffff0000) {
+		h += 16; i >>= 16;
+	}
+	if (i & 0xff00) {
+		h += 8; i >>= 8;
+	}
+	if (i & 0xf0) {
+		h += 4; i >>= 4;
+	}
+	if (i & 0xc) {
+		h += 2; i >>= 2;
+	}
+	if (i & 0x2) {
+		h += 1;
+	}
+	return (h);
+}
+
+/*
+ * Find lowest one bit set.
+ *     Returns bit number + 1 of lowest bit that is set, otherwise returns 0.
+ * Low order bit is 0.
+ */
+int
+lowbit(ulong_t i)
+{
+	register int h = 1;
+
+	if (i == 0)
+		return (0);
+
+#ifdef _LP64
+	if (!(i & 0xffffffff)) {
+		h += 32; i >>= 32;
+	}
+#endif
+	if (!(i & 0xffff)) {
+		h += 16; i >>= 16;
+	}
+	if (!(i & 0xff)) {
+		h += 8; i >>= 8;
+	}
+	if (!(i & 0xf)) {
+		h += 4; i >>= 4;
+	}
+	if (!(i & 0x3)) {
+		h += 2; i >>= 2;
+	}
+	if (!(i & 0x1)) {
+		h += 1;
+	}
+	return (h);
+}
 
 static int random_fd = -1, urandom_fd = -1;
+
+void
+random_init(void)
+{
+	VERIFY((random_fd = open("/dev/random", O_RDONLY)) != -1);
+	VERIFY((urandom_fd = open("/dev/urandom", O_RDONLY)) != -1);
+}
+
+void
+random_fini(void)
+{
+	close(random_fd);
+	close(urandom_fd);
+
+	random_fd = -1;
+	urandom_fd = -1;
+}
 
 static int
 random_get_bytes_common(uint8_t *ptr, size_t len, int fd)
@@ -1228,12 +1326,13 @@ kernel_init(int mode)
 	(void) snprintf(hw_serial, sizeof (hw_serial), "%ld",
 	    (mode & FWRITE) ? get_system_hostid() : 0);
 
-	VERIFY((random_fd = open("/dev/random", O_RDONLY)) != -1);
-	VERIFY((urandom_fd = open("/dev/urandom", O_RDONLY)) != -1);
+	random_init();
+
 	VERIFY0(uname(&hw_utsname));
 
 	thread_init();
 	system_taskq_init();
+	icp_init();
 
 	spa_init(mode);
 
@@ -1248,14 +1347,11 @@ kernel_fini(void)
 	fletcher_4_fini();
 	spa_fini();
 
+	icp_fini();
 	system_taskq_fini();
 	thread_fini();
 
-	close(random_fd);
-	close(urandom_fd);
-
-	random_fd = -1;
-	urandom_fd = -1;
+	random_fini();
 }
 
 uid_t

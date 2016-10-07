@@ -347,8 +347,8 @@ zfs_add_option(zfs_handle_t *zhp, char *options, int len,
 		return (0);
 
 	/*
-	 * zfs_prop_get_int() to not used to ensure our mount options
-	 * are not influenced by the current /etc/mtab contents.
+	 * zfs_prop_get_int() is not used to ensure our mount options
+	 * are not influenced by the current /proc/self/mounts contents.
 	 */
 	value = getprop_uint64(zhp, prop, &source);
 
@@ -564,8 +564,10 @@ zfs_unmount(zfs_handle_t *zhp, const char *mountpoint, int flags)
 		/*
 		 * Unshare and unmount the filesystem
 		 */
-		if (zfs_unshare_proto(zhp, mntpt, share_all_proto) != 0)
+		if (zfs_unshare_proto(zhp, mntpt, share_all_proto) != 0) {
+			free(mntpt);
 			return (-1);
+		}
 
 		if (unmount_one(hdl, mntpt, flags) != 0) {
 			free(mntpt);
@@ -904,7 +906,7 @@ zfs_unshare_proto(zfs_handle_t *zhp, const char *mountpoint,
 
 	/* check to see if need to unmount the filesystem */
 	if (mountpoint != NULL)
-		mountpoint = mntpt = zfs_strdup(hdl, mountpoint);
+		mntpt = zfs_strdup(hdl, mountpoint);
 
 	if (mountpoint != NULL || ((zfs_get_type(zhp) == ZFS_TYPE_FILESYSTEM) &&
 	    libzfs_mnttab_find(hdl, zfs_get_name(zhp), &entry) == 0)) {
@@ -918,7 +920,7 @@ zfs_unshare_proto(zfs_handle_t *zhp, const char *mountpoint,
 
 			if (is_shared(hdl, mntpt, *curr_proto) &&
 			    unshare_one(hdl, zhp->zfs_name,
-					mntpt, *curr_proto) != 0) {
+			    mntpt, *curr_proto) != 0) {
 				if (mntpt != NULL)
 					free(mntpt);
 				return (-1);
@@ -1094,7 +1096,7 @@ libzfs_dataset_cmp(const void *a, const void *b)
 	if (gotb)
 		return (1);
 
-	return (strcmp(zfs_get_name(a), zfs_get_name(b)));
+	return (strcmp(zfs_get_name(*za), zfs_get_name(*zb)));
 }
 
 /*
@@ -1182,8 +1184,8 @@ mountpoint_compare(const void *a, const void *b)
  * Unshare and unmount all datasets within the given pool.  We don't want to
  * rely on traversing the DSL to discover the filesystems within the pool,
  * because this may be expensive (if not all of them are mounted), and can fail
- * arbitrarily (on I/O error, for example).  Instead, we walk /etc/mtab and
- * gather all the filesystems that are currently mounted.
+ * arbitrarily (on I/O error, for example).  Instead, we walk /proc/self/mounts
+ * and gather all the filesystems that are currently mounted.
  */
 int
 zpool_disable_datasets(zpool_handle_t *zhp, boolean_t force)

@@ -458,8 +458,8 @@ vdev_raidz_map_alloc(zio_t *zio, uint64_t unit_shift, uint64_t dcols,
 	zio->io_vsd = rm;
 	zio->io_vsd_ops = &vdev_raidz_vsd_ops;
 
-	/* RAIDZ ops init */
-	vdev_raidz_math_get_ops(rm);
+	/* init RAIDZ parity ops */
+	rm->rm_ops = vdev_raidz_math_get_ops();
 
 	return (rm);
 }
@@ -611,10 +611,9 @@ vdev_raidz_generate_parity_pqr(raidz_map_t *rm)
 void
 vdev_raidz_generate_parity(raidz_map_t *rm)
 {
-	if (rm->rm_ops) {
-		vdev_raidz_math_generate(rm);
+	/* Generate using the new math implementation */
+	if (vdev_raidz_math_generate(rm) != RAIDZ_ORIGINAL_IMPL)
 		return;
-	}
 
 	switch (rm->rm_firstdatacol) {
 	case 1:
@@ -1104,8 +1103,8 @@ vdev_raidz_matrix_reconstruct(raidz_map_t *rm, int n, int nmissing,
 	int i, j, x, cc, c;
 	uint8_t *src;
 	uint64_t ccount;
-	uint8_t *dst[VDEV_RAIDZ_MAXPARITY];
-	uint64_t dcount[VDEV_RAIDZ_MAXPARITY];
+	uint8_t *dst[VDEV_RAIDZ_MAXPARITY] = { NULL };
+	uint64_t dcount[VDEV_RAIDZ_MAXPARITY] = { 0 };
 	uint8_t log = 0;
 	uint8_t val;
 	int ll;
@@ -1284,7 +1283,7 @@ vdev_raidz_reconstruct(raidz_map_t *rm, const int *t, int nt)
 {
 	int tgts[VDEV_RAIDZ_MAXPARITY], *dt;
 	int ntgts;
-	int i, c;
+	int i, c, ret;
 	int code;
 	int nbadparity, nbaddata;
 	int parity_valid[VDEV_RAIDZ_MAXPARITY];
@@ -1322,14 +1321,11 @@ vdev_raidz_reconstruct(raidz_map_t *rm, const int *t, int nt)
 
 	dt = &tgts[nbadparity];
 
-	/*
-	 * Reconstruct using the new math implementation if
-	 * rm_ops is set.
-	 */
-	if (rm->rm_ops) {
-		return (vdev_raidz_math_reconstruct(rm, parity_valid, dt,
-		    nbaddata));
-	}
+
+	/* Reconstruct using the new math implementation */
+	ret = vdev_raidz_math_reconstruct(rm, parity_valid, dt, nbaddata);
+	if (ret != RAIDZ_ORIGINAL_IMPL)
+		return (ret);
 
 	/*
 	 * See if we can use any of our optimized reconstruction routines.
@@ -1607,6 +1603,13 @@ raidz_parity_verify(zio_t *zio, raidz_map_t *rm)
 	void *orig[VDEV_RAIDZ_MAXPARITY];
 	int c, ret = 0;
 	raidz_col_t *rc;
+
+	blkptr_t *bp = zio->io_bp;
+	enum zio_checksum checksum = (bp == NULL ? zio->io_prop.zp_checksum :
+	    (BP_IS_GANG(bp) ? ZIO_CHECKSUM_GANG_HEADER : BP_GET_CHECKSUM(bp)));
+
+	if (checksum == ZIO_CHECKSUM_NOPARITY)
+		return (ret);
 
 	for (c = 0; c < rm->rm_firstdatacol; c++) {
 		rc = &rm->rm_col[c];

@@ -23,6 +23,7 @@
  * Copyright (c) 2011, 2015 by Delphix. All rights reserved.
  * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2014 Spectra Logic Corporation, All rights reserved.
+ * Copyright 2013 Saso Kiselkov. All rights reserved.
  */
 
 #include <sys/zfs_context.h>
@@ -53,7 +54,7 @@
 #include <sys/ddt.h>
 #include <sys/kstat.h>
 #include "zfs_prop.h"
-#include "zfeature_common.h"
+#include <sys/zfeature.h>
 
 /*
  * SPA locking
@@ -558,6 +559,7 @@ spa_add(const char *name, nvlist_t *config, const char *altroot)
 	mutex_init(&spa->spa_history_lock, NULL, MUTEX_DEFAULT, NULL);
 	mutex_init(&spa->spa_proc_lock, NULL, MUTEX_DEFAULT, NULL);
 	mutex_init(&spa->spa_props_lock, NULL, MUTEX_DEFAULT, NULL);
+	mutex_init(&spa->spa_cksum_tmpls_lock, NULL, MUTEX_DEFAULT, NULL);
 	mutex_init(&spa->spa_scrub_lock, NULL, MUTEX_DEFAULT, NULL);
 	mutex_init(&spa->spa_suspend_lock, NULL, MUTEX_DEFAULT, NULL);
 	mutex_init(&spa->spa_vdev_top_lock, NULL, MUTEX_DEFAULT, NULL);
@@ -686,6 +688,8 @@ spa_remove(spa_t *spa)
 	for (t = 0; t < TXG_SIZE; t++)
 		bplist_destroy(&spa->spa_free_bplist[t]);
 
+	zio_checksum_templates_free(spa);
+
 	cv_destroy(&spa->spa_async_cv);
 	cv_destroy(&spa->spa_evicting_os_cv);
 	cv_destroy(&spa->spa_proc_cv);
@@ -699,6 +703,7 @@ spa_remove(spa_t *spa)
 	mutex_destroy(&spa->spa_history_lock);
 	mutex_destroy(&spa->spa_proc_lock);
 	mutex_destroy(&spa->spa_props_lock);
+	mutex_destroy(&spa->spa_cksum_tmpls_lock);
 	mutex_destroy(&spa->spa_scrub_lock);
 	mutex_destroy(&spa->spa_suspend_lock);
 	mutex_destroy(&spa->spa_vdev_top_lock);
@@ -797,18 +802,13 @@ typedef struct spa_aux {
 	int		aux_count;
 } spa_aux_t;
 
-static int
+static inline int
 spa_aux_compare(const void *a, const void *b)
 {
-	const spa_aux_t *sa = a;
-	const spa_aux_t *sb = b;
+	const spa_aux_t *sa = (const spa_aux_t *)a;
+	const spa_aux_t *sb = (const spa_aux_t *)b;
 
-	if (sa->aux_guid < sb->aux_guid)
-		return (-1);
-	else if (sa->aux_guid > sb->aux_guid)
-		return (1);
-	else
-		return (0);
+	return (AVL_CMP(sa->aux_guid, sb->aux_guid));
 }
 
 void
@@ -1774,11 +1774,8 @@ spa_name_compare(const void *a1, const void *a2)
 	int s;
 
 	s = strcmp(s1->spa_name, s2->spa_name);
-	if (s > 0)
-		return (1);
-	if (s < 0)
-		return (-1);
-	return (0);
+
+	return (AVL_ISIGN(s));
 }
 
 void

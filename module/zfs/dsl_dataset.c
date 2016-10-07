@@ -56,6 +56,7 @@
 #include <sys/dmu_send.h>
 #include <sys/zio_compress.h>
 #include <zfs_fletcher.h>
+#include <sys/zio_checksum.h>
 
 /*
  * The SPA supports block sizes up to 16MB.  However, very large blocks
@@ -108,6 +109,7 @@ dsl_dataset_block_born(dsl_dataset_t *ds, const blkptr_t *bp, dmu_tx_t *tx)
 {
 	int used, compressed, uncompressed;
 	int64_t delta;
+	spa_feature_t f;
 
 	used = bp_get_dsize_sync(tx->tx_pool->dp_spa, bp);
 	compressed = BP_GET_PSIZE(bp);
@@ -134,10 +136,16 @@ dsl_dataset_block_born(dsl_dataset_t *ds, const blkptr_t *bp, dmu_tx_t *tx)
 	dsl_dataset_phys(ds)->ds_compressed_bytes += compressed;
 	dsl_dataset_phys(ds)->ds_uncompressed_bytes += uncompressed;
 	dsl_dataset_phys(ds)->ds_unique_bytes += used;
+
 	if (BP_GET_LSIZE(bp) > SPA_OLD_MAXBLOCKSIZE) {
 		ds->ds_feature_activation_needed[SPA_FEATURE_LARGE_BLOCKS] =
 		    B_TRUE;
 	}
+
+	f = zio_checksum_to_feature(BP_GET_CHECKSUM(bp));
+	if (f != SPA_FEATURE_NONE)
+		ds->ds_feature_activation_needed[f] = B_TRUE;
+
 	mutex_exit(&ds->ds_lock);
 	dsl_dir_diduse_space(ds->ds_dir, DD_USED_HEAD, delta,
 	    compressed, uncompressed, tx);
@@ -1270,7 +1278,7 @@ dsl_dataset_snapshot_check(void *arg, dmu_tx_t *tx)
 	    pair != NULL; pair = nvlist_next_nvpair(ddsa->ddsa_snaps, pair)) {
 		int error = 0;
 		dsl_dataset_t *ds;
-		char *name, *atp;
+		char *name, *atp = NULL;
 		char dsname[ZFS_MAX_DATASET_NAME_LEN];
 
 		name = nvpair_name(pair);
@@ -1584,7 +1592,7 @@ dsl_dataset_snapshot_tmp_sync(void *arg, dmu_tx_t *tx)
 {
 	dsl_dataset_snapshot_tmp_arg_t *ddsta = arg;
 	dsl_pool_t *dp = dmu_tx_pool(tx);
-	dsl_dataset_t *ds;
+	dsl_dataset_t *ds = NULL;
 
 	VERIFY0(dsl_dataset_hold(dp, ddsta->ddsta_fsname, FTAG, &ds));
 
@@ -1760,8 +1768,16 @@ get_receive_resume_stats(dsl_dataset_t *ds, nvlist_t *nv)
 			fnvlist_add_string(token_nv, "toname", buf);
 		}
 		if (zap_contains(dp->dp_meta_objset, ds->ds_object,
+		    DS_FIELD_RESUME_LARGEBLOCK) == 0) {
+			fnvlist_add_boolean(token_nv, "largeblockok");
+		}
+		if (zap_contains(dp->dp_meta_objset, ds->ds_object,
 		    DS_FIELD_RESUME_EMBEDOK) == 0) {
 			fnvlist_add_boolean(token_nv, "embedok");
+		}
+		if (zap_contains(dp->dp_meta_objset, ds->ds_object,
+		    DS_FIELD_RESUME_COMPRESSOK) == 0) {
+			fnvlist_add_boolean(token_nv, "compressok");
 		}
 		packed = fnvlist_pack(token_nv, &packed_size);
 		fnvlist_free(token_nv);
@@ -1770,7 +1786,7 @@ get_receive_resume_stats(dsl_dataset_t *ds, nvlist_t *nv)
 		compressed_size = gzip_compress(packed, compressed,
 		    packed_size, packed_size, 6);
 
-		fletcher_4_native(compressed, compressed_size, &cksum);
+		fletcher_4_native_varsize(compressed, compressed_size, &cksum);
 
 		str = kmem_alloc(compressed_size * 2 + 1, KM_SLEEP);
 		for (i = 0; i < compressed_size; i++) {
@@ -2064,7 +2080,8 @@ dsl_dataset_rename_snapshot_sync_impl(dsl_pool_t *dp,
 	VERIFY0(dsl_dataset_snap_remove(hds, ddrsa->ddrsa_oldsnapname, tx,
 	    B_FALSE));
 	mutex_enter(&ds->ds_lock);
-	(void) strcpy(ds->ds_snapname, ddrsa->ddrsa_newsnapname);
+	(void) strlcpy(ds->ds_snapname, ddrsa->ddrsa_newsnapname,
+	    sizeof (ds->ds_snapname));
 	mutex_exit(&ds->ds_lock);
 	VERIFY0(zap_add(dp->dp_meta_objset,
 	    dsl_dataset_phys(hds)->ds_snapnames_zapobj,
@@ -2081,7 +2098,7 @@ dsl_dataset_rename_snapshot_sync(void *arg, dmu_tx_t *tx)
 {
 	dsl_dataset_rename_snapshot_arg_t *ddrsa = arg;
 	dsl_pool_t *dp = dmu_tx_pool(tx);
-	dsl_dataset_t *hds;
+	dsl_dataset_t *hds = NULL;
 
 	VERIFY0(dsl_dataset_hold(dp, ddrsa->ddrsa_fsname, FTAG, &hds));
 	ddrsa->ddrsa_tx = tx;
@@ -2345,6 +2362,10 @@ dsl_dataset_promote_check(void *arg, dmu_tx_t *tx)
 	}
 
 	snap = list_head(&ddpa->shared_snaps);
+	if (snap == NULL) {
+		err = SET_ERROR(ENOENT);
+		goto out;
+	}
 	origin_ds = snap->ds;
 
 	/* compute origin's new unique space */
@@ -2453,6 +2474,10 @@ dsl_dataset_promote_check(void *arg, dmu_tx_t *tx)
 		 * iterate over all bps.
 		 */
 		snap = list_head(&ddpa->origin_snaps);
+		if (snap == NULL) {
+			err = SET_ERROR(ENOENT);
+			goto out;
+		}
 		err = snaplist_space(&ddpa->shared_snaps,
 		    snap->ds->ds_dir->dd_origin_txg, &ddpa->cloneusedsnap);
 		if (err != 0)
@@ -2836,7 +2861,8 @@ dsl_dataset_clone_swap_check_impl(dsl_dataset_t *clone,
 	 * "slack" factor for received datasets with refquota set on them.
 	 * See the bottom of this function for details on its use.
 	 */
-	uint64_t refquota_slack = DMU_MAX_ACCESS * spa_asize_inflation;
+	uint64_t refquota_slack = (uint64_t)DMU_MAX_ACCESS *
+	    spa_asize_inflation;
 	int64_t unused_refres_delta;
 
 	/* they should both be heads */
@@ -3208,7 +3234,7 @@ dsl_dataset_set_refquota_sync(void *arg, dmu_tx_t *tx)
 {
 	dsl_dataset_set_qr_arg_t *ddsqra = arg;
 	dsl_pool_t *dp = dmu_tx_pool(tx);
-	dsl_dataset_t *ds;
+	dsl_dataset_t *ds = NULL;
 	uint64_t newval;
 
 	VERIFY0(dsl_dataset_hold(dp, ddsqra->ddsqra_name, FTAG, &ds));
@@ -3335,7 +3361,7 @@ dsl_dataset_set_refreservation_sync(void *arg, dmu_tx_t *tx)
 {
 	dsl_dataset_set_qr_arg_t *ddsqra = arg;
 	dsl_pool_t *dp = dmu_tx_pool(tx);
-	dsl_dataset_t *ds;
+	dsl_dataset_t *ds = NULL;
 
 	VERIFY0(dsl_dataset_hold(dp, ddsqra->ddsqra_name, FTAG, &ds));
 	dsl_dataset_set_refreservation_sync_impl(ds,

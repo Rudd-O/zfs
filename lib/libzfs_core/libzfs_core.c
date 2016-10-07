@@ -391,7 +391,7 @@ lzc_hold(nvlist_t *holds, int cleanup_fd, nvlist_t **errlist)
  *
  * The keys in the nvlist are snapshot names.
  * The snapshots must all be in the same pool.
- * The value is a nvlist whose keys are the holds to remove.
+ * The value is an nvlist whose keys are the holds to remove.
  *
  * Holds which failed to release because they didn't exist will have an entry
  * added to errlist, but will not cause an overall failure.
@@ -424,7 +424,7 @@ lzc_release(nvlist_t *holds, nvlist_t **errlist)
 /*
  * Retrieve list of user holds on the specified snapshot.
  *
- * On success, *holdsp will be set to a nvlist which the caller must free.
+ * On success, *holdsp will be set to an nvlist which the caller must free.
  * The keys are the names of the holds, and the value is the creation time
  * of the hold (uint64) in seconds since the epoch.
  */
@@ -484,6 +484,8 @@ lzc_send_resume(const char *snapname, const char *from, int fd,
 		fnvlist_add_string(args, "fromsnap", from);
 	if (flags & LZC_SEND_FLAG_LARGE_BLOCK)
 		fnvlist_add_boolean(args, "largeblockok");
+	if (flags & LZC_SEND_FLAG_COMPRESS)
+		fnvlist_add_boolean(args, "compressok");
 	if (flags & LZC_SEND_FLAG_EMBED_DATA)
 		fnvlist_add_boolean(args, "embedok");
 	if (resumeobj != 0 || resumeoff != 0) {
@@ -511,7 +513,8 @@ lzc_send_resume(const char *snapname, const char *from, int fd,
  * an equivalent snapshot.
  */
 int
-lzc_send_space(const char *snapname, const char *from, uint64_t *spacep)
+lzc_send_space(const char *snapname, const char *from,
+    enum lzc_send_flags flags, uint64_t *spacep)
 {
 	nvlist_t *args;
 	nvlist_t *result;
@@ -520,6 +523,12 @@ lzc_send_space(const char *snapname, const char *from, uint64_t *spacep)
 	args = fnvlist_alloc();
 	if (from != NULL)
 		fnvlist_add_string(args, "from", from);
+	if (flags & LZC_SEND_FLAG_LARGE_BLOCK)
+		fnvlist_add_boolean(args, "largeblockok");
+	if (flags & LZC_SEND_FLAG_EMBED_DATA)
+		fnvlist_add_boolean(args, "embedok");
+	if (flags & LZC_SEND_FLAG_COMPRESS)
+		fnvlist_add_boolean(args, "compressok");
 	err = lzc_ioctl(ZFS_IOC_SEND_SPACE, snapname, args, &result);
 	nvlist_free(args);
 	if (err == 0)

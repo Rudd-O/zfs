@@ -39,7 +39,7 @@ AC_CONFIG_MACRO_DIR([config])
 AC_CANONICAL_SYSTEM
 AM_MAINTAINER_MODE
 m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])
-AM_INIT_AUTOMAKE
+AM_INIT_AUTOMAKE([subdir-objects])
 AC_CONFIG_HEADERS([zfs_config.h], [
 	(mv zfs_config.h zfs_config.h.tmp &&
 	awk -f ${ac_srcdir}/config/config.awk zfs_config.h.tmp >zfs_config.h &&
@@ -49,6 +49,7 @@ AC_PROG_INSTALL
 AC_PROG_CC
 AC_PROG_LIBTOOL
 AM_PROG_AS
+AM_PROG_CC_C_O
 
 ZFS_AC_LICENSE
 ZFS_AC_PACKAGE
@@ -80,11 +81,11 @@ AC_CONFIG_FILES([
 	lib/libspl/include/ia32/sys/Makefile
 	lib/libspl/include/rpc/Makefile
 	lib/libspl/include/sys/Makefile
-	lib/libspl/include/sys/sysevent/Makefile
 	lib/libspl/include/sys/dktp/Makefile
 	lib/libspl/include/util/Makefile
 	lib/libavl/Makefile
 	lib/libefi/Makefile
+	lib/libicp/Makefile
 	lib/libnvpair/Makefile
 	lib/libunicode/Makefile
 	lib/libuutil/Makefile
@@ -125,12 +126,15 @@ AC_CONFIG_FILES([
 	module/zcommon/Makefile
 	module/zfs/Makefile
 	module/zpios/Makefile
+	module/icp/Makefile
 	include/Makefile
 	include/linux/Makefile
 	include/sys/Makefile
 	include/sys/fs/Makefile
 	include/sys/fm/Makefile
 	include/sys/fm/fs/Makefile
+	include/sys/crypto/Makefile
+	include/sys/sysevent/Makefile
 	scripts/Makefile
 	scripts/zpios-profile/Makefile
 	scripts/zpios-test/Makefile
@@ -175,6 +179,7 @@ AC_CONFIG_FILES([
 	tests/zfs-tests/tests/functional/cache/Makefile
 	tests/zfs-tests/tests/functional/cachefile/Makefile
 	tests/zfs-tests/tests/functional/casenorm/Makefile
+	tests/zfs-tests/tests/functional/checksum/Makefile
 	tests/zfs-tests/tests/functional/clean_mirror/Makefile
 	tests/zfs-tests/tests/functional/cli_root/Makefile
 	tests/zfs-tests/tests/functional/cli_root/zdb/Makefile
@@ -277,6 +282,10 @@ AC_CONFIG_FILES([
 	tests/zfs-tests/tests/functional/zvol/zvol_ENOSPC/Makefile
 	tests/zfs-tests/tests/functional/zvol/zvol_misc/Makefile
 	tests/zfs-tests/tests/functional/zvol/zvol_swap/Makefile
+	tests/zfs-tests/tests/perf/Makefile
+	tests/zfs-tests/tests/perf/fio/Makefile
+	tests/zfs-tests/tests/perf/regression/Makefile
+	tests/zfs-tests/tests/perf/scripts/Makefile
 	tests/zfs-tests/tests/stress/Makefile
 	rpm/Makefile
 	rpm/redhat/Makefile

@@ -66,12 +66,21 @@
 	zio_compress_table[(idx)].ci_name : "UNKNOWN")
 #define	ZDB_CHECKSUM_NAME(idx) ((idx) < ZIO_CHECKSUM_FUNCTIONS ?	\
 	zio_checksum_table[(idx)].ci_name : "UNKNOWN")
-#define	ZDB_OT_NAME(idx) ((idx) < DMU_OT_NUMTYPES ?	\
-	dmu_ot[(idx)].ot_name : DMU_OT_IS_VALID(idx) ?	\
-	dmu_ot_byteswap[DMU_OT_BYTESWAP(idx)].ob_name : "UNKNOWN")
 #define	ZDB_OT_TYPE(idx) ((idx) < DMU_OT_NUMTYPES ? (idx) :		\
 	(((idx) == DMU_OTN_ZAP_DATA || (idx) == DMU_OTN_ZAP_METADATA) ?	\
 	DMU_OT_ZAP_OTHER : DMU_OT_NUMTYPES))
+
+static char *
+zdb_ot_name(dmu_object_type_t type)
+{
+	if (type < DMU_OT_NUMTYPES)
+		return (dmu_ot[type].ot_name);
+	else if ((type & DMU_OT_NEWTYPE) &&
+		((type & DMU_OT_BYTESWAP_MASK) < DMU_BSWAP_NUMFUNCS))
+		return (dmu_ot_byteswap[type & DMU_OT_BYTESWAP_MASK].ob_name);
+	else
+		return ("UNKNOWN");
+}
 
 #ifndef lint
 extern int zfs_recover;
@@ -1288,7 +1297,7 @@ visit_indirect(spa_t *spa, const dnode_phys_t *dnp,
 		}
 		if (!err)
 			ASSERT3U(fill, ==, BP_GET_FILL(bp));
-		(void) arc_buf_remove_ref(buf, &buf);
+		arc_buf_destroy(buf, &buf);
 	}
 
 	return (err);
@@ -1928,12 +1937,12 @@ dump_object(objset_t *os, uint64_t object, int verbosity, int *print_header)
 
 	(void) printf("%10lld  %3u  %5s  %5s  %5s  %6s  %5s  %6s  %s%s\n",
 	    (u_longlong_t)object, doi.doi_indirection, iblk, dblk,
-	    asize, dnsize, lsize, fill, ZDB_OT_NAME(doi.doi_type), aux);
+	    asize, dnsize, lsize, fill, zdb_ot_name(doi.doi_type), aux);
 
 	if (doi.doi_bonus_type != DMU_OT_NONE && verbosity > 3) {
 		(void) printf("%10s  %3s  %5s  %5s  %5s  %5s  %5s  %6s  %s\n",
 		    "", "", "", "", "", "", bonus_size, "bonus",
-		    ZDB_OT_NAME(doi.doi_bonus_type));
+		    zdb_ot_name(doi.doi_bonus_type));
 	}
 
 	if (verbosity >= 4) {
@@ -2345,7 +2354,7 @@ typedef struct zdb_cb {
 	uint64_t	zcb_dedup_blocks;
 	uint64_t	zcb_embedded_blocks[NUM_BP_EMBEDDED_TYPES];
 	uint64_t	zcb_embedded_histogram[NUM_BP_EMBEDDED_TYPES]
-	    [BPE_PAYLOAD_SIZE];
+	    [BPE_PAYLOAD_SIZE + 1];
 	uint64_t	zcb_start;
 	uint64_t	zcb_lastprint;
 	uint64_t	zcb_totalasize;
@@ -3414,7 +3423,8 @@ zdb_read_block(char *thing, spa_t *spa)
 	psize = size;
 	lsize = size;
 
-	pbuf = umem_alloc_aligned(SPA_MAXBLOCKSIZE, 512, UMEM_NOFAIL);
+	/* Some 4K native devices require 4K buffer alignment */
+	pbuf = umem_alloc_aligned(SPA_MAXBLOCKSIZE, PAGESIZE, UMEM_NOFAIL);
 	lbuf = umem_alloc(SPA_MAXBLOCKSIZE, UMEM_NOFAIL);
 
 	BP_ZERO(bp);
@@ -3481,9 +3491,19 @@ zdb_read_block(char *thing, spa_t *spa)
 		VERIFY(random_get_pseudo_bytes((uint8_t *)pbuf2 + psize,
 		    SPA_MAXBLOCKSIZE - psize) == 0);
 
-		for (lsize = SPA_MAXBLOCKSIZE; lsize > psize;
-		    lsize -= SPA_MINBLOCKSIZE) {
+		/*
+		 * XXX - On the one hand, with SPA_MAXBLOCKSIZE at 16MB,
+		 * this could take a while and we should let the user know
+		 * we are not stuck.  On the other hand, printing progress
+		 * info gets old after a while.  What to do?
+		 */
+		for (lsize = psize + SPA_MINBLOCKSIZE;
+		    lsize <= SPA_MAXBLOCKSIZE; lsize += SPA_MINBLOCKSIZE) {
 			for (c = 0; c < ZIO_COMPRESS_FUNCTIONS; c++) {
+				(void) fprintf(stderr,
+				    "Trying %05llx -> %05llx (%s)\n",
+				    (u_longlong_t)psize, (u_longlong_t)lsize,
+				    zio_compress_table[c].ci_name);
 				if (zio_decompress_data(c, pbuf, lbuf,
 				    psize, lsize) == 0 &&
 				    zio_decompress_data(c, pbuf2, lbuf2,
@@ -3493,7 +3513,6 @@ zdb_read_block(char *thing, spa_t *spa)
 			}
 			if (c != ZIO_COMPRESS_FUNCTIONS)
 				break;
-			lsize -= SPA_MINBLOCKSIZE;
 		}
 
 		umem_free(pbuf2, SPA_MAXBLOCKSIZE);

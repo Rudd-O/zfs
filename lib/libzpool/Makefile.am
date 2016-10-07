@@ -23,6 +23,8 @@ KERNEL_C = \
 	zfs_deleg.c \
 	zfs_fletcher.c \
 	zfs_fletcher_intel.c \
+	zfs_fletcher_sse.c \
+	zfs_fletcher_avx512.c \
 	zfs_namecheck.c \
 	zfs_prop.c \
 	zfs_uio.c \
@@ -59,6 +61,7 @@ KERNEL_C = \
 	dsl_synctask.c \
 	dsl_destroy.c \
 	dsl_userhold.c \
+	edonr_zfs.c \
 	fm.c \
 	gzip.c \
 	lzjb.c \
@@ -71,6 +74,7 @@ KERNEL_C = \
 	rrwlock.c \
 	sa.c \
 	sha256.c \
+	skein_zfs.c \
 	spa.c \
 	spa_boot.c \
 	spa_config.c \
@@ -97,6 +101,8 @@ KERNEL_C = \
 	vdev_raidz_math_sse2.c \
 	vdev_raidz_math_ssse3.c \
 	vdev_raidz_math_avx2.c \
+	vdev_raidz_math_aarch64_neon.c \
+	vdev_raidz_math_aarch64_neonx2.c \
 	vdev_root.c \
 	zap.c \
 	zap_leaf.c \
@@ -125,7 +131,8 @@ nodist_libzpool_la_SOURCES = \
 libzpool_la_LIBADD = \
 	$(top_builddir)/lib/libunicode/libunicode.la \
 	$(top_builddir)/lib/libuutil/libuutil.la \
-	$(top_builddir)/lib/libnvpair/libnvpair.la
+	$(top_builddir)/lib/libnvpair/libnvpair.la \
+	$(top_builddir)/lib/libicp/libicp.la
 
 libzpool_la_LIBADD += $(ZLIB)
 libzpool_la_LDFLAGS = -version-info 2:0:0

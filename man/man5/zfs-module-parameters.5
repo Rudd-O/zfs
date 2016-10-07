@@ -27,6 +27,19 @@ Description of the different parameters to the ZFS module.
 .sp
 .ne 2
 .na
+\fBignore_hole_birth\fR (int)
+.ad
+.RS 12n
+When set, the hole_birth optimization will not be used, and all holes will
+always be sent on zfs send. Useful if you suspect your datasets are affected
+by a bug in hole_birth.
+.sp
+Use \fB1\fR for on (default) and \fB0\fR for off.
+.RE
+
+.sp
+.ne 2
+.na
 \fBl2arc_feed_again\fR (int)
 .ad
 .RS 12n
@@ -81,20 +94,6 @@ Scales \fBl2arc_headroom\fR by this percentage when L2ARC contents are being
 successfully compressed before writing. A value of 100 disables this feature.
 .sp
 Default value: \fB200\fR.
-.RE
-
-.sp
-.ne 2
-.na
-\fBl2arc_max_block_size\fR (ulong)
-.ad
-.RS 12n
-The maximum block size which may be written to an L2ARC device, after
-compression and other factors.  This setting is used to prevent a small
-number of large blocks from pushing a larger number of small blocks out
-of the cache.
-.sp
-Default value: \fB16,777,216\fR.
 .RE
 
 .sp
@@ -384,6 +383,53 @@ Default value: \fB2\fR.
 .sp
 .ne 2
 .na
+\fBzfs_arc_dnode_limit\fR (ulong)
+.ad
+.RS 12n
+When the number of bytes consumed by dnodes in the ARC exceeds this number of
+bytes, try to unpin some of it in response to demand for non-metadata. This
+value acts as a floor to the amount of dnode metadata, and defaults to 0 which
+indicates that a percent which is based on \fBzfs_arc_dnode_limit_percent\fR of
+the ARC meta buffers that may be used for dnodes.
+
+See also \fBzfs_arc_meta_prune\fR which serves a similar purpose but is used
+when the amount of metadata in the ARC exceeds \fBzfs_arc_meta_limit\fR rather
+than in response to overall demand for non-metadata.
+
+.sp
+Default value: \fB0\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs_arc_dnode_limit_percent\fR (ulong)
+.ad
+.RS 12n
+Percentage that can be consumed by dnodes of ARC meta buffers.
+.sp
+See also \fBzfs_arc_dnode_limit\fR which serves a similar purpose but has a
+higher priority if set to nonzero value.
+.sp
+Default value: \fB10\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs_arc_dnode_reduce_percent\fR (ulong)
+.ad
+.RS 12n
+Percentage of ARC dnodes to try to scan in response to demand for non-metadata
+when the number of bytes consumed by dnodes exceeds \fBzfs_arc_dnode_limit\fB.
+
+.sp
+Default value: \fB10% of the number of dnodes in the ARC\fR.
+.RE
+
+.sp
+.ne 2
+.na
 \fBzfs_arc_average_blocksize\fR (int)
 .ad
 .RS 12n
@@ -459,13 +505,28 @@ Default value: \fB0\fR.
 The maximum allowed size in bytes that meta data buffers are allowed to
 consume in the ARC.  When this limit is reached meta data buffers will
 be reclaimed even if the overall arc_c_max has not been reached.  This
-value defaults to 0 which indicates that 3/4 of the ARC may be used
-for meta data.
+value defaults to 0 which indicates that a percent which is based on
+\fBzfs_arc_meta_limit_percent\fR of the ARC may be used for meta data.
 .sp
 This value my be changed dynamically except that it cannot be set back to 0
-for 3/4 of the ARC; it must be set to an explicit value.
+for a specific percent of the ARC; it must be set to an explicit value.
 .sp
 Default value: \fB0\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs_arc_meta_limit_percent\fR (ulong)
+.ad
+.RS 12n
+Percentage of ARC buffers that can be used for meta data.
+
+See also \fBzfs_arc_meta_limit\fR which serves a similar purpose but has a
+higher priority if set to nonzero value.
+
+.sp
+Default value: \fB75\fR.
 .RE
 
 .sp
@@ -838,11 +899,15 @@ Default value: \fB67,108,864\fR.
 .RS 12n
 Select a fletcher 4 implementation.
 .sp
-Supported selectors are: \fBfastest\fR, \fBscalar\fR, and \fBavx2\fR when
-AVX2 is supported by the processor.  If multiple implementations of fletcher 4
-are available the \fBfastest\fR will be chosen using a micro benchmark.
-Selecting \fBscalar\fR results in the original CPU based calculation being
-used, \fBavx2\fR uses the AVX2 vector instructions to compute a fletcher 4.
+Supported selectors are: \fBfastest\fR, \fBscalar\fR, \fBsse2\fR, \fBssse3\fR,
+\fBavx2\fR, and \fBavx512f\fR.
+All of the selectors except \fBfastest\fR and \fBscalar\fR require instruction
+set extensions to be available and will only appear if ZFS detects that they are
+present at runtime. If multiple implementations of fletcher 4 are available,
+the \fBfastest\fR will be chosen using a micro benchmark. Selecting \fBscalar\fR
+results in the original, CPU based calculation, being used. Selecting any option
+other than \fBfastest\fR and \fBscalar\fR results in vector instructions from
+the respective CPU instruction set being used.
 .sp
 Default value: \fBfastest\fR.
 .RE
@@ -1680,7 +1745,7 @@ Default value: \fB4,096\fR.
 \fBzfs_vdev_raidz_impl\fR (string)
 .ad
 .RS 12n
-Parameter for selecting raidz implementation to use.
+Parameter for selecting raidz parity implementation to use.
 
 Options marked (always) below may be selected on module load as they are
 supported on all systems.
@@ -1698,6 +1763,8 @@ Possible options are:
   sse2     - implementation using SSE2 instruction set (64bit x86 only)
   ssse3    - implementation using SSSE3 instruction set (64bit x86 only)
   avx2     - implementation using AVX2 instruction set (64bit x86 only)
+  aarch64_neon - implementation using NEON (Aarch64/64 bit ARMv8 only)
+  aarch64_neonx2 - implementation using NEON with more unrolling (Aarch64/64 bit ARMv8 only)
 .sp
 Default value: \fBfastest\fR.
 .RE

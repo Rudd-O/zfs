@@ -63,6 +63,11 @@ main(int argc, char **argv)
 	}
 
 	cp1 = argv[1];
+	if (strlen(cp1) >= (sizeof (dirpath) - strlen("TMP_DIR"))) {
+		(void) printf("The string length of mount point is "
+			"too large\n");
+		exit(-1);
+	}
 	(void) strcpy(&dirpath[0], (const char *)cp1);
 	(void) strcat(&dirpath[strlen(dirpath)], "TMP_DIR");
 
@@ -89,6 +94,12 @@ main(int argc, char **argv)
 		int rdret;
 		int j = 0;
 
+		if (fd < 0) {
+			(void) printf("%s: open <%s> again failed:"
+			    " errno = %d\n", argv[0], dirpath, errno);
+			exit(-1);
+		}
+
 		while (j < op_num) {
 			(void) sleep(1);
 			rdret = read(fd, buf, 16);
@@ -101,6 +112,12 @@ main(int argc, char **argv)
 		int fd = open(dirpath, O_RDONLY);
 		int chownret;
 		int k = 0;
+
+		if (fd < 0) {
+			(void) printf("%s: open(<%s>, O_RDONLY) again failed:"
+			    " errno (decimal)=%d\n", argv[0], dirpath, errno);
+			exit(-1);
+		}
 
 		while (k < op_num) {
 			(void) sleep(1);

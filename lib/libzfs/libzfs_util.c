@@ -67,9 +67,9 @@ libzfs_error_init(int error)
 		    "loaded.\nTry running '/sbin/modprobe zfs' as root "
 		    "to load them.\n"));
 	case ENOENT:
-		return (dgettext(TEXT_DOMAIN, "The /dev/zfs device is "
-		    "missing and must be created.\nTry running 'udevadm "
-		    "trigger' as root to create it.\n"));
+		return (dgettext(TEXT_DOMAIN, "/dev/zfs and /proc/self/mounts "
+		    "are required.\nTry running 'udevadm trigger' and 'mount "
+		    "-t proc proc /proc' as root.\n"));
 	case ENOEXEC:
 		return (dgettext(TEXT_DOMAIN, "The ZFS modules cannot be "
 		    "auto-loaded.\nTry running '/sbin/modprobe zfs' as "
@@ -390,7 +390,7 @@ zfs_standard_error_fmt(libzfs_handle_t *hdl, int error, const char *fmt, ...)
 	case ENOSPC:
 	case EDQUOT:
 		zfs_verror(hdl, EZFS_NOSPC, fmt, ap);
-		return (-1);
+		break;
 
 	case EEXIST:
 		zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
@@ -1107,8 +1107,8 @@ zfs_strcmp_pathname(char *name, char *cmp, int wholedisk)
 	dup = strdup(cmp);
 	dir = strtok(dup, "/");
 	while (dir) {
-		strcat(cmp_name, "/");
-		strcat(cmp_name, dir);
+		strlcat(cmp_name, "/", sizeof (cmp_name));
+		strlcat(cmp_name, dir, sizeof (cmp_name));
 		dir = strtok(NULL, "/");
 	}
 	free(dup);
@@ -1433,7 +1433,8 @@ zprop_print_one_property(const char *name, zprop_get_cbdata_t *cbp,
 			continue;
 		}
 
-		if (cbp->cb_columns[i + 1] == GET_COL_NONE)
+		if (i == (ZFS_GET_NCOLS - 1) ||
+		    cbp->cb_columns[i + 1] == GET_COL_NONE)
 			(void) printf("%s", str);
 		else if (cbp->cb_scripted)
 			(void) printf("%s\t", str);

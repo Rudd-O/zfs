@@ -89,13 +89,15 @@ typedef boolean_t	(*will_work_f)(void);
 typedef void		(*init_impl_f)(void);
 typedef void		(*fini_impl_f)(void);
 
+#define	RAIDZ_IMPL_NAME_MAX	(16)
+
 typedef struct raidz_impl_ops {
 	init_impl_f init;
 	fini_impl_f fini;
 	raidz_gen_f gen[RAIDZ_GEN_NUM];	/* Parity generate functions */
 	raidz_rec_f rec[RAIDZ_REC_NUM];	/* Data reconstruction functions */
 	will_work_f is_supported;	/* Support check function */
-	char *name;			/* Name of the implementation */
+	char name[RAIDZ_IMPL_NAME_MAX];	/* Name of the implementation */
 } raidz_impl_ops_t;
 
 typedef struct raidz_col {
@@ -127,6 +129,8 @@ typedef struct raidz_map {
 	raidz_col_t rm_col[1];		/* Flexible array of I/O columns */
 } raidz_map_t;
 
+#define	RAIDZ_ORIGINAL_IMPL	(INT_MAX)
+
 extern const raidz_impl_ops_t vdev_raidz_scalar_impl;
 #if defined(__x86_64) && defined(HAVE_SSE2)	/* only x86_64 for now */
 extern const raidz_impl_ops_t vdev_raidz_sse2_impl;
@@ -136,6 +140,10 @@ extern const raidz_impl_ops_t vdev_raidz_ssse3_impl;
 #endif
 #if defined(__x86_64) && defined(HAVE_AVX2)	/* only x86_64 for now */
 extern const raidz_impl_ops_t vdev_raidz_avx2_impl;
+#endif
+#if defined(__aarch64__)
+extern const raidz_impl_ops_t vdev_raidz_aarch64_neon_impl;
+extern const raidz_impl_ops_t vdev_raidz_aarch64_neonx2_impl;
 #endif
 
 /*
@@ -229,8 +237,8 @@ impl ## _rec_ ## code(void *rmp, const int *tgtidx)			\
 
 
 typedef struct raidz_impl_kstat {
-	kstat_named_t gen[RAIDZ_GEN_NUM];	/* gen method speed kiB/s */
-	kstat_named_t rec[RAIDZ_REC_NUM];	/* rec method speed kiB/s */
+	uint64_t gen[RAIDZ_GEN_NUM];	/* gen method speed B/s */
+	uint64_t rec[RAIDZ_REC_NUM];	/* rec method speed B/s */
 } raidz_impl_kstat_t;
 
 /*

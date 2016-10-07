@@ -704,6 +704,7 @@ vdev_top_transfer(vdev_t *svd, vdev_t *tvd)
 
 	ASSERT(tvd == tvd->vdev_top);
 
+	tvd->vdev_pending_fastwrite = svd->vdev_pending_fastwrite;
 	tvd->vdev_ms_array = svd->vdev_ms_array;
 	tvd->vdev_ms_shift = svd->vdev_ms_shift;
 	tvd->vdev_ms_count = svd->vdev_ms_count;
@@ -1422,7 +1423,7 @@ vdev_validate(vdev_t *vd, boolean_t strict)
 		    spa_last_synced_txg(spa) : -1ULL;
 
 		if ((label = vdev_label_read_config(vd, txg)) == NULL) {
-			vdev_set_state(vd, B_TRUE, VDEV_STATE_CANT_OPEN,
+			vdev_set_state(vd, B_FALSE, VDEV_STATE_CANT_OPEN,
 			    VDEV_AUX_BAD_LABEL);
 			return (0);
 		}
@@ -2487,6 +2488,7 @@ int
 vdev_online(spa_t *spa, uint64_t guid, uint64_t flags, vdev_state_t *newstate)
 {
 	vdev_t *vd, *tvd, *pvd, *rvd = spa->spa_root_vdev;
+	boolean_t postevent = B_FALSE;
 
 	spa_vdev_state_enter(spa, SCL_NONE);
 
@@ -2495,6 +2497,10 @@ vdev_online(spa_t *spa, uint64_t guid, uint64_t flags, vdev_state_t *newstate)
 
 	if (!vd->vdev_ops->vdev_op_leaf)
 		return (spa_vdev_state_exit(spa, NULL, ENOTSUP));
+
+	postevent =
+	    (vd->vdev_offline == B_TRUE || vd->vdev_tmpoffline == B_TRUE) ?
+	    B_TRUE : B_FALSE;
 
 	tvd = vd->vdev_top;
 	vd->vdev_offline = B_FALSE;
@@ -2531,6 +2537,10 @@ vdev_online(spa_t *spa, uint64_t guid, uint64_t flags, vdev_state_t *newstate)
 			return (spa_vdev_state_exit(spa, vd, ENOTSUP));
 		spa_async_request(spa, SPA_ASYNC_CONFIG_UPDATE);
 	}
+
+	if (postevent)
+		spa_event_notify(spa, vd, ESC_ZFS_VDEV_ONLINE);
+
 	return (spa_vdev_state_exit(spa, vd, 0));
 }
 
@@ -2693,7 +2703,7 @@ vdev_clear(spa_t *spa, vdev_t *vd)
 		if (vd->vdev_aux == NULL && !vdev_is_dead(vd))
 			spa_async_request(spa, SPA_ASYNC_RESILVER);
 
-		spa_event_notify(spa, vd, FM_EREPORT_ZFS_DEVICE_CLEAR);
+		spa_event_notify(spa, vd, ESC_ZFS_VDEV_CLEAR);
 	}
 
 	/*
@@ -2981,7 +2991,8 @@ vdev_stat_update(zio_t *zio, uint64_t psize)
 		 * The bytes/ops/histograms are recorded at the leaf level and
 		 * aggregated into the higher level vdevs in vdev_get_stats().
 		 */
-		if (vd->vdev_ops->vdev_op_leaf) {
+		if (vd->vdev_ops->vdev_op_leaf &&
+		    (zio->io_priority < ZIO_PRIORITY_NUM_QUEUEABLE)) {
 
 			vs->vs_ops[type]++;
 			vs->vs_bytes[type] += psize;
@@ -3362,19 +3373,6 @@ vdev_set_state(vdev_t *vd, boolean_t isopen, vdev_state_t state, vdev_aux_t aux)
 	    vd->vdev_ops->vdev_op_leaf)
 		vd->vdev_ops->vdev_op_close(vd);
 
-	/*
-	 * If we have brought this vdev back into service, we need
-	 * to notify fmd so that it can gracefully repair any outstanding
-	 * cases due to a missing device.  We do this in all cases, even those
-	 * that probably don't correlate to a repaired fault.  This is sure to
-	 * catch all cases, and we let the zfs-retire agent sort it out.  If
-	 * this is a transient state it's OK, as the retire agent will
-	 * double-check the state of the vdev before repairing it.
-	 */
-	if (state == VDEV_STATE_HEALTHY && vd->vdev_ops->vdev_op_leaf &&
-	    vd->vdev_prevstate != state)
-		zfs_post_state_change(spa, vd);
-
 	if (vd->vdev_removed &&
 	    state == VDEV_STATE_CANT_OPEN &&
 	    (aux == VDEV_AUX_OPEN_FAILED || vd->vdev_checkremove)) {
@@ -3453,6 +3451,20 @@ vdev_set_state(vdev_t *vd, boolean_t isopen, vdev_state_t state, vdev_aux_t aux)
 		vd->vdev_removed = B_FALSE;
 	} else {
 		vd->vdev_removed = B_FALSE;
+	}
+
+	/*
+	 * Notify ZED of any significant state-change on a leaf vdev.
+	 *
+	 * We ignore transitions from a closed state to healthy unless
+	 * the parent was degraded.
+	 */
+	if (vd->vdev_ops->vdev_op_leaf &&
+	    ((save_state > VDEV_STATE_CLOSED) ||
+	    (vd->vdev_state < VDEV_STATE_HEALTHY) ||
+	    (vd->vdev_parent != NULL &&
+	    vd->vdev_parent->vdev_prevstate == VDEV_STATE_DEGRADED))) {
+		zfs_post_state_change(spa, vd, save_state);
 	}
 
 	if (!isopen && vd->vdev_parent)

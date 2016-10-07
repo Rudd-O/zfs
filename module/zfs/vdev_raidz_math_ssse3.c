@@ -47,10 +47,10 @@
 #define	VR1(r...) VR1_(r)
 #define	VR2(r...) VR2_(r, 1)
 #define	VR3(r...) VR3_(r, 1, 2)
-#define	VR4(r...) VR4_(r, 1)
-#define	VR5(r...) VR5_(r, 1, 2)
-#define	VR6(r...) VR6_(r, 1, 2, 3)
-#define	VR7(r...) VR7_(r, 1, 2, 3, 4)
+#define	VR4(r...) VR4_(r, 1, 2)
+#define	VR5(r...) VR5_(r, 1, 2, 3)
+#define	VR6(r...) VR6_(r, 1, 2, 3, 4)
+#define	VR7(r...) VR7_(r, 1, 2, 3, 4, 5)
 
 #define	R_01(REG1, REG2, ...) REG1, REG2
 #define	_R_23(_0, _1, REG2, REG3, ...) REG2, REG3
@@ -116,6 +116,26 @@ typedef struct v {
 		__asm(							\
 		    "pxor %" VR0(r) ", %" VR2(r) "\n"			\
 		    "pxor %" VR1(r) ", %" VR3(r));			\
+		break;							\
+	default:							\
+		ASM_BUG();						\
+	}								\
+}
+
+#define	ZERO(r...)							\
+{									\
+	switch (REG_CNT(r)) {						\
+	case 4:								\
+		__asm(							\
+		    "pxor %" VR0(r) ", %" VR0(r) "\n"			\
+		    "pxor %" VR1(r) ", %" VR1(r) "\n"			\
+		    "pxor %" VR2(r) ", %" VR2(r) "\n"			\
+		    "pxor %" VR3(r) ", %" VR3(r));			\
+		break;							\
+	case 2:								\
+		__asm(							\
+		    "pxor %" VR0(r) ", %" VR0(r) "\n"			\
+		    "pxor %" VR1(r) ", %" VR1(r));			\
 		break;							\
 	default:							\
 		ASM_BUG();						\

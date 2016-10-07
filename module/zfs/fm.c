@@ -97,7 +97,6 @@ static list_t zevent_list;
 static kcondvar_t zevent_cv;
 #endif /* _KERNEL */
 
-extern void fastreboot_disable_highpil(void);
 
 /*
  * Common fault management kstats to record event generation failures
@@ -154,7 +153,7 @@ fm_printf(int depth, int c, int cols, const char *format, ...)
 }
 
 /*
- * Recursively print a nvlist in the specified column width and return the
+ * Recursively print an nvlist in the specified column width and return the
  * column we end up in.  This function is called recursively by fm_nvprint(),
  * below.  We generically format the entire nvpair using hexadecimal
  * integers and strings, and elide any integer arrays.  Arrays are basically
@@ -427,8 +426,6 @@ zfs_zevent_alloc(void)
 	zevent_t *ev;
 
 	ev = kmem_zalloc(sizeof (zevent_t), KM_SLEEP);
-	if (ev == NULL)
-		return (NULL);
 
 	list_create(&ev->ev_ze_list, sizeof (zfs_zevent_t),
 		    offsetof(zfs_zevent_t, ze_node));
@@ -655,7 +652,7 @@ zfs_zevent_next(zfs_zevent_t *ze, nvlist_t **event, uint64_t *event_size,
 
 	ze->ze_zevent = ev;
 	list_insert_head(&ev->ev_ze_list, ze);
-	nvlist_dup(ev->ev_nvl, event, KM_SLEEP);
+	(void) nvlist_dup(ev->ev_nvl, event, KM_SLEEP);
 	*dropped = ze->ze_dropped;
 	ze->ze_dropped = 0;
 out:

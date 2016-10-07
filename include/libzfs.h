@@ -631,6 +631,9 @@ typedef struct sendflags {
 
 	/* WRITE_EMBEDDED records of type DATA are permitted */
 	boolean_t embed_data;
+
+	/* compressed WRITE records are permitted */
+	boolean_t compress;
 } sendflags_t;
 
 typedef boolean_t (snapfilter_cb_t)(zfs_handle_t *, void *);
@@ -824,6 +827,13 @@ extern int zpool_fru_set(zpool_handle_t *, uint64_t, const char *);
  */
 extern boolean_t is_mpath_whole_disk(const char *);
 extern void update_vdev_config_dev_strs(nvlist_t *);
+extern char *zfs_strip_partition(libzfs_handle_t *, char *);
+
+#ifdef HAVE_LIBUDEV
+struct udev_device;
+extern int zfs_device_get_devid(struct udev_device *, char *, size_t);
+extern int zfs_device_get_physical(struct udev_device *, char *, size_t);
+#endif
 
 #ifdef	__cplusplus
 }

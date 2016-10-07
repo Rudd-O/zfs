@@ -602,6 +602,7 @@ zfs_write(struct inode *ip, uio_t *uio, int ioflag, cred_t *cr)
 	int		count = 0;
 	sa_bulk_attr_t	bulk[4];
 	uint64_t	mtime[2], ctime[2];
+	uint32_t	uid;
 	ASSERTV(int	iovcnt = uio->uio_iovcnt);
 
 	/*
@@ -862,14 +863,15 @@ zfs_write(struct inode *ip, uio_t *uio, int ioflag, cred_t *cr)
 		 * user 0 is not an ephemeral uid.
 		 */
 		mutex_enter(&zp->z_acl_lock);
+		uid = KUID_TO_SUID(ip->i_uid);
 		if ((zp->z_mode & (S_IXUSR | (S_IXUSR >> 3) |
 		    (S_IXUSR >> 6))) != 0 &&
 		    (zp->z_mode & (S_ISUID | S_ISGID)) != 0 &&
 		    secpolicy_vnode_setid_retain(cr,
-		    (zp->z_mode & S_ISUID) != 0 && zp->z_uid == 0) != 0) {
+		    ((zp->z_mode & S_ISUID) != 0 && uid == 0)) != 0) {
 			uint64_t newmode;
 			zp->z_mode &= ~(S_ISUID | S_ISGID);
-			newmode = zp->z_mode;
+			ip->i_mode = newmode = zp->z_mode;
 			(void) sa_update(zp->z_sa_hdl, SA_ZPL_MODE(zsb),
 			    (void *)&newmode, sizeof (uint64_t), tx);
 		}
@@ -1468,8 +1470,10 @@ top:
 		if (S_ISREG(ZTOI(zp)->i_mode) &&
 		    (vap->va_mask & ATTR_SIZE) && (vap->va_size == 0)) {
 			/* we can't hold any locks when calling zfs_freesp() */
-			zfs_dirent_unlock(dl);
-			dl = NULL;
+			if (dl) {
+				zfs_dirent_unlock(dl);
+				dl = NULL;
+			}
 			error = zfs_freesp(zp, 0, 0, mode, TRUE);
 		}
 	}
@@ -2001,6 +2005,7 @@ top:
 	dmu_tx_hold_zap(tx, zsb->z_unlinkedobj, FALSE, NULL);
 	zfs_sa_upgrade_txholds(tx, zp);
 	zfs_sa_upgrade_txholds(tx, dzp);
+	dmu_tx_mark_netfree(tx);
 	error = dmu_tx_assign(tx, waited ? TXG_WAITED : TXG_NOWAIT);
 	if (error) {
 		rw_exit(&zp->z_parent_lock);
@@ -2522,7 +2527,7 @@ zfs_setattr(struct inode *ip, vattr_t *vap, int flags, cred_t *cr)
 	uint_t		saved_mask = 0;
 	int		trim_mask = 0;
 	uint64_t	new_mode;
-	uint64_t	new_uid, new_gid;
+	uint64_t	new_kuid = 0, new_kgid = 0, new_uid, new_gid;
 	uint64_t	xattr_obj;
 	uint64_t	mtime[2], ctime[2], atime[2];
 	znode_t		*attrzp;
@@ -2842,10 +2847,10 @@ top:
 				goto out2;
 		}
 		if (mask & ATTR_UID) {
-			new_uid = zfs_fuid_create(zsb,
+			new_kuid = zfs_fuid_create(zsb,
 			    (uint64_t)vap->va_uid, cr, ZFS_OWNER, &fuidp);
-			if (new_uid != zp->z_uid &&
-			    zfs_fuid_overquota(zsb, B_FALSE, new_uid)) {
+			if (new_kuid != KUID_TO_SUID(ZTOI(zp)->i_uid) &&
+			    zfs_fuid_overquota(zsb, B_FALSE, new_kuid)) {
 				if (attrzp)
 					iput(ZTOI(attrzp));
 				err = EDQUOT;
@@ -2854,10 +2859,10 @@ top:
 		}
 
 		if (mask & ATTR_GID) {
-			new_gid = zfs_fuid_create(zsb, (uint64_t)vap->va_gid,
+			new_kgid = zfs_fuid_create(zsb, (uint64_t)vap->va_gid,
 			    cr, ZFS_GROUP, &fuidp);
-			if (new_gid != zp->z_gid &&
-			    zfs_fuid_overquota(zsb, B_TRUE, new_gid)) {
+			if (new_kgid != KGID_TO_SGID(ZTOI(zp)->i_gid) &&
+			    zfs_fuid_overquota(zsb, B_TRUE, new_kgid)) {
 				if (attrzp)
 					iput(ZTOI(attrzp));
 				err = EDQUOT;
@@ -2948,26 +2953,28 @@ top:
 	if (mask & (ATTR_UID|ATTR_GID)) {
 
 		if (mask & ATTR_UID) {
+			ZTOI(zp)->i_uid = SUID_TO_KUID(new_kuid);
+			new_uid = zfs_uid_read(ZTOI(zp));
 			SA_ADD_BULK_ATTR(bulk, count, SA_ZPL_UID(zsb), NULL,
 			    &new_uid, sizeof (new_uid));
-			zp->z_uid = new_uid;
 			if (attrzp) {
 				SA_ADD_BULK_ATTR(xattr_bulk, xattr_count,
 				    SA_ZPL_UID(zsb), NULL, &new_uid,
 				    sizeof (new_uid));
-				attrzp->z_uid = new_uid;
+				ZTOI(attrzp)->i_uid = SUID_TO_KUID(new_uid);
 			}
 		}
 
 		if (mask & ATTR_GID) {
+			ZTOI(zp)->i_gid = SGID_TO_KGID(new_kgid);
+			new_gid = zfs_gid_read(ZTOI(zp));
 			SA_ADD_BULK_ATTR(bulk, count, SA_ZPL_GID(zsb),
 			    NULL, &new_gid, sizeof (new_gid));
-			zp->z_gid = new_gid;
 			if (attrzp) {
 				SA_ADD_BULK_ATTR(xattr_bulk, xattr_count,
 				    SA_ZPL_GID(zsb), NULL, &new_gid,
 				    sizeof (new_gid));
-				attrzp->z_gid = new_gid;
+				ZTOI(attrzp)->i_gid = SGID_TO_KGID(new_kgid);
 			}
 		}
 		if (!(mask & ATTR_MODE)) {
@@ -2986,7 +2993,7 @@ top:
 	if (mask & ATTR_MODE) {
 		SA_ADD_BULK_ATTR(bulk, count, SA_ZPL_MODE(zsb), NULL,
 		    &new_mode, sizeof (new_mode));
-		zp->z_mode = new_mode;
+		zp->z_mode = ZTOI(zp)->i_mode = new_mode;
 		ASSERT3P(aclp, !=, NULL);
 		err = zfs_aclset_common(zp, aclp, cr, tx);
 		ASSERT0(err);
@@ -2995,7 +3002,6 @@ top:
 		zp->z_acl_cached = aclp;
 		aclp = NULL;
 	}
-
 
 	if ((mask & ATTR_ATIME) || zp->z_atime_dirty) {
 		zp->z_atime_dirty = 0;
@@ -3006,29 +3012,27 @@ top:
 
 	if (mask & ATTR_MTIME) {
 		ZFS_TIME_ENCODE(&vap->va_mtime, mtime);
+		ZTOI(zp)->i_mtime = timespec_trunc(vap->va_mtime,
+		    ZTOI(zp)->i_sb->s_time_gran);
+
 		SA_ADD_BULK_ATTR(bulk, count, SA_ZPL_MTIME(zsb), NULL,
 		    mtime, sizeof (mtime));
 	}
 
-	/* XXX - shouldn't this be done *before* the ATIME/MTIME checks? */
-	if (mask & ATTR_SIZE && !(mask & ATTR_MTIME)) {
-		SA_ADD_BULK_ATTR(bulk, count, SA_ZPL_MTIME(zsb),
-		    NULL, mtime, sizeof (mtime));
+	if (mask & ATTR_CTIME) {
+		ZFS_TIME_ENCODE(&vap->va_ctime, ctime);
+		ZTOI(zp)->i_ctime = timespec_trunc(vap->va_ctime,
+		    ZTOI(zp)->i_sb->s_time_gran);
 		SA_ADD_BULK_ATTR(bulk, count, SA_ZPL_CTIME(zsb), NULL,
-		    &ctime, sizeof (ctime));
-		zfs_tstamp_update_setup(zp, CONTENT_MODIFIED, mtime, ctime);
-	} else if (mask != 0) {
-		SA_ADD_BULK_ATTR(bulk, count, SA_ZPL_CTIME(zsb), NULL,
-		    &ctime, sizeof (ctime));
-		zfs_tstamp_update_setup(zp, STATE_CHANGED, mtime, ctime);
-		if (attrzp) {
-			SA_ADD_BULK_ATTR(xattr_bulk, xattr_count,
-			    SA_ZPL_CTIME(zsb), NULL,
-			    &ctime, sizeof (ctime));
-			zfs_tstamp_update_setup(attrzp, STATE_CHANGED,
-			    mtime, ctime);
-		}
+		    ctime, sizeof (ctime));
 	}
+
+	if (attrzp && mask) {
+		SA_ADD_BULK_ATTR(xattr_bulk, xattr_count,
+		    SA_ZPL_CTIME(zsb), NULL, &ctime,
+		    sizeof (ctime));
+	}
+
 	/*
 	 * Do this after setting timestamps to prevent timestamp
 	 * update from toggling bit
@@ -3847,7 +3851,7 @@ zfs_link(struct inode *tdip, struct inode *sip, char *name, cred_t *cr,
 		return (SET_ERROR(EINVAL));
 	}
 
-	owner = zfs_fuid_map_id(zsb, szp->z_uid, cr, ZFS_OWNER);
+	owner = zfs_fuid_map_id(zsb, KUID_TO_SUID(sip->i_uid), cr, ZFS_OWNER);
 	if (owner != crgetuid(cr) && secpolicy_basic_link(cr) != 0) {
 		ZFS_EXIT(zsb);
 		return (SET_ERROR(EPERM));

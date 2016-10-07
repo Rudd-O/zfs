@@ -674,15 +674,13 @@ typedef struct mnttab_node {
 static int
 libzfs_mnttab_cache_compare(const void *arg1, const void *arg2)
 {
-	const mnttab_node_t *mtn1 = arg1;
-	const mnttab_node_t *mtn2 = arg2;
+	const mnttab_node_t *mtn1 = (const mnttab_node_t *)arg1;
+	const mnttab_node_t *mtn2 = (const mnttab_node_t *)arg2;
 	int rv;
 
 	rv = strcmp(mtn1->mtn_mt.mnt_special, mtn2->mtn_mt.mnt_special);
 
-	if (rv == 0)
-		return (0);
-	return (rv > 0 ? 1 : -1);
+	return (AVL_ISIGN(rv));
 }
 
 void
@@ -1479,6 +1477,12 @@ zfs_setprop_error(libzfs_handle_t *hdl, zfs_prop_t prop, int err,
 			    "property setting is not allowed on "
 			    "bootable datasets"));
 			(void) zfs_error(hdl, EZFS_NOTSUP, errbuf);
+		} else if (prop == ZFS_PROP_CHECKSUM ||
+		    prop == ZFS_PROP_DEDUP) {
+			(void) zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
+			    "property setting is not allowed on "
+			    "root pools"));
+			(void) zfs_error(hdl, EZFS_NOTSUP, errbuf);
 		} else {
 			(void) zfs_standard_error(hdl, err, errbuf);
 		}
@@ -1572,7 +1576,7 @@ zfs_prop_set_list(zfs_handle_t *zhp, nvlist_t *props)
 	char errbuf[1024];
 	libzfs_handle_t *hdl = zhp->zfs_hdl;
 	nvlist_t *nvl;
-	int nvl_len;
+	int nvl_len = 0;
 	int added_resv = 0;
 	zfs_prop_t prop = 0;
 	nvpair_t *elem;
@@ -1602,7 +1606,6 @@ zfs_prop_set_list(zfs_handle_t *zhp, nvlist_t *props)
 	 * Check how many properties we're setting and allocate an array to
 	 * store changelist pointers for postfix().
 	 */
-	nvl_len = 0;
 	for (elem = nvlist_next_nvpair(nvl, NULL);
 	    elem != NULL;
 	    elem = nvlist_next_nvpair(nvl, elem))
@@ -1911,9 +1914,9 @@ zfs_unset_recvd_props_mode(zfs_handle_t *zhp, uint64_t *cookie)
  * zfs_prop_get_int() are built using this interface.
  *
  * Certain properties can be overridden using 'mount -o'.  In this case, scan
- * the contents of the /etc/mtab entry, searching for the appropriate options.
- * If they differ from the on-disk values, report the current values and mark
- * the source "temporary".
+ * the contents of the /proc/self/mounts entry, searching for the
+ * appropriate options. If they differ from the on-disk values, report the
+ * current values and mark the source "temporary".
  */
 static int
 get_numeric_property(zfs_handle_t *zhp, zfs_prop_t prop, zprop_source_t *src,
@@ -1984,8 +1987,9 @@ get_numeric_property(zfs_handle_t *zhp, zfs_prop_t prop, zprop_source_t *src,
 
 	/*
 	 * Because looking up the mount options is potentially expensive
-	 * (iterating over all of /etc/mtab), we defer its calculation until
-	 * we're looking up a property which requires its presence.
+	 * (iterating over all of /proc/self/mounts), we defer its
+	 * calculation until we're looking up a property which requires
+	 * its presence.
 	 */
 	if (!zhp->zfs_mntcheck &&
 	    (mntopt_on != NULL || prop == ZFS_PROP_MOUNTED)) {
@@ -2264,6 +2268,11 @@ zfs_get_clones_nvl(zfs_handle_t *zhp)
 			(void) strsep(&cp, "/@");
 			root = zfs_open(zhp->zfs_hdl, pool,
 			    ZFS_TYPE_FILESYSTEM);
+			if (root == NULL) {
+				nvlist_free(nv);
+				nvlist_free(value);
+				return (NULL);
+			}
 
 			(void) get_clones_cb(root, &gca);
 		}
@@ -2625,7 +2634,7 @@ uint64_t
 zfs_prop_get_int(zfs_handle_t *zhp, zfs_prop_t prop)
 {
 	char *source;
-	uint64_t val;
+	uint64_t val = 0;
 
 	(void) get_numeric_property(zhp, prop, NULL, &source, &val);
 

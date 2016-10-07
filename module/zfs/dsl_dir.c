@@ -203,7 +203,8 @@ dsl_dir_hold_obj(dsl_pool_t *dp, uint64_t ddobj,
 				    sizeof (foundobj), 1, &foundobj);
 				ASSERT(err || foundobj == ddobj);
 #endif
-				(void) strcpy(dd->dd_myname, tail);
+				(void) strlcpy(dd->dd_myname, tail,
+				    sizeof (dd->dd_myname));
 			} else {
 				err = zap_value_search(dp->dp_meta_objset,
 				    dsl_dir_phys(dd->dd_parent)->
@@ -1903,7 +1904,8 @@ dsl_dir_rename_sync(void *arg, dmu_tx_t *tx)
 	    dd->dd_myname, tx);
 	ASSERT0(error);
 
-	(void) strcpy(dd->dd_myname, mynewname);
+	(void) strlcpy(dd->dd_myname, mynewname,
+	    sizeof (dd->dd_myname));
 	dsl_dir_rele(dd->dd_parent, dd);
 	dsl_dir_phys(dd)->dd_parent_obj = newparent->dd_object;
 	VERIFY0(dsl_dir_hold_obj(dp,

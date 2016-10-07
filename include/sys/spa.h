@@ -23,6 +23,7 @@
  * Copyright (c) 2011, 2014 by Delphix. All rights reserved.
  * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2014 Spectra Logic Corporation, All rights reserved.
+ * Copyright 2013 Saso Kiselkov. All rights reserved.
  */
 
 #ifndef _SYS_SPA_H
@@ -36,6 +37,7 @@
 #include <sys/types.h>
 #include <sys/fs/zfs.h>
 #include <sys/spa_checksum.h>
+#include <sys/dmu.h>
 
 #ifdef	__cplusplus
 extern "C" {
@@ -135,6 +137,8 @@ _NOTE(CONSTCOND) } while (0)
 #define	SPA_PSIZEBITS		16	/* PSIZE up to 32M (2^16 * 512)	*/
 #define	SPA_ASIZEBITS		24	/* ASIZE up to 64 times larger	*/
 
+#define	SPA_COMPRESSBITS	7
+
 /*
  * All SPA data is represented by 128-bit data virtual addresses (DVAs).
  * The members of the dva_t should be considered opaque outside the SPA.
@@ -143,6 +147,14 @@ typedef struct dva {
 	uint64_t	dva_word[2];
 } dva_t;
 
+
+/*
+ * Some checksums/hashes need a 256-bit initialization salt. This salt is kept
+ * secret and is suitable for use in MAC algorithms as the key.
+ */
+typedef struct zio_cksum_salt {
+	uint8_t		zcs_bytes[32];
+} zio_cksum_salt_t;
 
 /*
  * Each block is described by its DVAs, time of birth, checksum, etc.
@@ -363,8 +375,10 @@ _NOTE(CONSTCOND) } while (0)
 	    16, SPA_PSIZEBITS, SPA_MINBLOCKSHIFT, 1, x); \
 _NOTE(CONSTCOND) } while (0)
 
-#define	BP_GET_COMPRESS(bp)		BF64_GET((bp)->blk_prop, 32, 7)
-#define	BP_SET_COMPRESS(bp, x)		BF64_SET((bp)->blk_prop, 32, 7, x)
+#define	BP_GET_COMPRESS(bp)		\
+	BF64_GET((bp)->blk_prop, 32, SPA_COMPRESSBITS)
+#define	BP_SET_COMPRESS(bp, x)		\
+	BF64_SET((bp)->blk_prop, 32, SPA_COMPRESSBITS, x)
 
 #define	BP_IS_EMBEDDED(bp)		BF64_GET((bp)->blk_prop, 39, 1)
 #define	BP_SET_EMBEDDED(bp, x)		BF64_SET((bp)->blk_prop, 39, 1, x)
@@ -553,8 +567,6 @@ _NOTE(CONSTCOND) } while (0)
 	}								\
 	ASSERT(len < size);						\
 }
-
-#include <sys/dmu.h>
 
 #define	BP_GET_BUFC_TYPE(bp)						\
 	(((BP_GET_LEVEL(bp) > 0) || (DMU_OT_IS_METADATA(BP_GET_TYPE(bp)))) ? \
@@ -849,8 +861,9 @@ extern void spa_log_error(spa_t *spa, zio_t *zio);
 extern void zfs_ereport_post(const char *class, spa_t *spa, vdev_t *vd,
     zio_t *zio, uint64_t stateoroffset, uint64_t length);
 extern void zfs_post_remove(spa_t *spa, vdev_t *vd);
-extern void zfs_post_state_change(spa_t *spa, vdev_t *vd);
+extern void zfs_post_state_change(spa_t *spa, vdev_t *vd, uint64_t laststate);
 extern void zfs_post_autoreplace(spa_t *spa, vdev_t *vd);
+extern void zfs_post_sysevent(spa_t *spa, vdev_t *vd, const char *name);
 extern uint64_t spa_get_errlog_size(spa_t *spa);
 extern int spa_get_errlog(spa_t *spa, void *uaddr, size_t *count);
 extern void spa_errlog_rotate(spa_t *spa);

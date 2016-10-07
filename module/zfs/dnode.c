@@ -69,19 +69,13 @@ dbuf_compare(const void *x1, const void *x2)
 	const dmu_buf_impl_t *d1 = x1;
 	const dmu_buf_impl_t *d2 = x2;
 
-	if (d1->db_level < d2->db_level) {
-		return (-1);
-	}
-	if (d1->db_level > d2->db_level) {
-		return (1);
-	}
+	int cmp = AVL_CMP(d1->db_level, d2->db_level);
+	if (likely(cmp))
+		return (cmp);
 
-	if (d1->db_blkid < d2->db_blkid) {
-		return (-1);
-	}
-	if (d1->db_blkid > d2->db_blkid) {
-		return (1);
-	}
+	cmp = AVL_CMP(d1->db_blkid, d2->db_blkid);
+	if (likely(cmp))
+		return (cmp);
 
 	if (d1->db_state == DB_SEARCH) {
 		ASSERT3S(d2->db_state, !=, DB_SEARCH);
@@ -91,13 +85,7 @@ dbuf_compare(const void *x1, const void *x2)
 		return (1);
 	}
 
-	if ((uintptr_t)d1 < (uintptr_t)d2) {
-		return (-1);
-	}
-	if ((uintptr_t)d1 > (uintptr_t)d2) {
-		return (1);
-	}
-	return (0);
+	return (AVL_PCMP(d1, d2));
 }
 
 /* ARGSUSED */
@@ -475,7 +463,7 @@ dnode_create(objset_t *os, dnode_phys_t *dnp, dmu_buf_impl_t *db,
 	dnh->dnh_dnode = dn;
 	mutex_exit(&os->os_lock);
 
-	arc_space_consume(sizeof (dnode_t), ARC_SPACE_OTHER);
+	arc_space_consume(sizeof (dnode_t), ARC_SPACE_DNODE);
 	return (dn);
 }
 
@@ -514,7 +502,7 @@ dnode_destroy(dnode_t *dn)
 	}
 	if (dn->dn_bonus != NULL) {
 		mutex_enter(&dn->dn_bonus->db_mtx);
-		dbuf_evict(dn->dn_bonus);
+		dbuf_destroy(dn->dn_bonus);
 		dn->dn_bonus = NULL;
 	}
 	dn->dn_zio = NULL;
@@ -531,7 +519,7 @@ dnode_destroy(dnode_t *dn)
 
 	dmu_zfetch_fini(&dn->dn_zfetch);
 	kmem_cache_free(dnode_cache, dn);
-	arc_space_return(sizeof (dnode_t), ARC_SPACE_OTHER);
+	arc_space_return(sizeof (dnode_t), ARC_SPACE_DNODE);
 
 	if (complete_os_eviction)
 		dmu_objset_evict_done(os);
@@ -1624,6 +1612,8 @@ dnode_new_blkid(dnode_t *dn, uint64_t blkid, dmu_tx_t *tx, boolean_t have_read)
 	    sz <= blkid && sz >= dn->dn_nblkptr; sz <<= epbs)
 		new_nlevels++;
 
+	ASSERT3U(new_nlevels, <=, DN_MAX_LEVELS);
+
 	if (new_nlevels > dn->dn_nlevels) {
 		int old_nlevels = dn->dn_nlevels;
 		dmu_buf_impl_t *db;
@@ -2085,7 +2075,14 @@ dnode_next_offset_level(dnode_t *dn, int flags, uint64_t *offset,
 		else
 			minfill++;
 
-		*offset = *offset >> span;
+		if (span >= 8 * sizeof (*offset)) {
+			/* This only happens on the highest indirection level */
+			ASSERT3U((lvl - 1), ==, dn->dn_phys->dn_nlevels - 1);
+			*offset = 0;
+		} else {
+			*offset = *offset >> span;
+		}
+
 		for (i = BF64_GET(*offset, 0, epbs);
 		    i >= 0 && i < epb; i += inc) {
 			if (BP_GET_FILL(&bp[i]) >= minfill &&
@@ -2095,7 +2092,13 @@ dnode_next_offset_level(dnode_t *dn, int flags, uint64_t *offset,
 			if (inc > 0 || *offset > 0)
 				*offset += inc;
 		}
-		*offset = *offset << span;
+
+		if (span >= 8 * sizeof (*offset)) {
+			*offset = start;
+		} else {
+			*offset = *offset << span;
+		}
+
 		if (inc < 0) {
 			/* traversing backwards; position offset at the end */
 			ASSERT3U(*offset, <=, start);

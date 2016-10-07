@@ -334,8 +334,11 @@ check_file(const char *file, boolean_t force, boolean_t isspare)
 		/*
 		 * Allow hot spares to be shared between pools.
 		 */
-		if (state == POOL_STATE_SPARE && isspare)
+		if (state == POOL_STATE_SPARE && isspare) {
+			free(name);
+			(void) close(fd);
 			return (0);
+		}
 
 		if (state == POOL_STATE_ACTIVE ||
 		    state == POOL_STATE_SPARE || !force) {
@@ -486,28 +489,19 @@ static int
 check_device(const char *path, boolean_t force,
     boolean_t isspare, boolean_t iswholedisk)
 {
-	static blkid_cache cache = NULL;
+	blkid_cache cache;
+	int error;
 
-	/*
-	 * There is no easy way to add a correct blkid_put_cache() call,
-	 * memory will be reclaimed when the command exits.
-	 */
-	if (cache == NULL) {
-		int err;
-
-		if ((err = blkid_get_cache(&cache, NULL)) != 0) {
-			check_error(err);
-			return (-1);
-		}
-
-		if ((err = blkid_probe_all(cache)) != 0) {
-			blkid_put_cache(cache);
-			check_error(err);
-			return (-1);
-		}
+	error = blkid_get_cache(&cache, NULL);
+	if (error != 0) {
+		check_error(error);
+		return (-1);
 	}
 
-	return (check_disk(path, cache, force, isspare, iswholedisk));
+	error = check_disk(path, cache, force, isspare, iswholedisk);
+	blkid_put_cache(cache);
+
+	return (error);
 }
 
 /*
@@ -592,8 +586,10 @@ is_spare(nvlist_t *config, const char *path)
 	free(name);
 	(void) close(fd);
 
-	if (config == NULL)
+	if (config == NULL) {
+		nvlist_free(label);
 		return (B_TRUE);
+	}
 
 	verify(nvlist_lookup_uint64(label, ZPOOL_CONFIG_GUID, &guid) == 0);
 	nvlist_free(label);
@@ -739,7 +735,7 @@ make_leaf_vdev(nvlist_t *props, const char *arg, uint64_t is_log)
 	}
 
 	if (ashift > 0)
-		nvlist_add_uint64(vdev, ZPOOL_CONFIG_ASHIFT, ashift);
+		(void) nvlist_add_uint64(vdev, ZPOOL_CONFIG_ASHIFT, ashift);
 
 	return (vdev);
 }
@@ -1203,7 +1199,7 @@ make_disks(zpool_handle_t *zhp, nvlist_t *nv)
 		 * window between when udev deletes and recreates the link
 		 * during which access attempts will fail with ENOENT.
 		 */
-		strncpy(udevpath, path, MAXPATHLEN);
+		strlcpy(udevpath, path, MAXPATHLEN);
 		(void) zfs_append_partition(udevpath, MAXPATHLEN);
 
 		fd = open(devpath, O_RDWR|O_EXCL);
@@ -1449,6 +1445,7 @@ construct_spec(nvlist_t *props, int argc, char **argv)
 	nl2cache = 0;
 	is_log = B_FALSE;
 	seen_logs = B_FALSE;
+	nvroot = NULL;
 
 	while (argc > 0) {
 		nv = NULL;
@@ -1467,7 +1464,7 @@ construct_spec(nvlist_t *props, int argc, char **argv)
 					    gettext("invalid vdev "
 					    "specification: 'spare' can be "
 					    "specified only once\n"));
-					return (NULL);
+					goto spec_out;
 				}
 				is_log = B_FALSE;
 			}
@@ -1478,7 +1475,7 @@ construct_spec(nvlist_t *props, int argc, char **argv)
 					    gettext("invalid vdev "
 					    "specification: 'log' can be "
 					    "specified only once\n"));
-					return (NULL);
+					goto spec_out;
 				}
 				seen_logs = B_TRUE;
 				is_log = B_TRUE;
@@ -1497,7 +1494,7 @@ construct_spec(nvlist_t *props, int argc, char **argv)
 					    gettext("invalid vdev "
 					    "specification: 'cache' can be "
 					    "specified only once\n"));
-					return (NULL);
+					goto spec_out;
 				}
 				is_log = B_FALSE;
 			}
@@ -1508,7 +1505,7 @@ construct_spec(nvlist_t *props, int argc, char **argv)
 					    gettext("invalid vdev "
 					    "specification: unsupported 'log' "
 					    "device: %s\n"), type);
-					return (NULL);
+					goto spec_out;
 				}
 				nlogs++;
 			}
@@ -1522,8 +1519,13 @@ construct_spec(nvlist_t *props, int argc, char **argv)
 				if (child == NULL)
 					zpool_no_memory();
 				if ((nv = make_leaf_vdev(props, argv[c],
-				    B_FALSE)) == NULL)
-					return (NULL);
+				    B_FALSE)) == NULL) {
+					for (c = 0; c < children - 1; c++)
+						nvlist_free(child[c]);
+					free(child);
+					goto spec_out;
+				}
+
 				child[children - 1] = nv;
 			}
 
@@ -1531,14 +1533,20 @@ construct_spec(nvlist_t *props, int argc, char **argv)
 				(void) fprintf(stderr, gettext("invalid vdev "
 				    "specification: %s requires at least %d "
 				    "devices\n"), argv[0], mindev);
-				return (NULL);
+				for (c = 0; c < children; c++)
+					nvlist_free(child[c]);
+				free(child);
+				goto spec_out;
 			}
 
 			if (children > maxdev) {
 				(void) fprintf(stderr, gettext("invalid vdev "
 				    "specification: %s supports no more than "
 				    "%d devices\n"), argv[0], maxdev);
-				return (NULL);
+				for (c = 0; c < children; c++)
+					nvlist_free(child[c]);
+				free(child);
+				goto spec_out;
 			}
 
 			argc -= c;
@@ -1579,7 +1587,8 @@ construct_spec(nvlist_t *props, int argc, char **argv)
 			 */
 			if ((nv = make_leaf_vdev(props, argv[0],
 			    is_log)) == NULL)
-				return (NULL);
+				goto spec_out;
+
 			if (is_log)
 				nlogs++;
 			argc--;
@@ -1597,13 +1606,13 @@ construct_spec(nvlist_t *props, int argc, char **argv)
 		(void) fprintf(stderr, gettext("invalid vdev "
 		    "specification: at least one toplevel vdev must be "
 		    "specified\n"));
-		return (NULL);
+		goto spec_out;
 	}
 
 	if (seen_logs && nlogs == 0) {
 		(void) fprintf(stderr, gettext("invalid vdev specification: "
 		    "log requires at least 1 device\n"));
-		return (NULL);
+		goto spec_out;
 	}
 
 	/*
@@ -1621,16 +1630,16 @@ construct_spec(nvlist_t *props, int argc, char **argv)
 		verify(nvlist_add_nvlist_array(nvroot, ZPOOL_CONFIG_L2CACHE,
 		    l2cache, nl2cache) == 0);
 
+spec_out:
 	for (t = 0; t < toplevels; t++)
 		nvlist_free(top[t]);
 	for (t = 0; t < nspares; t++)
 		nvlist_free(spares[t]);
 	for (t = 0; t < nl2cache; t++)
 		nvlist_free(l2cache[t]);
-	if (spares)
-		free(spares);
-	if (l2cache)
-		free(l2cache);
+
+	free(spares);
+	free(l2cache);
 	free(top);
 
 	return (nvroot);

@@ -247,11 +247,9 @@ dsl_scan_setup_sync(void *arg, dmu_tx_t *tx)
 
 		if (vdev_resilver_needed(spa->spa_root_vdev,
 		    &scn->scn_phys.scn_min_txg, &scn->scn_phys.scn_max_txg)) {
-			spa_event_notify(spa, NULL,
-			    FM_EREPORT_ZFS_RESILVER_START);
+			spa_event_notify(spa, NULL, ESC_ZFS_RESILVER_START);
 		} else {
-			spa_event_notify(spa, NULL,
-			    FM_EREPORT_ZFS_SCRUB_START);
+			spa_event_notify(spa, NULL, ESC_ZFS_SCRUB_START);
 		}
 
 		spa->spa_scrub_started = B_TRUE;
@@ -359,8 +357,7 @@ dsl_scan_done(dsl_scan_t *scn, boolean_t complete, dmu_tx_t *tx)
 		    complete ? scn->scn_phys.scn_max_txg : 0, B_TRUE);
 		if (complete) {
 			spa_event_notify(spa, NULL, scn->scn_phys.scn_min_txg ?
-			    FM_EREPORT_ZFS_RESILVER_FINISH :
-			    FM_EREPORT_ZFS_SCRUB_FINISH);
+			    ESC_ZFS_RESILVER_FINISH : ESC_ZFS_SCRUB_FINISH);
 		}
 		spa_errlog_rotate(spa);
 
@@ -695,7 +692,7 @@ dsl_scan_recurse(dsl_scan_t *scn, dsl_dataset_t *ds, dmu_objset_type_t ostype,
 			dsl_scan_visitbp(cbp, &czb, dnp,
 			    ds, scn, ostype, tx);
 		}
-		(void) arc_buf_remove_ref(buf, &buf);
+		arc_buf_destroy(buf, &buf);
 	} else if (BP_GET_TYPE(bp) == DMU_OT_DNODE) {
 		arc_flags_t flags = ARC_FLAG_WAIT;
 		dnode_phys_t *cdnp;
@@ -725,7 +722,7 @@ dsl_scan_recurse(dsl_scan_t *scn, dsl_dataset_t *ds, dmu_objset_type_t ostype,
 			    cdnp, zb->zb_blkid * epb + i, tx);
 		}
 
-		(void) arc_buf_remove_ref(buf, &buf);
+		arc_buf_destroy(buf, &buf);
 	} else if (BP_GET_TYPE(bp) == DMU_OT_OBJSET) {
 		arc_flags_t flags = ARC_FLAG_WAIT;
 		objset_phys_t *osp;
@@ -757,7 +754,7 @@ dsl_scan_recurse(dsl_scan_t *scn, dsl_dataset_t *ds, dmu_objset_type_t ostype,
 			    &osp->os_userused_dnode,
 			    DMU_USERUSED_OBJECT, tx);
 		}
-		(void) arc_buf_remove_ref(buf, &buf);
+		arc_buf_destroy(buf, &buf);
 	}
 
 	return (0);
