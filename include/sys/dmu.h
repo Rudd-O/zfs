@@ -257,6 +257,12 @@ void zfs_znode_byteswap(void *buf, size_t size);
 #define	DMU_GROUPUSED_OBJECT	(-2ULL)
 
 /*
+ * Zap prefix for object accounting in DMU_{USER,GROUP}USED_OBJECT.
+ */
+#define	DMU_OBJACCT_PREFIX	"obj-"
+#define	DMU_OBJACCT_PREFIX_LEN	4
+
+/*
  * artificial blkids for bonus buffer and spill blocks
  */
 #define	DMU_BONUS_BLKID		(-1ULL)
@@ -738,6 +744,7 @@ struct arc_buf *dmu_request_arcbuf(dmu_buf_t *handle, int size);
 void dmu_return_arcbuf(struct arc_buf *buf);
 void dmu_assign_arcbuf(dmu_buf_t *handle, uint64_t offset, struct arc_buf *buf,
     dmu_tx_t *tx);
+#ifdef HAVE_UIO_ZEROCOPY
 int dmu_xuio_init(struct xuio *uio, int niov);
 void dmu_xuio_fini(struct xuio *uio);
 int dmu_xuio_add(struct xuio *uio, struct arc_buf *abuf, offset_t off,
@@ -745,6 +752,7 @@ int dmu_xuio_add(struct xuio *uio, struct arc_buf *abuf, offset_t off,
 int dmu_xuio_cnt(struct xuio *uio);
 struct arc_buf *dmu_xuio_arcbuf(struct xuio *uio, int i);
 void dmu_xuio_clear(struct xuio *uio, int i);
+#endif /* HAVE_UIO_ZEROCOPY */
 void xuio_stat_wbuf_copied(void);
 void xuio_stat_wbuf_nocopy(void);
 

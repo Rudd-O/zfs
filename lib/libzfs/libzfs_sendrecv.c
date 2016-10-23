@@ -3025,6 +3025,7 @@ recv_skip(libzfs_handle_t *hdl, int fd, boolean_t byteswap)
 		default:
 			zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
 			    "invalid record type"));
+			free(buf);
 			return (zfs_error(hdl, EZFS_BADSTREAM, errbuf));
 		}
 	}
@@ -3110,6 +3111,7 @@ zfs_receive_one(libzfs_handle_t *hdl, int infd, const char *tosnap,
 	    ENOENT);
 
 	if (stream_avl != NULL) {
+		nvlist_t *lookup = NULL;
 		nvlist_t *fs = fsavl_find(stream_avl, drrb->drr_toguid,
 		    &snapname);
 
@@ -3124,6 +3126,10 @@ zfs_receive_one(libzfs_handle_t *hdl, int infd, const char *tosnap,
 		if (flags->canmountoff) {
 			VERIFY(0 == nvlist_add_uint64(props,
 			    zfs_prop_to_name(ZFS_PROP_CANMOUNT), 0));
+		}
+		if (0 == nvlist_lookup_nvlist(fs, "snapprops", &lookup)) {
+			VERIFY(0 == nvlist_lookup_nvlist(lookup,
+			    snapname, &snapprops_nvlist));
 		}
 	}
 
@@ -3207,7 +3213,7 @@ zfs_receive_one(libzfs_handle_t *hdl, int infd, const char *tosnap,
 	/*
 	 * Determine name of destination snapshot.
 	 */
-	(void) strcpy(destsnap, tosnap);
+	(void) strlcpy(destsnap, tosnap, sizeof (destsnap));
 	(void) strlcat(destsnap, chopprefix, sizeof (destsnap));
 	free(cp);
 	if (!zfs_name_valid(destsnap, ZFS_TYPE_SNAPSHOT)) {
