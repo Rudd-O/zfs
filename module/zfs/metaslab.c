@@ -1724,7 +1724,7 @@ metaslab_group_preload(metaslab_group_t *mg)
 		 */
 		mutex_exit(&mg->mg_lock);
 		VERIFY(taskq_dispatch(mg->mg_taskq, metaslab_preload,
-		    msp, TQ_SLEEP) != 0);
+		    msp, TQ_SLEEP) != TASKQID_INVALID);
 		mutex_enter(&mg->mg_lock);
 		msp = msp_next;
 	}
@@ -1769,7 +1769,7 @@ metaslab_should_condense(metaslab_t *msp)
 	range_seg_t *rs;
 	uint64_t size, entries, segsz, object_size, optimal_size, record_size;
 	dmu_object_info_t doi;
-	uint64_t vdev_blocksize = 1 << msp->ms_group->mg_vd->vdev_ashift;
+	uint64_t vdev_blocksize = 1ULL << msp->ms_group->mg_vd->vdev_ashift;
 
 	ASSERT(MUTEX_HELD(&msp->ms_lock));
 	ASSERT(msp->ms_loaded);

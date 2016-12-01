@@ -31,6 +31,7 @@
 #include <sys/zio.h>
 #include <sys/fs/zfs.h>
 #include <sys/fm/fs/zfs.h>
+#include <sys/abd.h>
 
 /*
  * Virtual device vector for files.
@@ -150,11 +151,21 @@ vdev_file_io_strategy(void *arg)
 	vdev_t *vd = zio->io_vd;
 	vdev_file_t *vf = vd->vdev_tsd;
 	ssize_t resid;
+	void *buf;
+
+	if (zio->io_type == ZIO_TYPE_READ)
+		buf = abd_borrow_buf(zio->io_abd, zio->io_size);
+	else
+		buf = abd_borrow_buf_copy(zio->io_abd, zio->io_size);
 
 	zio->io_error = vn_rdwr(zio->io_type == ZIO_TYPE_READ ?
-	    UIO_READ : UIO_WRITE, vf->vf_vnode, zio->io_data,
-	    zio->io_size, zio->io_offset, UIO_SYSSPACE,
-	    0, RLIM64_INFINITY, kcred, &resid);
+	    UIO_READ : UIO_WRITE, vf->vf_vnode, buf, zio->io_size,
+	    zio->io_offset, UIO_SYSSPACE, 0, RLIM64_INFINITY, kcred, &resid);
+
+	if (zio->io_type == ZIO_TYPE_READ)
+		abd_return_buf_copy(zio->io_abd, buf, zio->io_size);
+	else
+		abd_return_buf(zio->io_abd, buf, zio->io_size);
 
 	if (resid != 0 && zio->io_error == 0)
 		zio->io_error = SET_ERROR(ENOSPC);
@@ -202,7 +213,8 @@ vdev_file_io_start(zio_t *zio)
 			 */
 			if (spl_fstrans_check()) {
 				VERIFY3U(taskq_dispatch(system_taskq,
-				    vdev_file_io_fsync, zio, TQ_SLEEP), !=, 0);
+				    vdev_file_io_fsync, zio, TQ_SLEEP), !=,
+				    TASKQID_INVALID);
 				return;
 			}
 
@@ -220,7 +232,7 @@ vdev_file_io_start(zio_t *zio)
 	zio->io_target_timestamp = zio_handle_io_delay(zio);
 
 	VERIFY3U(taskq_dispatch(system_taskq, vdev_file_io_strategy, zio,
-	    TQ_SLEEP), !=, 0);
+	    TQ_SLEEP), !=, TASKQID_INVALID);
 }
 
 /* ARGSUSED */

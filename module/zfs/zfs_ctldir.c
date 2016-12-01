@@ -147,7 +147,7 @@ zfsctl_snapshot_alloc(char *full_name, char *full_path, spa_t *spa,
 	se->se_spa = spa;
 	se->se_objsetid = objsetid;
 	se->se_root_dentry = root_dentry;
-	se->se_taskqid = -1;
+	se->se_taskqid = TASKQID_INVALID;
 
 	refcount_create(&se->se_refcount);
 
@@ -339,7 +339,7 @@ snapentry_expire(void *data)
 		return;
 	}
 
-	se->se_taskqid = -1;
+	se->se_taskqid = TASKQID_INVALID;
 	(void) zfsctl_snapshot_unmount(se->se_name, MNT_EXPIRE);
 	zfsctl_snapshot_rele(se);
 
@@ -366,7 +366,7 @@ zfsctl_snapshot_unmount_cancel(zfs_snapentry_t *se)
 	ASSERT(RW_LOCK_HELD(&zfs_snapshot_lock));
 
 	if (taskq_cancel_id(zfs_expire_taskq, se->se_taskqid) == 0) {
-		se->se_taskqid = -1;
+		se->se_taskqid = TASKQID_INVALID;
 		zfsctl_snapshot_rele(se);
 	}
 }
@@ -377,7 +377,7 @@ zfsctl_snapshot_unmount_cancel(zfs_snapentry_t *se)
 static void
 zfsctl_snapshot_unmount_delay_impl(zfs_snapentry_t *se, int delay)
 {
-	ASSERT3S(se->se_taskqid, ==, -1);
+	ASSERT3S(se->se_taskqid, ==, TASKQID_INVALID);
 
 	if (delay <= 0)
 		return;
@@ -548,7 +548,6 @@ zfsctl_inode_lookup(zfs_sb_t *zsb, uint64_t id,
 int
 zfsctl_create(zfs_sb_t *zsb)
 {
-#if defined(CONFIG_64BIT)
 	ASSERT(zsb->z_ctldir == NULL);
 
 	zsb->z_ctldir = zfsctl_inode_alloc(zsb, ZFSCTL_INO_ROOT,
@@ -557,9 +556,6 @@ zfsctl_create(zfs_sb_t *zsb)
 		return (SET_ERROR(ENOENT));
 
 	return (0);
-#else
-	return (SET_ERROR(EOPNOTSUPP));
-#endif /* CONFIG_64BIT */
 }
 
 /*

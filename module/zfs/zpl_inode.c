@@ -214,6 +214,45 @@ zpl_mknod(struct inode *dir, struct dentry *dentry, zpl_umode_t mode,
 	return (error);
 }
 
+#ifdef HAVE_TMPFILE
+static int
+zpl_tmpfile(struct inode *dir, struct dentry *dentry, zpl_umode_t mode)
+{
+	cred_t *cr = CRED();
+	struct inode *ip;
+	vattr_t *vap;
+	int error;
+	fstrans_cookie_t cookie;
+
+	crhold(cr);
+	vap = kmem_zalloc(sizeof (vattr_t), KM_SLEEP);
+	zpl_vap_init(vap, dir, mode, cr);
+
+	cookie = spl_fstrans_mark();
+	error = -zfs_tmpfile(dir, vap, 0, mode, &ip, cr, 0, NULL);
+	if (error == 0) {
+		/* d_tmpfile will do drop_nlink, so we should set it first */
+		set_nlink(ip, 1);
+		d_tmpfile(dentry, ip);
+
+		error = zpl_xattr_security_init(ip, dir, &dentry->d_name);
+		if (error == 0)
+			error = zpl_init_acl(ip, dir);
+		/*
+		 * don't need to handle error here, file is already in
+		 * unlinked set.
+		 */
+	}
+
+	spl_fstrans_unmark(cookie);
+	kmem_free(vap, sizeof (vattr_t));
+	crfree(cr);
+	ASSERT3S(error, <=, 0);
+
+	return (error);
+}
+#endif
+
 static int
 zpl_unlink(struct inode *dir, struct dentry *dentry)
 {
@@ -677,6 +716,9 @@ const struct inode_operations zpl_inode_operations = {
 	.fallocate	= zpl_fallocate,
 #endif /* HAVE_INODE_FALLOCATE */
 #if defined(CONFIG_FS_POSIX_ACL)
+#if defined(HAVE_SET_ACL)
+	.set_acl	= zpl_set_acl,
+#endif
 #if defined(HAVE_GET_ACL)
 	.get_acl	= zpl_get_acl,
 #elif defined(HAVE_CHECK_ACL)
@@ -701,6 +743,9 @@ const struct inode_operations zpl_dir_inode_operations = {
 #else
 	.rename		= zpl_rename,
 #endif
+#ifdef HAVE_TMPFILE
+	.tmpfile	= zpl_tmpfile,
+#endif
 	.setattr	= zpl_setattr,
 	.getattr	= zpl_getattr,
 #ifdef HAVE_GENERIC_SETXATTR
@@ -710,6 +755,9 @@ const struct inode_operations zpl_dir_inode_operations = {
 #endif
 	.listxattr	= zpl_xattr_list,
 #if defined(CONFIG_FS_POSIX_ACL)
+#if defined(HAVE_SET_ACL)
+	.set_acl	= zpl_set_acl,
+#endif
 #if defined(HAVE_GET_ACL)
 	.get_acl	= zpl_get_acl,
 #elif defined(HAVE_CHECK_ACL)
@@ -750,6 +798,9 @@ const struct inode_operations zpl_special_inode_operations = {
 #endif
 	.listxattr	= zpl_xattr_list,
 #if defined(CONFIG_FS_POSIX_ACL)
+#if defined(HAVE_SET_ACL)
+	.set_acl	= zpl_set_acl,
+#endif
 #if defined(HAVE_GET_ACL)
 	.get_acl	= zpl_get_acl,
 #elif defined(HAVE_CHECK_ACL)

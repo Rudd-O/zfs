@@ -89,6 +89,7 @@ AC_DEFUN([ZFS_AC_CONFIG_USER_COMMANDS_COMMON], [
 	AC_PATH_TOOL(USERADD, useradd, "/usr/sbin/useradd")
 	AC_PATH_TOOL(USERDEL, userdel, "/usr/sbin/userdel")
 	AC_PATH_TOOL(USERMOD, usermod, "/usr/sbin/usermod")
+	AC_PATH_TOOL(UUIDGEN, uuidgen, "")
 	AC_PATH_TOOL(WAIT, wait, "wait") dnl # Builtin in bash
 	AC_PATH_TOOL(WC, wc, "")
 ])
@@ -115,6 +116,7 @@ AC_DEFUN([ZFS_AC_CONFIG_USER_COMMANDS_LINUX], [
 	AC_PATH_TOOL(READLINK, readlink, "")
 	AC_PATH_TOOL(SETFACL, setfacl, "")
 	AC_PATH_TOOL(SHARE, exportfs, "")
+	AC_PATH_TOOL(NET, net, "")
 	AC_PATH_TOOL(SWAP, swapon, "")
 	AC_PATH_TOOL(SWAPADD, swapon, "")
 	AC_PATH_TOOL(UDEVADM, udevadm, "")
@@ -143,7 +145,6 @@ AC_DEFUN([ZFS_AC_CONFIG_USER_COMMANDS_BSD], [
 	AC_PATH_TOOL(DUMPADM, dumpadm, "")
 	AC_PATH_TOOL(FORMAT, format, "")
 	AC_PATH_TOOL(GETMAJOR, getmajor, "")
-	AC_PATH_TOOL(ISAINFO, isainfo, "")
 	AC_PATH_TOOL(KSTAT, kstat, "")
 	AC_PATH_TOOL(LOCKFS, lockfs, "")
 	AC_PATH_TOOL(LOFIADM, lofiadm, "")

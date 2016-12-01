@@ -174,7 +174,7 @@ zvol_is_zvol(const char *device)
 	struct block_device *bdev;
 	unsigned int major;
 
-	bdev = lookup_bdev(device);
+	bdev = vdev_lookup_bdev(device);
 	if (IS_ERR(bdev))
 		return (B_FALSE);
 
@@ -281,7 +281,7 @@ zvol_check_volsize(uint64_t volsize, uint64_t blocksize)
 		return (SET_ERROR(EINVAL));
 
 #ifdef _ILP32
-	if (volsize - 1 > MAXOFFSET_T)
+	if (volsize - 1 > SPEC_MAXOFFSET_T)
 		return (SET_ERROR(EOVERFLOW));
 #endif
 	return (0);
@@ -1895,7 +1895,7 @@ zvol_create_minors(spa_t *spa, const char *name, boolean_t async)
 		return;
 
 	id = taskq_dispatch(spa->spa_zvol_taskq, zvol_task_cb, task, TQ_SLEEP);
-	if ((async == B_FALSE) && (id != 0))
+	if ((async == B_FALSE) && (id != TASKQID_INVALID))
 		taskq_wait_id(spa->spa_zvol_taskq, id);
 }
 
@@ -1910,7 +1910,7 @@ zvol_remove_minors(spa_t *spa, const char *name, boolean_t async)
 		return;
 
 	id = taskq_dispatch(spa->spa_zvol_taskq, zvol_task_cb, task, TQ_SLEEP);
-	if ((async == B_FALSE) && (id != 0))
+	if ((async == B_FALSE) && (id != TASKQID_INVALID))
 		taskq_wait_id(spa->spa_zvol_taskq, id);
 }
 
@@ -1926,7 +1926,7 @@ zvol_rename_minors(spa_t *spa, const char *name1, const char *name2,
 		return;
 
 	id = taskq_dispatch(spa->spa_zvol_taskq, zvol_task_cb, task, TQ_SLEEP);
-	if ((async == B_FALSE) && (id != 0))
+	if ((async == B_FALSE) && (id != TASKQID_INVALID))
 		taskq_wait_id(spa->spa_zvol_taskq, id);
 }
 

@@ -755,7 +755,7 @@ dmu_tx_hold_zap(dmu_tx_t *tx, uint64_t object, int add, const char *name)
 		 * block.  So there will be at most 2 blocks total,
 		 * including the header block.
 		 */
-		dmu_tx_count_write(txh, 0, 2 << fzap_default_block_shift);
+		dmu_tx_count_write(txh, 0, 2ULL << fzap_default_block_shift);
 		return;
 	}
 
@@ -1249,7 +1249,8 @@ dmu_tx_unassign(dmu_tx_t *tx)
 	 * Walk the transaction's hold list, removing the hold on the
 	 * associated dnode, and notifying waiters if the refcount drops to 0.
 	 */
-	for (txh = list_head(&tx->tx_holds); txh != tx->tx_needassign_txh;
+	for (txh = list_head(&tx->tx_holds);
+	    txh && txh != tx->tx_needassign_txh;
 	    txh = list_next(&tx->tx_holds, txh)) {
 		dnode_t *dn = txh->txh_dnode;
 

@@ -53,6 +53,7 @@ extern "C" {
 typedef struct vdev_queue vdev_queue_t;
 typedef struct vdev_cache vdev_cache_t;
 typedef struct vdev_cache_entry vdev_cache_entry_t;
+struct abd;
 
 extern int zfs_vdev_queue_depth_pct;
 extern uint32_t zfs_vdev_async_write_max_active;
@@ -87,7 +88,7 @@ typedef const struct vdev_ops {
  * Virtual device properties
  */
 struct vdev_cache_entry {
-	char		*ve_data;
+	struct abd	*ve_abd;
 	uint64_t	ve_offset;
 	clock_t		ve_lastused;
 	avl_node_t	ve_offset_node;
@@ -213,6 +214,7 @@ struct vdev {
 	char		*vdev_path;	/* vdev path (if any)		*/
 	char		*vdev_devid;	/* vdev devid (if any)		*/
 	char		*vdev_physpath;	/* vdev device path (if any)	*/
+	char		*vdev_enc_sysfs_path;	/* enclosure sysfs path */
 	char		*vdev_fru;	/* physical FRU location	*/
 	uint64_t	vdev_not_present; /* not present during import	*/
 	uint64_t	vdev_unspare;	/* unspare when resilvering done */

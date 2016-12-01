@@ -168,7 +168,7 @@ zfs_unavail_pool(zpool_handle_t *zhp, void *data)
  * operation when finished).  If this succeeds, then we're done.  If it fails,
  * and the new state is VDEV_CANT_OPEN, it indicates that the device was opened,
  * but that the label was not what we expected.  If the 'autoreplace' property
- * is not set, then we relabel the disk (if specified), and attempt a 'zpool
+ * is enabled, then we relabel the disk (if specified), and attempt a 'zpool
  * replace'.  If the online is successful, but the new state is something else
  * (REMOVED or FAULTED), it indicates that we're out of sync or in some sort of
  * race, and we should avoid attempting to relabel the disk.
@@ -185,7 +185,7 @@ zfs_process_add(zpool_handle_t *zhp, nvlist_t *vdev, boolean_t labeled)
 	uint64_t wholedisk = 0ULL;
 	uint64_t offline = 0ULL;
 	uint64_t guid = 0ULL;
-	char *physpath = NULL, *new_devid = NULL;
+	char *physpath = NULL, *new_devid = NULL, *enc_sysfs_path = NULL;
 	char rawpath[PATH_MAX], fullpath[PATH_MAX];
 	char devpath[PATH_MAX];
 	int ret;
@@ -206,6 +206,8 @@ zfs_process_add(zpool_handle_t *zhp, nvlist_t *vdev, boolean_t labeled)
 	}
 
 	(void) nvlist_lookup_string(vdev, ZPOOL_CONFIG_PHYS_PATH, &physpath);
+	(void) nvlist_lookup_string(vdev, ZPOOL_CONFIG_VDEV_ENC_SYSFS_PATH,
+	    &enc_sysfs_path);
 	(void) nvlist_lookup_uint64(vdev, ZPOOL_CONFIG_WHOLE_DISK, &wholedisk);
 	(void) nvlist_lookup_uint64(vdev, ZPOOL_CONFIG_OFFLINE, &offline);
 	(void) nvlist_lookup_uint64(vdev, ZPOOL_CONFIG_GUID, &guid);
@@ -213,9 +215,7 @@ zfs_process_add(zpool_handle_t *zhp, nvlist_t *vdev, boolean_t labeled)
 	if (offline)
 		return;  /* don't intervene if it was taken offline */
 
-#ifdef	HAVE_LIBDEVMAPPER
-	is_dm = dev_is_dm(path);
-#endif
+	is_dm = zfs_dev_is_dm(path);
 	zed_log_msg(LOG_INFO, "zfs_process_add: pool '%s' vdev '%s', phys '%s'"
 	    " wholedisk %d, dm %d (%llu)", zpool_get_name(zhp), path,
 	    physpath ? physpath : "NULL", wholedisk, is_dm,
@@ -259,16 +259,15 @@ zfs_process_add(zpool_handle_t *zhp, nvlist_t *vdev, boolean_t labeled)
 	}
 
 	/*
-	 * If the pool doesn't have the autoreplace property set, then attempt
-	 * a true online (without the unspare flag), which will trigger a FMA
-	 * fault.
+	 * If the pool doesn't have the autoreplace property set, then use
+	 * vdev online to trigger a FMA fault by posting an ereport.
 	 */
-	if (!is_dm && (!zpool_get_prop_int(zhp, ZPOOL_PROP_AUTOREPLACE, NULL) ||
-	    !wholedisk || physpath == NULL)) {
+	if (!zpool_get_prop_int(zhp, ZPOOL_PROP_AUTOREPLACE, NULL) ||
+	    !(wholedisk || is_dm) || (physpath == NULL)) {
 		(void) zpool_vdev_online(zhp, fullpath, ZFS_ONLINE_FORCEFAULT,
 		    &newstate);
-		zed_log_msg(LOG_INFO, "  zpool_vdev_online: %s FORCEFAULT (%s)",
-		    fullpath, libzfs_error_description(g_zfshdl));
+		zed_log_msg(LOG_INFO, "Pool's autoreplace is not enabled or "
+		    "not a whole disk for '%s'", fullpath);
 		return;
 	}
 
@@ -286,12 +285,6 @@ zfs_process_add(zpool_handle_t *zhp, nvlist_t *vdev, boolean_t labeled)
 
 		zed_log_msg(LOG_INFO, "  zpool_vdev_online: %s FORCEFAULT (%s)",
 		    fullpath, libzfs_error_description(g_zfshdl));
-		return;
-	}
-
-	if (!zpool_get_prop_int(zhp, ZPOOL_PROP_AUTOREPLACE, NULL)) {
-		zed_log_msg(LOG_INFO, "%s: Autoreplace is not enabled on this"
-		    " pool, ignore disk.", __func__);
 		return;
 	}
 
@@ -367,9 +360,13 @@ zfs_process_add(zpool_handle_t *zhp, nvlist_t *vdev, boolean_t labeled)
 				found = B_TRUE;
 				break;
 			}
+			zed_log_msg(LOG_INFO, "zpool_label_disk: %s != %s",
+			    physpath, device->pd_physpath);
 		}
 		if (!found) {
 			/* unexpected partition slice encountered */
+			zed_log_msg(LOG_INFO, "labeled disk %s unexpected here",
+			    fullpath);
 			(void) zpool_vdev_online(zhp, fullpath,
 			    ZFS_ONLINE_FORCEFAULT, &newstate);
 			return;
@@ -402,6 +399,8 @@ zfs_process_add(zpool_handle_t *zhp, nvlist_t *vdev, boolean_t labeled)
 	    nvlist_add_string(newvd, ZPOOL_CONFIG_DEVID, new_devid) != 0 ||
 	    (physpath != NULL && nvlist_add_string(newvd,
 	    ZPOOL_CONFIG_PHYS_PATH, physpath) != 0) ||
+	    (enc_sysfs_path != NULL && nvlist_add_string(newvd,
+	    ZPOOL_CONFIG_VDEV_ENC_SYSFS_PATH, enc_sysfs_path) != 0) ||
 	    nvlist_add_uint64(newvd, ZPOOL_CONFIG_WHOLE_DISK, wholedisk) != 0 ||
 	    nvlist_add_string(nvroot, ZPOOL_CONFIG_TYPE, VDEV_TYPE_ROOT) != 0 ||
 	    nvlist_add_nvlist_array(nvroot, ZPOOL_CONFIG_CHILDREN, &newvd,
@@ -652,14 +651,10 @@ zfs_deliver_add(nvlist_t *nvl, boolean_t is_lofi)
 	 * 2. ZPOOL_CONFIG_PHYS_PATH (identifies disk physical location).
 	 *
 	 * For disks, we only want to pay attention to vdevs marked as whole
-	 * disks.  For multipath devices does whole disk apply? (TBD).
+	 * disks or are a multipath device.
 	 */
-	if (!devid_iter(devid, zfs_process_add, is_slice) && devpath != NULL) {
-		if (!is_slice) {
-			(void) devphys_iter(devpath, devid, zfs_process_add,
-			    is_slice);
-		}
-	}
+	if (!devid_iter(devid, zfs_process_add, is_slice) && devpath != NULL)
+		(void) devphys_iter(devpath, devid, zfs_process_add, is_slice);
 
 	return (0);
 }
@@ -845,9 +840,9 @@ zfs_enum_pools(void *arg)
  * For now, each agent has it's own libzfs instance
  */
 int
-zfs_slm_init(libzfs_handle_t *zfs_hdl)
+zfs_slm_init()
 {
-	if ((g_zfshdl = libzfs_init()) == NULL)
+	if ((g_zfshdl = __libzfs_init()) == NULL)
 		return (-1);
 
 	/*
@@ -859,6 +854,7 @@ zfs_slm_init(libzfs_handle_t *zfs_hdl)
 
 	if (pthread_create(&g_zfs_tid, NULL, zfs_enum_pools, NULL) != 0) {
 		list_destroy(&g_pool_list);
+		__libzfs_fini(g_zfshdl);
 		return (-1);
 	}
 
@@ -899,19 +895,12 @@ zfs_slm_fini()
 	}
 	list_destroy(&g_device_list);
 
-	libzfs_fini(g_zfshdl);
+	__libzfs_fini(g_zfshdl);
 }
 
 void
 zfs_slm_event(const char *class, const char *subclass, nvlist_t *nvl)
 {
-	static pthread_mutex_t serialize = PTHREAD_MUTEX_INITIALIZER;
-
-	/*
-	 * Serialize incoming events from zfs or libudev sources
-	 */
-	(void) pthread_mutex_lock(&serialize);
 	zed_log_msg(LOG_INFO, "zfs_slm_event: %s.%s", class, subclass);
 	(void) zfs_slm_deliver_event(class, subclass, nvl);
-	(void) pthread_mutex_unlock(&serialize);
 }

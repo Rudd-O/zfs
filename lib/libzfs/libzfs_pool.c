@@ -41,9 +41,6 @@
 #include <sys/vtoc.h>
 #include <sys/zfs_ioctl.h>
 #include <dlfcn.h>
-#if HAVE_LIBDEVMAPPER
-#include <libdevmapper.h>
-#endif
 
 #include "zfs_namecheck.h"
 #include "zfs_prop.h"
@@ -502,10 +499,11 @@ zpool_valid_proplist(libzfs_handle_t *hdl, const char *poolname,
 			}
 
 			(void) nvpair_value_string(elem, &strval);
-			if (strcmp(strval, ZFS_FEATURE_ENABLED) != 0) {
+			if (strcmp(strval, ZFS_FEATURE_ENABLED) != 0 &&
+			    strcmp(strval, ZFS_FEATURE_DISABLED) != 0) {
 				zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
 				    "property '%s' can only be set to "
-				    "'enabled'"), propname);
+				    "'enabled' or 'disabled'"), propname);
 				(void) zfs_error(hdl, EZFS_BADPROP, errbuf);
 				goto error;
 			}
@@ -3431,6 +3429,43 @@ zfs_strip_partition(char *path)
 	return (tmp);
 }
 
+/*
+ * Same as zfs_strip_partition, but allows "/dev/" to be in the pathname
+ *
+ * path:	/dev/sda1
+ * returns:	/dev/sda
+ *
+ * Returned string must be freed.
+ */
+char *
+zfs_strip_partition_path(char *path)
+{
+	char *newpath = strdup(path);
+	char *sd_offset;
+	char *new_sd;
+
+	if (!newpath)
+		return (NULL);
+
+	/* Point to "sda1" part of "/dev/sda1" */
+	sd_offset = strrchr(newpath, '/') + 1;
+
+	/* Get our new name "sda" */
+	new_sd = zfs_strip_partition(sd_offset);
+	if (!new_sd) {
+		free(newpath);
+		return (NULL);
+	}
+
+	/* Paste the "sda" where "sda1" was */
+	strlcpy(sd_offset, new_sd, strlen(sd_offset) + 1);
+
+	/* Free temporary "sda" */
+	free(new_sd);
+
+	return (newpath);
+}
+
 #define	PATH_BUF_LEN	64
 
 /*
@@ -4317,112 +4352,69 @@ zpool_label_disk(libzfs_handle_t *hdl, zpool_handle_t *zhp, char *name)
 	return (0);
 }
 
-#if HAVE_LIBDEVMAPPER
-static void libdevmapper_dummy_log(int level, const char *file, int line,
-    int dm_errno_or_class, const char *f, ...) {}
-
-/* Disable libdevmapper error logging */
-static void disable_libdevmapper_errors(void) {
-	dm_log_with_errno_init(libdevmapper_dummy_log);
-}
-/* Enable libdevmapper error logging */
-static void enable_libdevmapper_errors(void) {
-	dm_log_with_errno_init(NULL);
-}
-#endif
-
 /*
  * Allocate and return the underlying device name for a device mapper device.
  * If a device mapper device maps to multiple devices, return the first device.
  *
- * For example, dm_name = "/dev/dm-0" could return "/dev/sda"
- *
- * dm_name should include the "/dev[/mapper]" prefix.
+ * For example, dm_name = "/dev/dm-0" could return "/dev/sda". Symlinks to a
+ * DM device (like /dev/disk/by-vdev/A0) are also allowed.
  *
  * Returns device name, or NULL on error or no match.  If dm_name is not a DM
  * device then return NULL.
  *
  * NOTE: The returned name string must be *freed*.
  */
-static char * dm_get_underlying_path(char *dm_name)
+char *
+dm_get_underlying_path(char *dm_name)
 {
-	char *name = NULL;
-#if HAVE_LIBDEVMAPPER
-	char *tmp;
-	struct dm_task *dmt = NULL;
-	struct dm_tree *dt = NULL;
-	struct dm_tree_node *root, *child;
-	void *handle = NULL;
-	struct dm_info info;
-	const struct dm_info *child_info;
+	DIR *dp = NULL;
+	struct dirent *ep;
+	char *realp;
+	char *tmp = NULL;
+	char *path = NULL;
+	char *dev_str;
+	int size;
+
+	if (dm_name == NULL)
+		return (NULL);
+
+	/* dm name may be a symlink (like /dev/disk/by-vdev/A0) */
+	realp = realpath(dm_name, NULL);
+	if (realp == NULL)
+		return (NULL);
 
 	/*
-	 * Disable libdevmapper errors.  It's entirely possible user is not
-	 * running devmapper, or that dm_name is not a devmapper device.
-	 * That's totally ok, we will just harmlessly and silently return NULL.
+	 * If they preface 'dev' with a path (like "/dev") then strip it off.
+	 * We just want the 'dm-N' part.
 	 */
-	disable_libdevmapper_errors();
+	tmp = strrchr(realp, '/');
+	if (tmp != NULL)
+		dev_str = tmp + 1;    /* +1 since we want the chr after '/' */
+	else
+		dev_str = tmp;
 
-	/*
-	 * libdevmapper tutorial
-	 *
-	 * libdevmapper is basically a fancy wrapper for its ioctls.  You
-	 * create a "task", fill in the needed info to the task (fill in the
-	 * ioctl fields), then run the task (call the ioctl).
-	 *
-	 * First we need the major/minor number for our DM device.
-	 */
-	if (!(dmt = dm_task_create(DM_DEVICE_INFO)))
+	size = asprintf(&tmp, "/sys/block/%s/slaves/", dev_str);
+	if (size == -1 || !tmp)
 		goto end;
 
-	/* Lookup the name in libdevmapper */
-	if (!dm_task_set_name(dmt, dm_name)) {
-		enable_libdevmapper_errors();
+	dp = opendir(tmp);
+	if (dp == NULL)
 		goto end;
+
+	/* Return first sd* entry in /sys/block/dm-N/slaves/ */
+	while ((ep = readdir(dp))) {
+		if (ep->d_type != DT_DIR) {	/* skip "." and ".." dirs */
+			size = asprintf(&path, "/dev/%s", ep->d_name);
+			break;
+		}
 	}
 
-	if (!dm_task_run(dmt))
-		goto end;
-
-	/* Get DM device's major/minor */
-	if (!dm_task_get_info(dmt, &info))
-		goto end;
-
-	/* We have major/minor number.  Lookup the dm device's children */
-	if (!(dt = dm_tree_create()))
-		goto end;
-
-	/* We add the device into the tree and its children get populated */
-	if (!dm_tree_add_dev(dt, info.major, info.minor))
-		goto end;
-
-	if (!(root = dm_tree_find_node(dt, 0, 0)))
-		goto end;
-
-	if (!(child = dm_tree_next_child(&handle, root, 1)))
-		goto end;
-
-	/* Get child's major/minor numbers */
-	if (!(child_info = dm_tree_node_get_info(child)))
-		goto end;
-
-	if ((asprintf(&tmp, "/dev/block/%d:%d", child_info->major,
-	    child_info->minor) == -1) || !tmp)
-		goto end;
-
-	/* Further translate /dev/block/ name into the normal name */
-	name = realpath(tmp, NULL);
-	free(tmp);
-
 end:
-	if (dmt)
-		dm_task_destroy(dmt);
-	if (dt)
-		dm_tree_free(dt);
-	enable_libdevmapper_errors();
-#endif /* HAVE_LIBDEVMAPPER */
-
-	return (name);
+	if (dp != NULL)
+		closedir(dp);
+	free(tmp);
+	free(realp);
+	return (path);
 }
 
 /*
@@ -4430,12 +4422,12 @@ end:
  * Return 0 if not.
  */
 int
-dev_is_dm(char *devname)
+zfs_dev_is_dm(char *dev_name)
 {
 
 	char *tmp;
-	tmp = dm_get_underlying_path(devname);
-	if (!tmp)
+	tmp = dm_get_underlying_path(dev_name);
+	if (tmp == NULL)
 		return (0);
 
 	free(tmp);
@@ -4483,24 +4475,129 @@ dev_is_dm(char *devname)
  * NOTE: The returned name string must be *freed*.
  */
 char *
-get_underlying_path(libzfs_handle_t *hdl, char *dev_name)
+zfs_get_underlying_path(char *dev_name)
 {
 	char *name = NULL;
 	char *tmp;
 
-	if (!dev_name)
+	if (dev_name == NULL)
 		return (NULL);
 
 	tmp = dm_get_underlying_path(dev_name);
 
 	/* dev_name not a DM device, so just un-symlinkize it */
-	if (!tmp)
+	if (tmp == NULL)
 		tmp = realpath(dev_name, NULL);
 
-	if (tmp) {
-		name = zfs_strip_partition(tmp);
+	if (tmp != NULL) {
+		name = zfs_strip_partition_path(tmp);
 		free(tmp);
 	}
 
 	return (name);
+}
+
+/*
+ * Given a dev name like "sda", return the full enclosure sysfs path to
+ * the disk.  You can also pass in the name with "/dev" prepended
+ * to it (like /dev/sda).
+ *
+ * For example, disk "sda" in enclosure slot 1:
+ *     dev:            "sda"
+ *     returns:        "/sys/class/enclosure/1:0:3:0/Slot 1"
+ *
+ * 'dev' must be a non-devicemapper device.
+ *
+ * Returned string must be freed.
+ */
+char *
+zfs_get_enclosure_sysfs_path(char *dev_name)
+{
+	DIR *dp = NULL;
+	struct dirent *ep;
+	char buf[MAXPATHLEN];
+	char *tmp1 = NULL;
+	char *tmp2 = NULL;
+	char *tmp3 = NULL;
+	char *path = NULL;
+	size_t size;
+	int tmpsize;
+
+	if (dev_name == NULL)
+		return (NULL);
+
+	/* If they preface 'dev' with a path (like "/dev") then strip it off */
+	tmp1 = strrchr(dev_name, '/');
+	if (tmp1 != NULL)
+		dev_name = tmp1 + 1;    /* +1 since we want the chr after '/' */
+
+	tmpsize = asprintf(&tmp1, "/sys/block/%s/device", dev_name);
+	if (tmpsize == -1 || tmp1 == NULL) {
+		tmp1 = NULL;
+		goto end;
+	}
+
+	dp = opendir(tmp1);
+	if (dp == NULL) {
+		tmp1 = NULL;	/* To make free() at the end a NOP */
+		goto end;
+	}
+
+	/*
+	 * Look though all sysfs entries in /sys/block/<dev>/device for
+	 * the enclosure symlink.
+	 */
+	while ((ep = readdir(dp))) {
+		/* Ignore everything that's not our enclosure_device link */
+		if (strstr(ep->d_name, "enclosure_device") == NULL)
+			continue;
+
+		if (asprintf(&tmp2, "%s/%s", tmp1, ep->d_name) == -1 ||
+		    tmp2 == NULL)
+			break;
+
+		size = readlink(tmp2, buf, sizeof (buf));
+
+		/* Did readlink fail or crop the link name? */
+		if (size == -1 || size >= sizeof (buf)) {
+			free(tmp2);
+			tmp2 = NULL;	/* To make free() at the end a NOP */
+			break;
+		}
+
+		/*
+		 * We got a valid link.  readlink() doesn't terminate strings
+		 * so we have to do it.
+		 */
+		buf[size] = '\0';
+
+		/*
+		 * Our link will look like:
+		 *
+		 * "../../../../port-11:1:2/..STUFF../enclosure/1:0:3:0/SLOT 1"
+		 *
+		 * We want to grab the "enclosure/1:0:3:0/SLOT 1" part
+		 */
+		tmp3 = strstr(buf, "enclosure");
+		if (tmp3 == NULL)
+			break;
+
+		if (asprintf(&path, "/sys/class/%s", tmp3) == -1) {
+			/* If asprintf() fails, 'path' is undefined */
+			path = NULL;
+			break;
+		}
+
+		if (path == NULL)
+			break;
+	}
+
+end:
+	free(tmp2);
+	free(tmp1);
+
+	if (dp != NULL)
+		closedir(dp);
+
+	return (path);
 }

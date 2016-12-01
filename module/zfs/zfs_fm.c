@@ -272,15 +272,13 @@ zfs_ereport_start(nvlist_t **ereport_out, nvlist_t **detector_out,
 	    FM_EREPORT_PAYLOAD_ZFS_POOL_CONTEXT, DATA_TYPE_INT32,
 	    spa_load_state(spa), NULL);
 
-	if (spa != NULL) {
-		fm_payload_set(ereport, FM_EREPORT_PAYLOAD_ZFS_POOL_FAILMODE,
-		    DATA_TYPE_STRING,
-		    spa_get_failmode(spa) == ZIO_FAILURE_MODE_WAIT ?
-		    FM_EREPORT_FAILMODE_WAIT :
-		    spa_get_failmode(spa) == ZIO_FAILURE_MODE_CONTINUE ?
-		    FM_EREPORT_FAILMODE_CONTINUE : FM_EREPORT_FAILMODE_PANIC,
-		    NULL);
-	}
+	fm_payload_set(ereport, FM_EREPORT_PAYLOAD_ZFS_POOL_FAILMODE,
+	    DATA_TYPE_STRING,
+	    spa_get_failmode(spa) == ZIO_FAILURE_MODE_WAIT ?
+	    FM_EREPORT_FAILMODE_WAIT :
+	    spa_get_failmode(spa) == ZIO_FAILURE_MODE_CONTINUE ?
+	    FM_EREPORT_FAILMODE_CONTINUE : FM_EREPORT_FAILMODE_PANIC,
+	    NULL);
 
 	if (vd != NULL) {
 		vdev_t *pvd = vd->vdev_parent;
@@ -307,6 +305,10 @@ zfs_ereport_start(nvlist_t **ereport_out, nvlist_t **detector_out,
 			fm_payload_set(ereport,
 			    FM_EREPORT_PAYLOAD_ZFS_VDEV_FRU,
 			    DATA_TYPE_STRING, vd->vdev_fru, NULL);
+		if (vd->vdev_enc_sysfs_path != NULL)
+			fm_payload_set(ereport,
+			    FM_EREPORT_PAYLOAD_ZFS_VDEV_ENC_SYSFS_PATH,
+			    DATA_TYPE_STRING, vd->vdev_enc_sysfs_path, NULL);
 		if (vd->vdev_ashift)
 			fm_payload_set(ereport,
 			    FM_EREPORT_PAYLOAD_ZFS_VDEV_ASHIFT,
@@ -928,6 +930,10 @@ zfs_post_common(spa_t *spa, vdev_t *vd, const char *type, const char *name,
 		if (vd->vdev_fru != NULL)
 			VERIFY0(nvlist_add_string(resource,
 			    FM_EREPORT_PAYLOAD_ZFS_VDEV_FRU, vd->vdev_fru));
+		if (vd->vdev_enc_sysfs_path != NULL)
+			VERIFY0(nvlist_add_string(resource,
+			    FM_EREPORT_PAYLOAD_ZFS_VDEV_ENC_SYSFS_PATH,
+			    vd->vdev_enc_sysfs_path));
 		/* also copy any optional payload data */
 		if (aux) {
 			nvpair_t *elem = NULL;
@@ -986,6 +992,12 @@ zfs_post_state_change(spa_t *spa, vdev_t *vd, uint64_t laststate)
 			    FM_EREPORT_PAYLOAD_ZFS_VDEV_PHYSPATH,
 			    vd->vdev_physpath);
 		}
+		if (vd->vdev_enc_sysfs_path) {
+			(void) nvlist_add_string(aux,
+			    FM_EREPORT_PAYLOAD_ZFS_VDEV_ENC_SYSFS_PATH,
+			    vd->vdev_enc_sysfs_path);
+		}
+
 		(void) nvlist_add_uint64(aux,
 		    FM_EREPORT_PAYLOAD_ZFS_VDEV_LASTSTATE, laststate);
 	}
