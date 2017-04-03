@@ -127,7 +127,7 @@ zk_thread_current(void)
 void *
 zk_thread_helper(void *arg)
 {
-	kthread_t *kt = (kthread_t *) arg;
+	kthread_t *kt = (kthread_t *)arg;
 
 	VERIFY3S(pthread_setspecific(kthread_key, kt), ==, 0);
 
@@ -137,7 +137,7 @@ zk_thread_helper(void *arg)
 	(void) setpriority(PRIO_PROCESS, 0, kt->t_pri);
 
 	kt->t_tid = pthread_self();
-	((thread_func_arg_t) kt->t_func)(kt->t_arg);
+	((thread_func_arg_t)kt->t_func)(kt->t_arg);
 
 	/* Unreachable, thread must exit with thread_exit() */
 	abort();
@@ -147,13 +147,14 @@ zk_thread_helper(void *arg)
 
 kthread_t *
 zk_thread_create(caddr_t stk, size_t stksize, thread_func_t func, void *arg,
-    size_t len, proc_t *pp, int state, pri_t pri, int detachstate)
+    uint64_t len, proc_t *pp, int state, pri_t pri, int detachstate)
 {
 	kthread_t *kt;
 	pthread_attr_t attr;
 	char *stkstr;
 
 	ASSERT0(state & ~TS_RUN);
+	ASSERT0(len);
 
 	kt = umem_zalloc(sizeof (kthread_t), UMEM_NOFAIL);
 	kt->t_func = func;
@@ -737,7 +738,7 @@ vn_openat(char *path, int x1, int flags, int mode, vnode_t **vpp, int x2,
 /*ARGSUSED*/
 int
 vn_rdwr(int uio, vnode_t *vp, void *addr, ssize_t len, offset_t offset,
-	int x1, int x2, rlim64_t x3, void *x4, ssize_t *residp)
+    int x1, int x2, rlim64_t x3, void *x4, ssize_t *residp)
 {
 	ssize_t rc, done = 0, split;
 
@@ -916,7 +917,7 @@ __dprintf(const char *file, const char *func, int line, const char *fmt, ...)
 		if (dprintf_find_string("pid"))
 			(void) printf("%d ", getpid());
 		if (dprintf_find_string("tid"))
-			(void) printf("%u ", (uint_t) pthread_self());
+			(void) printf("%u ", (uint_t)pthread_self());
 		if (dprintf_find_string("cpu"))
 			(void) printf("%u ", getcpuid());
 		if (dprintf_find_string("time"))
@@ -1490,7 +1491,7 @@ zfs_onexit_cb_data(minor_t minor, uint64_t action_handle, void **data)
 fstrans_cookie_t
 spl_fstrans_mark(void)
 {
-	return ((fstrans_cookie_t) 0);
+	return ((fstrans_cookie_t)0);
 }
 
 void

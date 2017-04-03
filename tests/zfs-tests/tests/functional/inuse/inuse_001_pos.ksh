@@ -26,7 +26,7 @@
 #
 
 #
-# Copyright (c) 2013 by Delphix. All rights reserved.
+# Copyright (c) 2013, 2015 by Delphix. All rights reserved.
 #
 
 . $STF_SUITE/include/libtest.shlib
@@ -67,12 +67,7 @@ PREVDUMPDEV=`$DUMPADM | $GREP "Dump device" | $AWK '{print $3}'`
 log_note "Zero $FS_DISK0 and place free space in to slice 0"
 log_must cleanup_devices $FS_DISK0
 
-if [[ $WRAPPER == *"smi"* ]]; then
-	diskslice="${DEV_DSKDIR}/${FS_DISK0}${SLICE_PREFIX}${SLICE2}"
-else
-	diskslice="${DEV_DSKDIR}/${FS_DISK0}${SLICE_PREFIX}${SLICE0}"
-fi
-
+diskslice="${DEV_DSKDIR}/${FS_DISK0}${SLICE0}"
 log_note "Configuring $diskslice as dump device"
 log_must $DUMPADM -d $diskslice > /dev/null
 
@@ -84,6 +79,7 @@ dumpdev=`$DUMPADM | $GREP "Dump device" | $AWK '{print $3}'`
     log_untested "Dump device has not been been configured to $diskslice"
 
 log_note "Attempt to zpool the dump device"
+unset NOINUSE_CHECK
 log_mustnot $ZPOOL create $TESTPOOL "$diskslice"
 log_mustnot poolexists $TESTPOOL
 

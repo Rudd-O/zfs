@@ -21,7 +21,7 @@
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
- * Copyright (c) 2012, 2016 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2017 by Delphix. All rights reserved.
  * Copyright (c) 2013 by Saso Kiselkov. All rights reserved.
  * Copyright (c) 2014 Spectra Logic Corporation, All rights reserved.
  */
@@ -74,19 +74,14 @@ static void __dbuf_hold_impl_init(struct dbuf_hold_impl_data *dh,
 static int __dbuf_hold_impl(struct dbuf_hold_impl_data *dh);
 
 uint_t zfs_dbuf_evict_key;
-/*
- * Number of times that zfs_free_range() took the slow path while doing
- * a zfs receive.  A nonzero value indicates a potential performance problem.
- */
-uint64_t zfs_free_range_recv_miss;
 
 static boolean_t dbuf_undirty(dmu_buf_impl_t *db, dmu_tx_t *tx);
 static void dbuf_write(dbuf_dirty_record_t *dr, arc_buf_t *data, dmu_tx_t *tx);
 
-#ifndef __lint
 extern inline void dmu_buf_init_user(dmu_buf_user_t *dbu,
-    dmu_buf_evict_func_t *evict_func, dmu_buf_t **clear_on_evict_dbufp);
-#endif /* ! __lint */
+    dmu_buf_evict_func_t *evict_func_sync,
+    dmu_buf_evict_func_t *evict_func_async,
+    dmu_buf_t **clear_on_evict_dbufp);
 
 /*
  * Global data structures and functions for the dbuf cache.
@@ -109,7 +104,7 @@ static boolean_t dbuf_evict_thread_exit;
  * Dbufs that are aged out of the cache will be immediately destroyed and
  * become eligible for arc eviction.
  */
-static multilist_t dbuf_cache;
+static multilist_t *dbuf_cache;
 static refcount_t dbuf_cache_size;
 unsigned long  dbuf_cache_max_bytes = 100 * 1024 * 1024;
 
@@ -150,7 +145,7 @@ int dbuf_cache_max_shift = 5;
  * cache size). Once the eviction thread is woken up and eviction is required,
  * it will continue evicting buffers until it's able to reduce the cache size
  * to the low water mark. If the cache size continues to grow and hits the high
- * water mark, then callers adding elments to the cache will begin to evict
+ * water mark, then callers adding elements to the cache will begin to evict
  * directly from the cache until the cache is no longer above the high water
  * mark.
  */
@@ -320,7 +315,7 @@ dbuf_hash_remove(dmu_buf_impl_t *db)
 	idx = hv & h->hash_table_mask;
 
 	/*
-	 * We musn't hold db_mtx to maintain lock ordering:
+	 * We mustn't hold db_mtx to maintain lock ordering:
 	 * DBUF_HASH_MUTEX > db_mtx.
 	 */
 	ASSERT(refcount_is_zero(&db->db_holds));
@@ -385,6 +380,7 @@ static void
 dbuf_evict_user(dmu_buf_impl_t *db)
 {
 	dmu_buf_user_t *dbu = db->db_user;
+	boolean_t has_async;
 
 	ASSERT(MUTEX_HELD(&db->db_mtx));
 
@@ -400,11 +396,24 @@ dbuf_evict_user(dmu_buf_impl_t *db)
 #endif
 
 	/*
-	 * Invoke the callback from a taskq to avoid lock order reversals
-	 * and limit stack depth.
+	 * There are two eviction callbacks - one that we call synchronously
+	 * and one that we invoke via a taskq.  The async one is useful for
+	 * avoiding lock order reversals and limiting stack depth.
+	 *
+	 * Note that if we have a sync callback but no async callback,
+	 * it's likely that the sync callback will free the structure
+	 * containing the dbu.  In that case we need to take care to not
+	 * dereference dbu after calling the sync evict func.
 	 */
-	taskq_dispatch_ent(dbu_evict_taskq, dbu->dbu_evict_func, dbu, 0,
-	    &dbu->dbu_tqent);
+	has_async = (dbu->dbu_evict_func_async != NULL);
+
+	if (dbu->dbu_evict_func_sync != NULL)
+		dbu->dbu_evict_func_sync(dbu);
+
+	if (has_async) {
+		taskq_dispatch_ent(dbu_evict_taskq, dbu->dbu_evict_func_async,
+		    dbu, 0, &dbu->dbu_tqent);
+	}
 }
 
 boolean_t
@@ -482,8 +491,8 @@ dbuf_cache_above_lowater(void)
 static void
 dbuf_evict_one(void)
 {
-	int idx = multilist_get_random_index(&dbuf_cache);
-	multilist_sublist_t *mls = multilist_sublist_lock(&dbuf_cache, idx);
+	int idx = multilist_get_random_index(dbuf_cache);
+	multilist_sublist_t *mls = multilist_sublist_lock(dbuf_cache, idx);
 	dmu_buf_impl_t *db;
 	ASSERT(!MUTEX_HELD(&dbuf_evict_lock));
 
@@ -662,9 +671,8 @@ retry:
 	 */
 	dbu_evict_taskq = taskq_create("dbu_evict", 1, defclsyspri, 0, 0, 0);
 
-	multilist_create(&dbuf_cache, sizeof (dmu_buf_impl_t),
+	dbuf_cache = multilist_create(sizeof (dmu_buf_impl_t),
 	    offsetof(dmu_buf_impl_t, db_cache_link),
-	    zfs_arc_num_sublists_per_state,
 	    dbuf_cache_multilist_index_func);
 	refcount_create(&dbuf_cache_size);
 
@@ -711,7 +719,7 @@ dbuf_fini(void)
 	cv_destroy(&dbuf_evict_cv);
 
 	refcount_destroy(&dbuf_cache_size);
-	multilist_destroy(&dbuf_cache);
+	multilist_destroy(dbuf_cache);
 }
 
 /*
@@ -790,7 +798,7 @@ dbuf_verify(dmu_buf_impl_t *db)
 		} else {
 			/* db is pointed to by an indirect block */
 			ASSERTV(int epb = db->db_parent->db.db_size >>
-				SPA_BLKPTRSHIFT);
+			    SPA_BLKPTRSHIFT);
 			ASSERT3U(db->db_parent->db_level, ==, db->db_level+1);
 			ASSERT3U(db->db_parent->db.db_object, ==,
 			    db->db.db_object);
@@ -1207,7 +1215,8 @@ dbuf_read(dmu_buf_impl_t *db, zio_t *zio, uint32_t flags)
 	} else if (db->db_state == DB_UNCACHED) {
 		spa_t *spa = dn->dn_objset->os_spa;
 
-		if (zio == NULL)
+		if (zio == NULL &&
+		    db->db_blkptr != NULL && !BP_IS_HOLE(db->db_blkptr))
 			zio = zio_root(spa, NULL, NULL, ZIO_FLAG_CANFAIL);
 
 		err = dbuf_read_impl(db, zio, flags);
@@ -1221,7 +1230,7 @@ dbuf_read(dmu_buf_impl_t *db, zio_t *zio, uint32_t flags)
 			rw_exit(&dn->dn_struct_rwlock);
 		DB_DNODE_EXIT(db);
 
-		if (!err && !havepzio)
+		if (!err && !havepzio && zio != NULL)
 			err = zio_wait(zio);
 	} else {
 		/*
@@ -1323,9 +1332,6 @@ dbuf_unoverride(dbuf_dirty_record_t *dr)
  * Evict (if its unreferenced) or clear (if its referenced) any level-0
  * data blocks in the free range, so that any future readers will find
  * empty blocks.
- *
- * This is a no-op if the dataset is in the middle of an incremental
- * receive; see comment below for details.
  */
 void
 dbuf_free_range(dnode_t *dn, uint64_t start_blkid, uint64_t end_blkid,
@@ -1335,10 +1341,9 @@ dbuf_free_range(dnode_t *dn, uint64_t start_blkid, uint64_t end_blkid,
 	dmu_buf_impl_t *db, *db_next;
 	uint64_t txg = tx->tx_txg;
 	avl_index_t where;
-	boolean_t freespill =
-	    (start_blkid == DMU_SPILL_BLKID || end_blkid == DMU_SPILL_BLKID);
 
-	if (end_blkid > dn->dn_maxblkid && !freespill)
+	if (end_blkid > dn->dn_maxblkid &&
+	    !(start_blkid == DMU_SPILL_BLKID || end_blkid == DMU_SPILL_BLKID))
 		end_blkid = dn->dn_maxblkid;
 	dprintf_dnode(dn, "start=%llu end=%llu\n", start_blkid, end_blkid);
 
@@ -1348,28 +1353,9 @@ dbuf_free_range(dnode_t *dn, uint64_t start_blkid, uint64_t end_blkid,
 	db_search->db_state = DB_SEARCH;
 
 	mutex_enter(&dn->dn_dbufs_mtx);
-	if (start_blkid >= dn->dn_unlisted_l0_blkid && !freespill) {
-		/* There can't be any dbufs in this range; no need to search. */
-#ifdef DEBUG
-		db = avl_find(&dn->dn_dbufs, db_search, &where);
-		ASSERT3P(db, ==, NULL);
-		db = avl_nearest(&dn->dn_dbufs, where, AVL_AFTER);
-		ASSERT(db == NULL || db->db_level > 0);
-#endif
-		goto out;
-	} else if (dmu_objset_is_receiving(dn->dn_objset)) {
-		/*
-		 * If we are receiving, we expect there to be no dbufs in
-		 * the range to be freed, because receive modifies each
-		 * block at most once, and in offset order.  If this is
-		 * not the case, it can lead to performance problems,
-		 * so note that we unexpectedly took the slow path.
-		 */
-		atomic_inc_64(&zfs_free_range_recv_miss);
-	}
-
 	db = avl_find(&dn->dn_dbufs, db_search, &where);
 	ASSERT3P(db, ==, NULL);
+
 	db = avl_nearest(&dn->dn_dbufs, where, AVL_AFTER);
 
 	for (; db != NULL; db = db_next) {
@@ -1442,44 +1428,8 @@ dbuf_free_range(dnode_t *dn, uint64_t start_blkid, uint64_t end_blkid,
 		mutex_exit(&db->db_mtx);
 	}
 
-out:
 	kmem_free(db_search, sizeof (dmu_buf_impl_t));
 	mutex_exit(&dn->dn_dbufs_mtx);
-}
-
-static int
-dbuf_block_freeable(dmu_buf_impl_t *db)
-{
-	dsl_dataset_t *ds = db->db_objset->os_dsl_dataset;
-	uint64_t birth_txg = 0;
-
-	/*
-	 * We don't need any locking to protect db_blkptr:
-	 * If it's syncing, then db_last_dirty will be set
-	 * so we'll ignore db_blkptr.
-	 *
-	 * This logic ensures that only block births for
-	 * filled blocks are considered.
-	 */
-	ASSERT(MUTEX_HELD(&db->db_mtx));
-	if (db->db_last_dirty && (db->db_blkptr == NULL ||
-	    !BP_IS_HOLE(db->db_blkptr))) {
-		birth_txg = db->db_last_dirty->dr_txg;
-	} else if (db->db_blkptr != NULL && !BP_IS_HOLE(db->db_blkptr)) {
-		birth_txg = db->db_blkptr->blk_birth;
-	}
-
-	/*
-	 * If this block don't exist or is in a snapshot, it can't be freed.
-	 * Don't pass the bp to dsl_dataset_block_freeable() since we
-	 * are holding the db_mtx lock and might deadlock if we are
-	 * prefetching a dedup-ed block.
-	 */
-	if (birth_txg != 0)
-		return (ds == NULL ||
-		    dsl_dataset_block_freeable(ds, NULL, birth_txg));
-	else
-		return (B_FALSE);
 }
 
 void
@@ -1531,7 +1481,7 @@ dbuf_new_size(dmu_buf_impl_t *db, int size, dmu_tx_t *tx)
 	}
 	mutex_exit(&db->db_mtx);
 
-	dnode_willuse_space(dn, size-osize, tx);
+	dmu_objset_willuse_space(dn->dn_objset, size - osize, tx);
 	DB_DNODE_EXIT(db);
 }
 
@@ -1581,7 +1531,6 @@ dbuf_dirty(dmu_buf_impl_t *db, dmu_tx_t *tx)
 	objset_t *os;
 	dbuf_dirty_record_t **drp, *dr;
 	int drop_struct_lock = FALSE;
-	boolean_t do_free_accounting = B_FALSE;
 	int txgoff = tx->tx_txg & TXG_MASK;
 
 	ASSERT(tx->tx_txg != 0);
@@ -1595,10 +1544,18 @@ dbuf_dirty(dmu_buf_impl_t *db, dmu_tx_t *tx)
 	 * objects may be dirtied in syncing context, but only if they
 	 * were already pre-dirtied in open context.
 	 */
+#ifdef DEBUG
+	if (dn->dn_objset->os_dsl_dataset != NULL) {
+		rrw_enter(&dn->dn_objset->os_dsl_dataset->ds_bp_rwlock,
+		    RW_READER, FTAG);
+	}
 	ASSERT(!dmu_tx_is_syncing(tx) ||
 	    BP_IS_HOLE(dn->dn_objset->os_rootbp) ||
 	    DMU_OBJECT_IS_SPECIAL(dn->dn_object) ||
 	    dn->dn_objset->os_dsl_dataset == NULL);
+	if (dn->dn_objset->os_dsl_dataset != NULL)
+		rrw_exit(&dn->dn_objset->os_dsl_dataset->ds_bp_rwlock, FTAG);
+#endif
 	/*
 	 * We make this assert for private objects as well, but after we
 	 * check if we're already dirty.  They are allowed to re-dirty
@@ -1623,12 +1580,21 @@ dbuf_dirty(dmu_buf_impl_t *db, dmu_tx_t *tx)
 	 * Don't set dirtyctx to SYNC if we're just modifying this as we
 	 * initialize the objset.
 	 */
-	if (dn->dn_dirtyctx == DN_UNDIRTIED &&
-	    !BP_IS_HOLE(dn->dn_objset->os_rootbp)) {
-		dn->dn_dirtyctx =
-		    (dmu_tx_is_syncing(tx) ? DN_DIRTY_SYNC : DN_DIRTY_OPEN);
-		ASSERT(dn->dn_dirtyctx_firstset == NULL);
-		dn->dn_dirtyctx_firstset = kmem_alloc(1, KM_SLEEP);
+	if (dn->dn_dirtyctx == DN_UNDIRTIED) {
+		if (dn->dn_objset->os_dsl_dataset != NULL) {
+			rrw_enter(&dn->dn_objset->os_dsl_dataset->ds_bp_rwlock,
+			    RW_READER, FTAG);
+		}
+		if (!BP_IS_HOLE(dn->dn_objset->os_rootbp)) {
+			dn->dn_dirtyctx = (dmu_tx_is_syncing(tx) ?
+			    DN_DIRTY_SYNC : DN_DIRTY_OPEN);
+			ASSERT(dn->dn_dirtyctx_firstset == NULL);
+			dn->dn_dirtyctx_firstset = kmem_alloc(1, KM_SLEEP);
+		}
+		if (dn->dn_objset->os_dsl_dataset != NULL) {
+			rrw_exit(&dn->dn_objset->os_dsl_dataset->ds_bp_rwlock,
+			    FTAG);
+		}
 	}
 	mutex_exit(&dn->dn_mtx);
 
@@ -1673,22 +1639,20 @@ dbuf_dirty(dmu_buf_impl_t *db, dmu_tx_t *tx)
 	 * this assertion only if we're not already dirty.
 	 */
 	os = dn->dn_objset;
+#ifdef DEBUG
+	if (dn->dn_objset->os_dsl_dataset != NULL)
+		rrw_enter(&os->os_dsl_dataset->ds_bp_rwlock, RW_READER, FTAG);
 	ASSERT(!dmu_tx_is_syncing(tx) || DMU_OBJECT_IS_SPECIAL(dn->dn_object) ||
 	    os->os_dsl_dataset == NULL || BP_IS_HOLE(os->os_rootbp));
+	if (dn->dn_objset->os_dsl_dataset != NULL)
+		rrw_exit(&os->os_dsl_dataset->ds_bp_rwlock, FTAG);
+#endif
 	ASSERT(db->db.db_size != 0);
 
 	dprintf_dbuf(db, "size=%llx\n", (u_longlong_t)db->db.db_size);
 
 	if (db->db_blkid != DMU_BONUS_BLKID) {
-		/*
-		 * Update the accounting.
-		 * Note: we delay "free accounting" until after we drop
-		 * the db_mtx.  This keeps us from grabbing other locks
-		 * (and possibly deadlocking) in bp_get_dsize() while
-		 * also holding the db_mtx.
-		 */
-		dnode_willuse_space(dn, db->db.db_size, tx);
-		do_free_accounting = dbuf_block_freeable(db);
+		dmu_objset_willuse_space(os, db->db.db_size, tx);
 	}
 
 	/*
@@ -1782,21 +1746,13 @@ dbuf_dirty(dmu_buf_impl_t *db, dmu_tx_t *tx)
 		drop_struct_lock = TRUE;
 	}
 
-	if (do_free_accounting) {
-		blkptr_t *bp = db->db_blkptr;
-		int64_t willfree = (bp && !BP_IS_HOLE(bp)) ?
-		    bp_get_dsize(os->os_spa, bp) : db->db.db_size;
-		/*
-		 * This is only a guess -- if the dbuf is dirty
-		 * in a previous txg, we don't know how much
-		 * space it will use on disk yet.  We should
-		 * really have the struct_rwlock to access
-		 * db_blkptr, but since this is just a guess,
-		 * it's OK if we get an odd answer.
-		 */
-		ddt_prefetch(os->os_spa, bp);
-		dnode_willuse_space(dn, -willfree, tx);
-	}
+	/*
+	 * If we are overwriting a dedup BP, then unless it is snapshotted,
+	 * when we get to syncing context we will need to decrement its
+	 * refcount in the DDT.  Prefetch the relevant DDT block so that
+	 * syncing context won't have to wait for the i/o.
+	 */
+	ddt_prefetch(os->os_spa, db->db_blkptr);
 
 	if (db->db_level == 0) {
 		dnode_new_blkid(dn, db->db_blkid, tx, drop_struct_lock);
@@ -2164,7 +2120,7 @@ dbuf_destroy(dmu_buf_impl_t *db)
 	dbuf_clear_data(db);
 
 	if (multilist_link_active(&db->db_cache_link)) {
-		multilist_remove(&dbuf_cache, db);
+		multilist_remove(dbuf_cache, db);
 		(void) refcount_remove_many(&dbuf_cache_size,
 		    db->db.db_size, db);
 	}
@@ -2399,9 +2355,7 @@ dbuf_create(dnode_t *dn, uint8_t level, uint64_t blkid,
 		return (odb);
 	}
 	avl_add(&dn->dn_dbufs, db);
-	if (db->db_level == 0 && db->db_blkid >=
-	    dn->dn_unlisted_l0_blkid)
-		dn->dn_unlisted_l0_blkid = db->db_blkid + 1;
+
 	db->db_state = DB_UNCACHED;
 	mutex_exit(&dn->dn_dbufs_mtx);
 	arc_space_consume(sizeof (dmu_buf_impl_t), ARC_SPACE_DBUF);
@@ -2685,8 +2639,7 @@ __dbuf_hold_impl(struct dbuf_hold_impl_data *dh)
 
 		ASSERT3P(dh->dh_parent, ==, NULL);
 		dh->dh_err = dbuf_findbp(dh->dh_dn, dh->dh_level, dh->dh_blkid,
-					dh->dh_fail_sparse, &dh->dh_parent,
-					&dh->dh_bp, dh);
+		    dh->dh_fail_sparse, &dh->dh_parent, &dh->dh_bp, dh);
 		if (dh->dh_fail_sparse) {
 			if (dh->dh_err == 0 &&
 			    dh->dh_bp && BP_IS_HOLE(dh->dh_bp))
@@ -2700,7 +2653,7 @@ __dbuf_hold_impl(struct dbuf_hold_impl_data *dh)
 		if (dh->dh_err && dh->dh_err != ENOENT)
 			return (dh->dh_err);
 		dh->dh_db = dbuf_create(dh->dh_dn, dh->dh_level, dh->dh_blkid,
-					dh->dh_parent, dh->dh_bp);
+		    dh->dh_parent, dh->dh_bp);
 	}
 
 	if (dh->dh_fail_uncached && dh->dh_db->db_state != DB_CACHED) {
@@ -2737,7 +2690,7 @@ __dbuf_hold_impl(struct dbuf_hold_impl_data *dh)
 
 	if (multilist_link_active(&dh->dh_db->db_cache_link)) {
 		ASSERT(refcount_is_zero(&dh->dh_db->db_holds));
-		multilist_remove(&dbuf_cache, dh->dh_db);
+		multilist_remove(dbuf_cache, dh->dh_db);
 		(void) refcount_remove_many(&dbuf_cache_size,
 		    dh->dh_db->db.db_size, dh->dh_db);
 	}
@@ -2774,7 +2727,7 @@ dbuf_hold_impl(dnode_t *dn, uint8_t level, uint64_t blkid,
 	dh = kmem_alloc(sizeof (struct dbuf_hold_impl_data) *
 	    DBUF_HOLD_IMPL_MAX_DEPTH, KM_SLEEP);
 	__dbuf_hold_impl_init(dh, dn, level, blkid, fail_sparse,
-		fail_uncached, tag, dbp, 0);
+	    fail_uncached, tag, dbp, 0);
 
 	error = __dbuf_hold_impl(dh);
 
@@ -2787,8 +2740,8 @@ dbuf_hold_impl(dnode_t *dn, uint8_t level, uint64_t blkid,
 static void
 __dbuf_hold_impl_init(struct dbuf_hold_impl_data *dh,
     dnode_t *dn, uint8_t level, uint64_t blkid,
-	boolean_t fail_sparse, boolean_t fail_uncached,
-	void *tag, dmu_buf_impl_t **dbp, int depth)
+    boolean_t fail_sparse, boolean_t fail_uncached,
+    void *tag, dmu_buf_impl_t **dbp, int depth)
 {
 	dh->dh_dn = dn;
 	dh->dh_level = level;
@@ -3009,7 +2962,7 @@ dbuf_rele_and_unlock(dmu_buf_impl_t *db, void *tag)
 			    db->db_pending_evict) {
 				dbuf_destroy(db);
 			} else if (!multilist_link_active(&db->db_cache_link)) {
-				multilist_insert(&dbuf_cache, db);
+				multilist_insert(dbuf_cache, db);
 				(void) refcount_add_many(&dbuf_cache_size,
 				    db->db.db_size, db);
 				mutex_exit(&db->db_mtx);
@@ -3085,19 +3038,6 @@ void
 dmu_buf_user_evict_wait()
 {
 	taskq_wait(dbu_evict_taskq);
-}
-
-boolean_t
-dmu_buf_freeable(dmu_buf_t *dbuf)
-{
-	boolean_t res = B_FALSE;
-	dmu_buf_impl_t *db = (dmu_buf_impl_t *)dbuf;
-
-	if (db->db_blkptr)
-		res = dsl_dataset_block_freeable(db->db_objset->os_dsl_dataset,
-		    db->db_blkptr, db->db_blkptr->blk_birth);
-
-	return (res);
 }
 
 blkptr_t *
@@ -3529,13 +3469,13 @@ dbuf_write_children_ready(zio_t *zio, arc_buf_t *buf, void *vdb)
 	dmu_buf_impl_t *db = vdb;
 	dnode_t *dn;
 	blkptr_t *bp;
-	uint64_t i;
-	int epbs;
+	unsigned int epbs, i;
 
 	ASSERT3U(db->db_level, >, 0);
 	DB_DNODE_ENTER(db);
 	dn = DB_DNODE(db);
 	epbs = dn->dn_phys->dn_indblkshift - SPA_BLKPTRSHIFT;
+	ASSERT3U(epbs, <, 31);
 
 	/* Determine if all our children are holes */
 	for (i = 0, bp = db->db.db_data; i < 1ULL << epbs; i++, bp++) {
@@ -3548,8 +3488,14 @@ dbuf_write_children_ready(zio_t *zio, arc_buf_t *buf, void *vdb)
 	 * we may get compressed away.
 	 */
 	if (i == 1ULL << epbs) {
-		/* didn't find any non-holes */
+		/*
+		 * We only found holes. Grab the rwlock to prevent
+		 * anybody from reading the blocks we're about to
+		 * zero out.
+		 */
+		rw_enter(&dn->dn_struct_rwlock, RW_WRITER);
 		bzero(db->db.db_data, db->db.db_size);
+		rw_exit(&dn->dn_struct_rwlock);
 	}
 	DB_DNODE_EXIT(db);
 }
@@ -3880,26 +3826,25 @@ EXPORT_SYMBOL(dbuf_sync_list);
 EXPORT_SYMBOL(dmu_buf_set_user);
 EXPORT_SYMBOL(dmu_buf_set_user_ie);
 EXPORT_SYMBOL(dmu_buf_get_user);
-EXPORT_SYMBOL(dmu_buf_freeable);
 EXPORT_SYMBOL(dmu_buf_get_blkptr);
 
-
+/* BEGIN CSTYLED */
 module_param(dbuf_cache_max_bytes, ulong, 0644);
 MODULE_PARM_DESC(dbuf_cache_max_bytes,
-		"Maximum size in bytes of the dbuf cache.");
+	"Maximum size in bytes of the dbuf cache.");
 
 module_param(dbuf_cache_hiwater_pct, uint, 0644);
 MODULE_PARM_DESC(dbuf_cache_hiwater_pct,
-		"Percentage over dbuf_cache_max_bytes when dbufs \
-		 much be evicted directly.");
+	"Percentage over dbuf_cache_max_bytes when dbufs must be evicted "
+	"directly.");
 
 module_param(dbuf_cache_lowater_pct, uint, 0644);
 MODULE_PARM_DESC(dbuf_cache_lowater_pct,
-		"Percentage below dbuf_cache_max_bytes \
-		when the evict thread stop evicting dbufs.");
+	"Percentage below dbuf_cache_max_bytes when the evict thread stops "
+	"evicting dbufs.");
 
 module_param(dbuf_cache_max_shift, int, 0644);
 MODULE_PARM_DESC(dbuf_cache_max_shift,
-		"Cap the size of the dbuf cache to log2 fraction of arc size.");
-
+	"Cap the size of the dbuf cache to a log2 fraction of arc size.");
+/* END CSTYLED */
 #endif

@@ -11,17 +11,18 @@
 .\"
 .\"
 .\" Copyright 2012, Richard Lowe.
-.\" Copyright (c) 2012, 2014 by Delphix. All rights reserved.
+.\" Copyright (c) 2012, 2016 by Delphix. All rights reserved.
+.\" Copyright 2016 Nexenta Systems, Inc.
 .\"
-.TH "ZDB" "8" "February 15, 2012" "" ""
+.TH "ZDB" "8" "April 9, 2016" "" ""
 
 .SH "NAME"
 \fBzdb\fR - Display zpool debugging and consistency information
 
 .SH "SYNOPSIS"
-\fBzdb\fR [-CumdibcsDvhLMXFPA] [-e [-p \fIpath\fR...]] [-t \fItxg\fR]
+\fBzdb\fR [-CumdibcsDvhLMXFPAG] [-e [-p \fIpath\fR...]] [-t \fItxg\fR]
     [-U \fIcache\fR] [-I \fIinflight I/Os\fR] [-x \fIdumpdir\fR]
-    [\fIpoolname\fR [\fIobject\fR ...]]
+    [-o \fIvar\fR=\fIvalue\fR] ... [\fIpoolname\fR [\fIobject\fR ...]]
 
 .P
 \fBzdb\fR [-divPA] [-e [-p \fIpath\fR...]] [-U \fIcache\fR]
@@ -39,7 +40,7 @@
 \fBzdb\fR -S [-AP] [-e [-p \fIpath\fR...]] [-U \fIcache\fR] \fIpoolname\fR
 
 .P
-\fBzdb\fR -l [-uA] \fIdevice\fR
+\fBzdb\fR -l [-Aqu] \fIdevice\fR
 
 .P
 \fBzdb\fR -C [-A] [-U \fIcache\fR]
@@ -176,8 +177,16 @@ transaction type.
 .ad
 .sp .6
 .RS 4n
-Display the vdev labels from the specified device. If the \fB-u\fR option is
-also specified, also display the uberblocks on this device.
+Read the vdev labels from the specified device and dump the unique
+configuration nvlist(s). \fBzdb -l\fR will return 1 if an error occured, 2 if
+no configuration nvlist could be unpacked (errors or not), and 0 otherwise.
+Specify multiple times to increase verbosity.
+.P
+If the \fB-u\fR option is also specified, also display the uberblocks on this
+device.  Specify multiple times to increase verbosity.
+.P
+If the \fB-q\fR option is also specified, don't dump the configurations or the
+uberblocks.
 .RE
 
 .sp
@@ -400,6 +409,17 @@ transactions.
 .sp
 .ne 2
 .na
+\fB-G\fR
+.ad
+.sp .6
+.RS 4n
+Dump the contents of the zfs_dbgmsg buffer before exiting zdb. zfs_dbgmsg is
+a buffer used by ZFS to dump advanced debug information.
+.RE
+
+.sp
+.ne 2
+.na
 \fB-I \fIinflight I/Os\fR \fR
 .ad
 .sp .6
@@ -407,6 +427,18 @@ transactions.
 Limit the number of outstanding checksum I/Os to the specified value. The
 default value is 200. This option affects the performance of the \fB-c\fR
 option.
+.RE
+
+.sp
+.ne 2
+.na
+\fB-o \fIvar\fR=\fIvalue\fR ... \fR
+.ad
+.sp .6
+.RS 4n
+Set the given global libzpool variable to the provided value. The value must
+be an unsigned 32-bit integer. Currently only little-endian systems are
+supported to avoid accidentally setting the high 32 bits of 64-bit variables.
 .RE
 
 .sp

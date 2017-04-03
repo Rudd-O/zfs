@@ -36,7 +36,7 @@
 
 /*
  * The passed credentials cannot be directly verified because Linux only
- * provides and interface to check the *current* proces credentials.  In
+ * provides and interface to check the *current* process credentials.  In
  * order to handle this the capable() test is only run when the passed
  * credentials match the current process credentials or the kcred.  In
  * all other cases this function must fail and return the passed err.
@@ -82,7 +82,7 @@ secpolicy_sys_config(const cred_t *cr, boolean_t checkonly)
  */
 int
 secpolicy_vnode_access2(const cred_t *cr, struct inode *ip, uid_t owner,
-	mode_t curmode, mode_t wantmode)
+    mode_t curmode, mode_t wantmode)
 {
 	return (0);
 }

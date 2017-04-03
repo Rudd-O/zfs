@@ -1208,7 +1208,7 @@ spa_deactivate(spa_t *spa)
 	list_destroy(&spa->spa_evicting_os_list);
 	list_destroy(&spa->spa_state_dirty_list);
 
-	taskq_cancel_id(system_taskq, spa->spa_deadman_tqid);
+	taskq_cancel_id(system_delay_taskq, spa->spa_deadman_tqid);
 
 	for (t = 0; t < ZIO_TYPES; t++) {
 		for (q = 0; q < ZIO_TASKQ_TYPES; q++) {
@@ -1313,7 +1313,7 @@ spa_config_parse(spa_t *spa, vdev_t **vdp, nvlist_t *nv, vdev_t *parent,
 static void
 spa_unload(spa_t *spa)
 {
-	int i;
+	int i, c;
 
 	ASSERT(MUTEX_HELD(&spa_namespace_lock));
 
@@ -1328,6 +1328,19 @@ spa_unload(spa_t *spa)
 	if (spa->spa_sync_on) {
 		txg_sync_stop(spa->spa_dsl_pool);
 		spa->spa_sync_on = B_FALSE;
+	}
+
+	/*
+	 * Even though vdev_free() also calls vdev_metaslab_fini, we need
+	 * to call it earlier, before we wait for async i/o to complete.
+	 * This ensures that there is no async metaslab prefetching, by
+	 * calling taskq_wait(mg_taskq).
+	 */
+	if (spa->spa_root_vdev != NULL) {
+		spa_config_enter(spa, SCL_ALL, FTAG, RW_WRITER);
+		for (c = 0; c < spa->spa_root_vdev->vdev_children; c++)
+			vdev_metaslab_fini(spa->spa_root_vdev->vdev_child[c]);
+		spa_config_exit(spa, SCL_ALL, FTAG);
 	}
 
 	/*
@@ -2753,10 +2766,14 @@ spa_load_impl(spa_t *spa, uint64_t pool_guid, nvlist_t *config,
 	error = spa_dir_prop(spa, DMU_POOL_VDEV_ZAP_MAP,
 	    &spa->spa_all_vdev_zaps);
 
-	if (error != ENOENT && error != 0) {
+	if (error == ENOENT) {
+		VERIFY(!nvlist_exists(mos_config,
+		    ZPOOL_CONFIG_HAS_PER_VDEV_ZAPS));
+		spa->spa_avz_action = AVZ_ACTION_INITIALIZE;
+		ASSERT0(vdev_count_verify_zaps(spa->spa_root_vdev));
+	} else if (error != 0) {
 		return (spa_vdev_err(rvd, VDEV_AUX_CORRUPT_DATA, EIO));
-	} else if (error == 0 && !nvlist_exists(mos_config,
-	    ZPOOL_CONFIG_HAS_PER_VDEV_ZAPS)) {
+	} else if (!nvlist_exists(mos_config, ZPOOL_CONFIG_HAS_PER_VDEV_ZAPS)) {
 		/*
 		 * An older version of ZFS overwrote the sentinel value, so
 		 * we have orphaned per-vdev ZAPs in the MOS. Defer their
@@ -3677,7 +3694,7 @@ spa_set_aux_vdevs(spa_aux_vdev_t *sav, nvlist_t **devs, int ndevs,
 		nvlist_t **newdevs;
 
 		/*
-		 * Generate new dev list by concatentating with the
+		 * Generate new dev list by concatenating with the
 		 * current dev list.
 		 */
 		VERIFY(nvlist_lookup_nvlist_array(sav->sav_config, config,
@@ -4696,6 +4713,11 @@ spa_vdev_attach(spa_t *spa, uint64_t guid, nvlist_t *nvroot, int replacing)
 	newvd->vdev_crtxg = oldvd->vdev_crtxg;
 	vdev_add_child(pvd, newvd);
 
+	/*
+	 * Reevaluate the parent vdev state.
+	 */
+	vdev_propagate_state(pvd);
+
 	tvd = newvd->vdev_top;
 	ASSERT(pvd->vdev_top == tvd);
 	ASSERT(tvd->vdev_parent == rvd);
@@ -5459,6 +5481,9 @@ spa_vdev_remove(spa_t *spa, uint64_t guid, boolean_t unspare)
 		 * in this pool.
 		 */
 		if (vd == NULL || unspare) {
+			if (vd == NULL)
+				vd = spa_lookup_by_guid(spa, guid, B_TRUE);
+			spa_event_notify(spa, vd, ESC_ZFS_VDEV_REMOVE_AUX);
 			spa_vdev_remove_aux(spa->spa_spares.sav_config,
 			    ZPOOL_CONFIG_SPARES, spares, nspares, nv);
 			spa_load_spares(spa);
@@ -5466,7 +5491,6 @@ spa_vdev_remove(spa_t *spa, uint64_t guid, boolean_t unspare)
 		} else {
 			error = SET_ERROR(EBUSY);
 		}
-		spa_event_notify(spa, vd, ESC_ZFS_VDEV_REMOVE_AUX);
 	} else if (spa->spa_l2cache.sav_vdevs != NULL &&
 	    nvlist_lookup_nvlist_array(spa->spa_l2cache.sav_config,
 	    ZPOOL_CONFIG_L2CACHE, &l2cache, &nl2cache) == 0 &&
@@ -5474,11 +5498,12 @@ spa_vdev_remove(spa_t *spa, uint64_t guid, boolean_t unspare)
 		/*
 		 * Cache devices can always be removed.
 		 */
+		vd = spa_lookup_by_guid(spa, guid, B_TRUE);
+		spa_event_notify(spa, vd, ESC_ZFS_VDEV_REMOVE_AUX);
 		spa_vdev_remove_aux(spa->spa_l2cache.sav_config,
 		    ZPOOL_CONFIG_L2CACHE, l2cache, nl2cache, nv);
 		spa_load_l2cache(spa);
 		spa->spa_l2cache.sav_sync = B_TRUE;
-		spa_event_notify(spa, vd, ESC_ZFS_VDEV_REMOVE_AUX);
 	} else if (vd != NULL && vd->vdev_islog) {
 		ASSERT(!locked);
 		ASSERT(vd == vd->vdev_top);
@@ -5515,9 +5540,9 @@ spa_vdev_remove(spa_t *spa, uint64_t guid, boolean_t unspare)
 		/*
 		 * Clean up the vdev namespace.
 		 */
+		spa_event_notify(spa, vd, ESC_ZFS_VDEV_REMOVE_DEV);
 		spa_vdev_remove_from_namespace(spa, vd);
 
-		spa_event_notify(spa, vd, ESC_ZFS_VDEV_REMOVE_DEV);
 	} else if (vd != NULL) {
 		/*
 		 * Normal vdevs cannot be removed (yet).
@@ -5531,7 +5556,7 @@ spa_vdev_remove(spa_t *spa, uint64_t guid, boolean_t unspare)
 	}
 
 	if (!locked)
-		return (spa_vdev_exit(spa, NULL, txg, error));
+		error = spa_vdev_exit(spa, NULL, txg, error);
 
 	return (error);
 }
@@ -6122,6 +6147,7 @@ spa_sync_config_object(spa_t *spa, dmu_tx_t *tx)
 	spa_config_enter(spa, SCL_STATE, FTAG, RW_READER);
 
 	ASSERT(spa->spa_avz_action == AVZ_ACTION_NONE ||
+	    spa->spa_avz_action == AVZ_ACTION_INITIALIZE ||
 	    spa->spa_all_vdev_zaps != 0);
 
 	if (spa->spa_avz_action == AVZ_ACTION_REBUILD) {
@@ -6274,7 +6300,7 @@ spa_sync_props(void *arg, dmu_tx_t *tx)
 		case ZPOOL_PROP_VERSION:
 			intval = fnvpair_value_uint64(elem);
 			/*
-			 * The version is synced seperatly before other
+			 * The version is synced separately before other
 			 * properties and should be correct by now.
 			 */
 			ASSERT3U(spa_version(spa), >=, intval);
@@ -6304,7 +6330,7 @@ spa_sync_props(void *arg, dmu_tx_t *tx)
 			 * We need to dirty the configuration on all the vdevs
 			 * so that their labels get updated.  It's unnecessary
 			 * to do this for pool creation since the vdev's
-			 * configuratoin has already been dirtied.
+			 * configuration has already been dirtied.
 			 */
 			if (tx->tx_txg != TXG_INITIAL)
 				vdev_config_dirty(spa->spa_root_vdev);
@@ -6515,8 +6541,8 @@ spa_sync(spa_t *spa, uint64_t txg)
 	tx = dmu_tx_create_assigned(dp, txg);
 
 	spa->spa_sync_starttime = gethrtime();
-	taskq_cancel_id(system_taskq, spa->spa_deadman_tqid);
-	spa->spa_deadman_tqid = taskq_dispatch_delay(system_taskq,
+	taskq_cancel_id(system_delay_taskq, spa->spa_deadman_tqid);
+	spa->spa_deadman_tqid = taskq_dispatch_delay(system_delay_taskq,
 	    spa_deadman, spa, TQ_SLEEP, ddi_get_lbolt() +
 	    NSEC_TO_TICK(spa->spa_deadman_synctime));
 
@@ -6704,7 +6730,7 @@ spa_sync(spa_t *spa, uint64_t txg)
 	}
 	dmu_tx_commit(tx);
 
-	taskq_cancel_id(system_taskq, spa->spa_deadman_tqid);
+	taskq_cancel_id(system_delay_taskq, spa->spa_deadman_tqid);
 	spa->spa_deadman_tqid = 0;
 
 	/*
@@ -6722,8 +6748,6 @@ spa_sync(spa_t *spa, uint64_t txg)
 		spa->spa_config_txg = txg;
 		spa->spa_config_syncing = NULL;
 	}
-
-	spa->spa_ubsync = spa->spa_uberblock;
 
 	dsl_pool_sync_done(dp, txg);
 
@@ -6749,6 +6773,13 @@ spa_sync(spa_t *spa, uint64_t txg)
 
 	spa->spa_sync_pass = 0;
 
+	/*
+	 * Update the last synced uberblock here. We want to do this at
+	 * the end of spa_sync() so that consumers of spa_last_synced_txg()
+	 * will be guaranteed that all the processing associated with
+	 * that txg has been completed.
+	 */
+	spa->spa_ubsync = spa->spa_uberblock;
 	spa_config_exit(spa, SCL_CONFIG, FTAG);
 
 	spa_handle_ignored_writes(spa);
@@ -6996,6 +7027,7 @@ module_param(spa_load_verify_data, int, 0644);
 MODULE_PARM_DESC(spa_load_verify_data,
 	"Set to traverse data on pool import");
 
+/* CSTYLED */
 module_param(zio_taskq_batch_pct, uint, 0444);
 MODULE_PARM_DESC(zio_taskq_batch_pct,
 	"Percentage of CPUs to run an IO worker thread");

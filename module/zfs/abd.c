@@ -407,7 +407,7 @@ struct page;
 
 #define	kpm_enable			1
 #define	abd_alloc_chunk(o) \
-	((struct page *) umem_alloc_aligned(PAGESIZE << (o), 64, KM_SLEEP))
+	((struct page *)umem_alloc_aligned(PAGESIZE << (o), 64, KM_SLEEP))
 #define	abd_free_chunk(chunk, o)	umem_free(chunk, PAGESIZE << (o))
 #define	zfs_kmap_atomic(chunk, km)	((void *)chunk)
 #define	zfs_kunmap_atomic(addr, km)	do { (void)(addr); } while (0)
@@ -423,7 +423,8 @@ struct scatterlist {
 };
 
 static void
-sg_init_table(struct scatterlist *sg, int nr) {
+sg_init_table(struct scatterlist *sg, int nr)
+{
 	memset(sg, 0, nr * sizeof (struct scatterlist));
 	sg[nr - 1].end = 1;
 }
@@ -695,7 +696,7 @@ abd_free(abd_t *abd)
 abd_t *
 abd_alloc_sametype(abd_t *sabd, size_t size)
 {
-	boolean_t is_metadata = (sabd->abd_flags | ABD_FLAG_META) != 0;
+	boolean_t is_metadata = (sabd->abd_flags & ABD_FLAG_META) != 0;
 	if (abd_is_linear(sabd)) {
 		return (abd_alloc_linear(size, is_metadata));
 	} else {
@@ -721,7 +722,7 @@ abd_alloc_sametype(abd_t *sabd, size_t size)
 abd_t *
 abd_alloc_for_io(size_t size, boolean_t is_metadata)
 {
-	return (abd_alloc_linear(size, is_metadata));
+	return (abd_alloc(size, is_metadata));
 }
 
 /*
@@ -1315,13 +1316,13 @@ abd_cmp(abd_t *dabd, abd_t *sabd)
  */
 void
 abd_raidz_gen_iterate(abd_t **cabds, abd_t *dabd,
-	ssize_t csize, ssize_t dsize, const unsigned parity,
-	void (*func_raidz_gen)(void **, const void *, size_t, size_t))
+    ssize_t csize, ssize_t dsize, const unsigned parity,
+    void (*func_raidz_gen)(void **, const void *, size_t, size_t))
 {
 	int i;
 	ssize_t len, dlen;
 	struct abd_iter caiters[3];
-	struct abd_iter daiter;
+	struct abd_iter daiter = {0};
 	void *caddrs[3];
 	unsigned long flags;
 
@@ -1407,10 +1408,10 @@ abd_raidz_gen_iterate(abd_t **cabds, abd_t *dabd,
  */
 void
 abd_raidz_rec_iterate(abd_t **cabds, abd_t **tabds,
-	ssize_t tsize, const unsigned parity,
-	void (*func_raidz_rec)(void **t, const size_t tsize, void **c,
-	const unsigned *mul),
-	const unsigned *mul)
+    ssize_t tsize, const unsigned parity,
+    void (*func_raidz_rec)(void **t, const size_t tsize, void **c,
+    const unsigned *mul),
+    const unsigned *mul)
 {
 	int i;
 	ssize_t len;
@@ -1486,8 +1487,8 @@ abd_nr_pages_off(abd_t *abd, unsigned int size, size_t off)
 	else
 		pos = abd->abd_u.abd_scatter.abd_offset + off;
 
-	return ((pos + size + PAGESIZE - 1) >> PAGE_SHIFT)
-					- (pos >> PAGE_SHIFT);
+	return ((pos + size + PAGESIZE - 1) >> PAGE_SHIFT) -
+	    (pos >> PAGE_SHIFT);
 }
 
 /*
@@ -1497,7 +1498,7 @@ abd_nr_pages_off(abd_t *abd, unsigned int size, size_t off)
  */
 unsigned int
 abd_scatter_bio_map_off(struct bio *bio, abd_t *abd,
-			unsigned int io_size, size_t off)
+    unsigned int io_size, size_t off)
 {
 	int i;
 	struct abd_iter aiter;
@@ -1537,6 +1538,7 @@ abd_scatter_bio_map_off(struct bio *bio, abd_t *abd,
 module_param(zfs_abd_scatter_enabled, int, 0644);
 MODULE_PARM_DESC(zfs_abd_scatter_enabled,
 	"Toggle whether ABD allocations must be linear.");
+/* CSTYLED */
 module_param(zfs_abd_scatter_max_order, uint, 0644);
 MODULE_PARM_DESC(zfs_abd_scatter_max_order,
 	"Maximum order allocation used for a scatter ABD.");

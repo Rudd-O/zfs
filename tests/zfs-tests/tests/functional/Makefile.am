@@ -5,6 +5,7 @@ SUBDIRS = \
 	cache \
 	cachefile \
 	casenorm \
+	chattr \
 	checksum \
 	clean_mirror \
 	cli_root \
@@ -14,6 +15,7 @@ SUBDIRS = \
 	delegate \
 	devices \
 	exec \
+	fault \
 	features \
 	grow_pool \
 	grow_replicas \
@@ -22,6 +24,7 @@ SUBDIRS = \
 	inuse \
 	large_files \
 	largest_pool \
+	libzfs \
 	link_count \
 	migration \
 	mmap \

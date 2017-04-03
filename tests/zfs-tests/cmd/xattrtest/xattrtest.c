@@ -98,31 +98,32 @@ static char script[PATH_MAX] = "/bin/true";
 static char xattrbytes[XATTR_SIZE_MAX];
 
 static int
-usage(int argc, char **argv) {
+usage(int argc, char **argv)
+{
 	fprintf(stderr,
-	"usage: %s [-hvycdrRk] [-n <nth>] [-f <files>] [-x <xattrs>]\n"
-	"       [-s <bytes>] [-p <path>] [-t <script> ] [-o <phase>]\n",
-	argv[0]);
+	    "usage: %s [-hvycdrRk] [-n <nth>] [-f <files>] [-x <xattrs>]\n"
+	    "       [-s <bytes>] [-p <path>] [-t <script> ] [-o <phase>]\n",
+	    argv[0]);
 
 	fprintf(stderr,
-	"  --help        -h           This help\n"
-	"  --verbose     -v           Increase verbosity\n"
-	"  --verify      -y           Verify xattr contents\n"
-	"  --nth         -n <nth>     Print every nth file\n"
-	"  --files       -f <files>   Set xattrs on N files\n"
-	"  --xattrs      -x <xattrs>  Set N xattrs on each file\n"
-	"  --size        -s <bytes>   Set N bytes per xattr\n"
-	"  --path        -p <path>    Path to files\n"
-	"  --synccaches  -c           Sync caches between phases\n"
-	"  --dropcaches  -d           Drop caches between phases\n"
-	"  --script      -t <script>  Exec script between phases\n"
-	"  --seed        -e <seed>    Random seed value\n"
-	"  --random      -r           Randomly sized xattrs [16-size]\n"
-	"  --randomvalue -R           Random xattr values\n"
-	"  --keep        -k           Don't unlink files\n"
-	"  --only        -o <num>     Only run phase N\n"
-	"                             0=all, 1=create, 2=setxattr,\n"
-	"                             3=getxattr, 4=unlink\n\n");
+	    "  --help        -h           This help\n"
+	    "  --verbose     -v           Increase verbosity\n"
+	    "  --verify      -y           Verify xattr contents\n"
+	    "  --nth         -n <nth>     Print every nth file\n"
+	    "  --files       -f <files>   Set xattrs on N files\n"
+	    "  --xattrs      -x <xattrs>  Set N xattrs on each file\n"
+	    "  --size        -s <bytes>   Set N bytes per xattr\n"
+	    "  --path        -p <path>    Path to files\n"
+	    "  --synccaches  -c           Sync caches between phases\n"
+	    "  --dropcaches  -d           Drop caches between phases\n"
+	    "  --script      -t <script>  Exec script between phases\n"
+	    "  --seed        -e <seed>    Random seed value\n"
+	    "  --random      -r           Randomly sized xattrs [16-size]\n"
+	    "  --randomvalue -R           Random xattr values\n"
+	    "  --keep        -k           Don't unlink files\n"
+	    "  --only        -o <num>     Only run phase N\n"
+	    "                             0=all, 1=create, 2=setxattr,\n"
+	    "                             3=getxattr, 4=unlink\n\n");
 
 	return (1);
 }
@@ -289,7 +290,8 @@ run_process(const char *path, char *argv[])
 	} else if (pid > 0) {
 		int status;
 
-		while ((rc = waitpid(pid, &status, 0)) == -1 && errno == EINTR);
+		while ((rc = waitpid(pid, &status, 0)) == -1 &&
+		    errno == EINTR) { }
 
 		if (rc < 0 || !WIFEXITED(status))
 			return (-1);
@@ -369,8 +371,8 @@ create_files(void)
 	file = malloc(PATH_MAX);
 	if (file == NULL) {
 		rc = ENOMEM;
-		ERROR("Error %d: malloc(%d) bytes for file name\n",
-			rc, PATH_MAX);
+		ERROR("Error %d: malloc(%d) bytes for file name\n", rc,
+		    PATH_MAX);
 		goto out;
 	}
 
@@ -392,7 +394,7 @@ create_files(void)
 		rc = open(file, O_CREAT, 0644);
 		if (rc == -1) {
 			ERROR("Error %d: open(%s, O_CREATE, 0644)\n",
-				errno, file);
+			    errno, file);
 			rc = errno;
 			goto out;
 		}
@@ -454,16 +456,16 @@ setxattrs(void)
 	value = malloc(XATTR_SIZE_MAX);
 	if (value == NULL) {
 		rc = ENOMEM;
-		ERROR("Error %d: malloc(%d) bytes for xattr value\n",
-			rc, XATTR_SIZE_MAX);
+		ERROR("Error %d: malloc(%d) bytes for xattr value\n", rc,
+		    XATTR_SIZE_MAX);
 		goto out;
 	}
 
 	file = malloc(PATH_MAX);
 	if (file == NULL) {
 		rc = ENOMEM;
-		ERROR("Error %d: malloc(%d) bytes for file name\n",
-			rc, PATH_MAX);
+		ERROR("Error %d: malloc(%d) bytes for file name\n", rc,
+		    PATH_MAX);
 		goto out;
 	}
 
@@ -525,16 +527,16 @@ getxattrs(void)
 	verify_value = malloc(XATTR_SIZE_MAX);
 	if (verify_value == NULL) {
 		rc = ENOMEM;
-		ERROR("Error %d: malloc(%d) bytes for xattr verify\n",
-			rc, XATTR_SIZE_MAX);
+		ERROR("Error %d: malloc(%d) bytes for xattr verify\n", rc,
+		    XATTR_SIZE_MAX);
 		goto out;
 	}
 
 	value = malloc(XATTR_SIZE_MAX);
 	if (value == NULL) {
 		rc = ENOMEM;
-		ERROR("Error %d: malloc(%d) bytes for xattr value\n",
-			rc, XATTR_SIZE_MAX);
+		ERROR("Error %d: malloc(%d) bytes for xattr value\n", rc,
+		    XATTR_SIZE_MAX);
 		goto out;
 	}
 
@@ -544,8 +546,8 @@ getxattrs(void)
 	file = malloc(PATH_MAX);
 	if (file == NULL) {
 		rc = ENOMEM;
-		ERROR("Error %d: malloc(%d) bytes for file name\n",
-			rc, PATH_MAX);
+		ERROR("Error %d: malloc(%d) bytes for file name\n", rc,
+		    PATH_MAX);
 		goto out;
 	}
 

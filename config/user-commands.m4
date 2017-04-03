@@ -95,7 +95,7 @@ AC_DEFUN([ZFS_AC_CONFIG_USER_COMMANDS_COMMON], [
 ])
 
 dnl #
-dnl # Linux commands, used withing 'is_linux' blocks of test scripts.
+dnl # Linux commands, used within 'is_linux' blocks of test scripts.
 dnl # These commands may take different command line arguments.
 dnl #
 AC_DEFUN([ZFS_AC_CONFIG_USER_COMMANDS_LINUX], [
@@ -108,6 +108,9 @@ AC_DEFUN([ZFS_AC_CONFIG_USER_COMMANDS_LINUX], [
 	AC_PATH_TOOL(IOSTAT, iostat, "")
 	AC_PATH_TOOL(LOCKFS, lsof, "")
 	AC_PATH_TOOL(LSBLK, lsblk, "")
+	AC_PATH_TOOL(LSMOD, lsmod, "")
+	AC_PATH_TOOL(LSSCSI, lsscsi, "")
+	AC_PATH_TOOL(MODLOAD, modprobe, "")
 	AC_PATH_TOOL(MODUNLOAD, rmmod, "")
 	AC_PATH_TOOL(MPSTAT, mpstat, "")
 	AC_PATH_TOOL(NEWFS, mke2fs, "")

@@ -600,7 +600,7 @@ nfs_update_shareopts(sa_share_impl_t impl_share, const char *resource,
 	old_shareopts = FSINFO(impl_share, nfs_fstype)->shareopts;
 
 	if (strcmp(shareopts, "on") == 0)
-		shareopts = "rw";
+		shareopts = "rw,crossmnt";
 
 	if (FSINFO(impl_share, nfs_fstype)->active && old_shareopts != NULL &&
 	    strcmp(old_shareopts, shareopts) != 0) {
@@ -688,7 +688,8 @@ nfs_check_exportfs(void)
 	}
 
 	if (pid > 0) {
-		while ((rc = waitpid(pid, &status, 0)) <= 0 && errno == EINTR);
+		while ((rc = waitpid(pid, &status, 0)) <= 0 &&
+		    errno == EINTR) { }
 
 		if (rc <= 0) {
 			(void) close(nfs_exportfs_temp_fd);
@@ -722,7 +723,7 @@ nfs_check_exportfs(void)
 }
 
 /*
- * Provides a convenient wrapper for determing nfs availability
+ * Provides a convenient wrapper for determining nfs availability
  */
 static boolean_t
 nfs_available(void)

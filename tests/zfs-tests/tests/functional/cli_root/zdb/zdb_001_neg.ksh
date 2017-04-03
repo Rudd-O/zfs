@@ -37,7 +37,7 @@
 # return an error.
 #
 # STRATEGY:
-# 1. Create an array containg bad zdb parameters.
+# 1. Create an array containing bad zdb parameters.
 # 2. For each element, execute the sub-command.
 # 3. Verify it returns an error.
 #
@@ -56,8 +56,8 @@ set -A args "create" "add" "destroy" "import fakepool" \
     "add mirror fakepool" "add raidz fakepool" \
     "add raidz1 fakepool" "add raidz2 fakepool" \
     "setvprop" "blah blah" "-%" "--?" "-*" "-=" \
-    "-a" "-f" "-g" "-h" "-j" "-k" "-m" "-n" "-o" "-p" "-p /tmp" \
-    "-q" "-r" "-t" "-w" "-x" "-y" "-z" \
+    "-a" "-f" "-g" "-h" "-j" "-k" "-m" "-n" "-o" "-p" \
+    "-p /tmp" "-r" "-t" "-w" "-x" "-y" "-z" \
     "-D" "-E" "-G" "-H" "-I" "-J" "-K" "-M" \
     "-N" "-Q" "-R" "-S" "-W" "-Y" "-Z"
 

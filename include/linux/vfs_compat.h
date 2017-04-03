@@ -225,7 +225,8 @@ zpl_posix_acl_release(struct posix_acl *acl)
 #define	zpl_forget_cached_acl(ip, ty)		forget_cached_acl(ip, ty)
 #else
 static inline void
-zpl_set_cached_acl(struct inode *ip, int type, struct posix_acl *newer) {
+zpl_set_cached_acl(struct inode *ip, int type, struct posix_acl *newer)
+{
 	struct posix_acl *older = NULL;
 
 	spin_lock(&ip->i_lock);
@@ -250,7 +251,8 @@ zpl_set_cached_acl(struct inode *ip, int type, struct posix_acl *newer) {
 }
 
 static inline void
-zpl_forget_cached_acl(struct inode *ip, int type) {
+zpl_forget_cached_acl(struct inode *ip, int type)
+{
 	zpl_set_cached_acl(ip, type, (struct posix_acl *)ACL_NOT_CACHED);
 }
 #endif /* HAVE_SET_CACHED_ACL_USABLE */
@@ -261,7 +263,8 @@ zpl_forget_cached_acl(struct inode *ip, int type) {
 #define	__posix_acl_create(acl, gfp, mode)	posix_acl_create(acl, gfp, mode)
 #else
 static inline int
-__posix_acl_chmod(struct posix_acl **acl, int flags, umode_t umode) {
+__posix_acl_chmod(struct posix_acl **acl, int flags, umode_t umode)
+{
 	struct posix_acl *oldacl = *acl;
 	mode_t mode = umode;
 	int error;
@@ -282,7 +285,8 @@ __posix_acl_chmod(struct posix_acl **acl, int flags, umode_t umode) {
 }
 
 static inline int
-__posix_acl_create(struct posix_acl **acl, int flags, umode_t *umodep) {
+__posix_acl_create(struct posix_acl **acl, int flags, umode_t *umodep)
+{
 	struct posix_acl *oldacl = *acl;
 	mode_t mode = *umodep;
 	int error;
@@ -449,5 +453,48 @@ setattr_prepare(struct dentry *dentry, struct iattr *ia)
 	return (inode_change_ok(dentry->d_inode, ia));
 }
 #endif
+
+/*
+ * 4.11 API change
+ * These macros are defined by kernel 4.11.  We define them so that the same
+ * code builds under kernels < 4.11 and >= 4.11.  The macros are set to 0 so
+ * that it will create obvious failures if they are accidentally used when built
+ * against a kernel >= 4.11.
+ */
+
+#ifndef STATX_BASIC_STATS
+#define	STATX_BASIC_STATS	0
+#endif
+
+#ifndef AT_STATX_SYNC_AS_STAT
+#define	AT_STATX_SYNC_AS_STAT	0
+#endif
+
+/*
+ * 4.11 API change
+ * 4.11 takes struct path *, < 4.11 takes vfsmount *
+ */
+
+#ifdef HAVE_VFSMOUNT_IOPS_GETATTR
+#define	ZPL_GETATTR_WRAPPER(func)					\
+static int								\
+func(struct vfsmount *mnt, struct dentry *dentry, struct kstat *stat)	\
+{									\
+	struct path path = { .mnt = mnt, .dentry = dentry };		\
+	return func##_impl(&path, stat, STATX_BASIC_STATS,		\
+	    AT_STATX_SYNC_AS_STAT);					\
+}
+#elif defined(HAVE_PATH_IOPS_GETATTR)
+#define	ZPL_GETATTR_WRAPPER(func)					\
+static int								\
+func(const struct path *path, struct kstat *stat, u32 request_mask,	\
+    unsigned int query_flags)						\
+{									\
+	return (func##_impl(path, stat, request_mask, query_flags));	\
+}
+#else
+#error
+#endif
+
 
 #endif /* _ZFS_VFS_H */

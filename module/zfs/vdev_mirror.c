@@ -153,7 +153,7 @@ vdev_mirror_load(mirror_map_t *mm, vdev_t *vd, uint64_t zio_offset)
 
 	/*
 	 * Apply half the seek increment to I/O's within seek offset
-	 * of the last I/O queued to this vdev as they should incure less
+	 * of the last I/O queued to this vdev as they should incur less
 	 * of a seek increment.
 	 */
 	if (ABS(lastoffset - zio_offset) <
@@ -646,6 +646,7 @@ vdev_ops_t vdev_spare_ops = {
 };
 
 #if defined(_KERNEL) && defined(HAVE_SPL)
+/* BEGIN CSTYLED */
 module_param(zfs_vdev_mirror_rotating_inc, int, 0644);
 MODULE_PARM_DESC(zfs_vdev_mirror_rotating_inc,
 	"Rotating media load increment for non-seeking I/O's");
@@ -655,6 +656,7 @@ MODULE_PARM_DESC(zfs_vdev_mirror_rotating_seek_inc,
 	"Rotating media load increment for seeking I/O's");
 
 module_param(zfs_vdev_mirror_rotating_seek_offset, int, 0644);
+
 MODULE_PARM_DESC(zfs_vdev_mirror_rotating_seek_offset,
 	"Offset in bytes from the last I/O which "
 	"triggers a reduced rotating media seek increment");
@@ -666,5 +668,5 @@ MODULE_PARM_DESC(zfs_vdev_mirror_non_rotating_inc,
 module_param(zfs_vdev_mirror_non_rotating_seek_inc, int, 0644);
 MODULE_PARM_DESC(zfs_vdev_mirror_non_rotating_seek_inc,
 	"Non-rotating media load increment for seeking I/O's");
-
+/* END CSTYLED */
 #endif

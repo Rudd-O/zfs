@@ -185,7 +185,7 @@ zed_udev_monitor(void *arg)
 		pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
 
 		/*
-		 * Strongly typed device is the prefered filter
+		 * Strongly typed device is the preferred filter
 		 */
 		type = udev_device_get_property_value(dev, "ID_FS_TYPE");
 		if (type != NULL && type[0] != '\0') {
@@ -283,7 +283,7 @@ zed_udev_monitor(void *arg)
 		if (strcmp(class, EC_DEV_STATUS) == 0 &&
 		    udev_device_get_property_value(dev, "DM_UUID") &&
 		    udev_device_get_property_value(dev, "MPATH_SBIN_PATH")) {
-			tmp = (char *) udev_device_get_devnode(dev);
+			tmp = (char *)udev_device_get_devnode(dev);
 			tmp2 = zfs_get_underlying_path(tmp);
 			if (tmp && tmp2 && (strcmp(tmp, tmp2) != 0)) {
 				/*

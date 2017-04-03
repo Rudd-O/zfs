@@ -25,7 +25,8 @@
  * Copyright 2012 Milan Jurik. All rights reserved.
  * Copyright (c) 2012, Joyent, Inc. All rights reserved.
  * Copyright (c) 2013 Steven Hartland.  All rights reserved.
- * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2016 Igor Kozhukhov <ikozhukhov@gmail.com>.
+ * Copyright 2016 Nexenta Systems, Inc.
  */
 
 #include <assert.h>
@@ -231,7 +232,7 @@ get_usage(zfs_help_t idx)
 		    "[-o \"all\" | field[,...]]\n"
 		    "\t    [-t type[,...]] [-s source[,...]]\n"
 		    "\t    <\"all\" | property[,...]> "
-		    "[filesystem|volume|snapshot] ...\n"));
+		    "[filesystem|volume|snapshot|bookmark] ...\n"));
 	case HELP_INHERIT:
 		return (gettext("\tinherit [-rS] <property> "
 		    "<filesystem|volume|snapshot> ...\n"));
@@ -857,7 +858,7 @@ zfs_do_create(int argc, char **argv)
 		char *strval;
 		char msg[1024];
 
-		if ((p = strchr(argv[0], '/')))
+		if ((p = strchr(argv[0], '/')) != NULL)
 			*p = '\0';
 		zpool_handle = zpool_open(g_zfs, argv[0]);
 		if (p != NULL)
@@ -1607,7 +1608,7 @@ zfs_do_get(int argc, char **argv)
 {
 	zprop_get_cbdata_t cb = { 0 };
 	int i, c, flags = ZFS_ITER_ARGS_CAN_BE_PATHS;
-	int types = ZFS_TYPE_DATASET;
+	int types = ZFS_TYPE_DATASET | ZFS_TYPE_BOOKMARK;
 	char *value, *fields;
 	int ret = 0;
 	int limit = 0;
@@ -2174,7 +2175,7 @@ zfs_do_upgrade(int argc, char **argv)
 		if (cb.cb_numfailed != 0)
 			ret = 1;
 	} else {
-		/* List old-version filesytems */
+		/* List old-version filesystems */
 		boolean_t found;
 		(void) printf(gettext("This system is currently running "
 		    "ZFS filesystem version %llu.\n\n"), ZPL_VERSION);
@@ -2332,9 +2333,9 @@ compare_nums:
 					rc = (rv64 < lv64) ? 1 : -1;
 			} else {
 				if ((nvlist_lookup_string(lnvl, propname,
-						&lvstr) == ENOENT) ||
+				    &lvstr) == ENOENT) ||
 				    (nvlist_lookup_string(rnvl, propname,
-						&rvstr) == ENOENT)) {
+				    &rvstr) == ENOENT)) {
 					goto compare_nums;
 				}
 				rc = strcmp(lvstr, rvstr);
@@ -2353,6 +2354,7 @@ compare_nums:
 			if (rv64 != lv64)
 				rc = (rv64 < lv64) ? 1 : -1;
 			break;
+
 		default:
 			break;
 		}
@@ -2529,7 +2531,7 @@ userspace_cb(void *arg, const char *domain, uid_t rid, uint64_t space)
 		namelen = strlen(name);
 	}
 	nameidx = us_field_index("name");
-	if (namelen > cb->cb_width[nameidx])
+	if (nameidx >= 0 && namelen > cb->cb_width[nameidx])
 		cb->cb_width[nameidx] = namelen;
 
 	/*
@@ -2561,12 +2563,12 @@ userspace_cb(void *arg, const char *domain, uid_t rid, uint64_t space)
 		if (!nvlist_exists(props, "used"))
 			(void) nvlist_add_uint64(props, "used", 0);
 	} else if (prop == ZFS_PROP_USEROBJUSED ||
-		    prop == ZFS_PROP_GROUPOBJUSED) {
+	    prop == ZFS_PROP_GROUPOBJUSED) {
 		propname = "objused";
 		if (!nvlist_exists(props, "objquota"))
 			(void) nvlist_add_uint64(props, "objquota", 0);
 	} else if (prop == ZFS_PROP_USEROBJQUOTA ||
-		    prop == ZFS_PROP_GROUPOBJQUOTA) {
+	    prop == ZFS_PROP_GROUPOBJQUOTA) {
 		propname = "objquota";
 		if (!nvlist_exists(props, "objused"))
 			(void) nvlist_add_uint64(props, "objused", 0);
@@ -2574,7 +2576,7 @@ userspace_cb(void *arg, const char *domain, uid_t rid, uint64_t space)
 		return (-1);
 	}
 	sizeidx = us_field_index(propname);
-	if (sizelen > cb->cb_width[sizeidx])
+	if (sizeidx >= 0 && sizelen > cb->cb_width[sizeidx])
 		cb->cb_width[sizeidx] = sizelen;
 
 	if (nvlist_add_uint64(props, propname, space) != 0)
@@ -2637,7 +2639,7 @@ print_us_node(boolean_t scripted, boolean_t parsable, int *fields, int types,
 		case USFIELD_NAME:
 			if (type == DATA_TYPE_UINT64) {
 				(void) sprintf(valstr, "%llu",
-				    (u_longlong_t) val64);
+				    (u_longlong_t)val64);
 				strval = valstr;
 			}
 			break;
@@ -2648,7 +2650,7 @@ print_us_node(boolean_t scripted, boolean_t parsable, int *fields, int types,
 			if (type == DATA_TYPE_UINT64) {
 				if (parsable) {
 					(void) sprintf(valstr, "%llu",
-					    (u_longlong_t) val64);
+					    (u_longlong_t)val64);
 				} else {
 					zfs_nicenum(val64, valstr,
 					    sizeof (valstr));
@@ -2672,9 +2674,9 @@ print_us_node(boolean_t scripted, boolean_t parsable, int *fields, int types,
 		if (scripted)
 			(void) printf("%s", strval);
 		else if (field == USFIELD_TYPE || field == USFIELD_NAME)
-			(void) printf("%-*s", (int) width[field], strval);
+			(void) printf("%-*s", (int)width[field], strval);
 		else
-			(void) printf("%*s", (int) width[field], strval);
+			(void) printf("%*s", (int)width[field], strval);
 
 		first = B_FALSE;
 		cfield++;
@@ -2699,10 +2701,10 @@ print_us(boolean_t scripted, boolean_t parsable, int *fields, int types,
 			col = gettext(us_field_hdr[field]);
 			if (field == USFIELD_TYPE || field == USFIELD_NAME) {
 				(void) printf(first ? "%-*s" : "  %-*s",
-				    (int) width[field], col);
+				    (int)width[field], col);
 			} else {
 				(void) printf(first ? "%*s" : "  %*s",
-				    (int) width[field], col);
+				    (int)width[field], col);
 			}
 			first = B_FALSE;
 			cfield++;
@@ -3376,7 +3378,7 @@ zfs_do_promote(int argc, char **argv)
  *
  *	-r	Delete any intervening snapshots before doing rollback
  *	-R	Delete any snapshots and their clones
- *	-f	ignored for backwards compatability
+ *	-f	ignored for backwards compatibility
  *
  * Given a filesystem, rollback to a specific snapshot, discarding any changes
  * since then and making it the active dataset.  If more recent snapshots exist,
@@ -3818,13 +3820,42 @@ zfs_do_send(int argc, char **argv)
 			flags.compress = B_TRUE;
 			break;
 		case ':':
-			(void) fprintf(stderr, gettext("missing argument for "
-			    "'%c' option\n"), optopt);
+			/*
+			 * If a parameter was not passed, optopt contains the
+			 * value that would normally lead us into the
+			 * appropriate case statement.  If it's > 256, then this
+			 * must be a longopt and we should look at argv to get
+			 * the string.  Otherwise it's just the character, so we
+			 * should use it directly.
+			 */
+			if (optopt <= UINT8_MAX) {
+				(void) fprintf(stderr,
+				    gettext("missing argument for '%c' "
+				    "option\n"), optopt);
+			} else {
+				(void) fprintf(stderr,
+				    gettext("missing argument for '%s' "
+				    "option\n"), argv[optind - 1]);
+			}
 			usage(B_FALSE);
 			break;
 		case '?':
-			(void) fprintf(stderr, gettext("invalid option '%c'\n"),
-			    optopt);
+			/*FALLTHROUGH*/
+		default:
+			/*
+			 * If an invalid flag was passed, optopt contains the
+			 * character if it was a short flag, or 0 if it was a
+			 * longopt.
+			 */
+			if (optopt != 0) {
+				(void) fprintf(stderr,
+				    gettext("invalid option '%c'\n"), optopt);
+			} else {
+				(void) fprintf(stderr,
+				    gettext("invalid option '%s'\n"),
+				    argv[optind - 1]);
+
+			}
 			usage(B_FALSE);
 		}
 	}
@@ -3980,7 +4011,7 @@ zfs_do_send(int argc, char **argv)
 static int
 zfs_do_receive(int argc, char **argv)
 {
-	int c, err;
+	int c, err = 0;
 	recvflags_t flags = { 0 };
 	boolean_t abort_resumable = B_FALSE;
 
@@ -4263,7 +4294,7 @@ deleg_perm_type(zfs_deleg_note_t note)
 	}
 }
 
-static int inline
+static int
 who_type2weight(zfs_deleg_who_type_t who_type)
 {
 	int res;
@@ -4483,7 +4514,7 @@ fs_perm_fini(fs_perm_t *fsperm)
 	uu_avl_destroy(fsperm->fsp_uge_avl);
 }
 
-static void inline
+static void
 set_deleg_perm_node(uu_avl_t *avl, deleg_perm_node_t *node,
     zfs_deleg_who_type_t who_type, const char *name, char locality)
 {
@@ -4580,8 +4611,9 @@ parse_fs_perm(fs_perm_t *fsperm, nvlist_t *nvl)
 			avl_pool = fspset->fsps_who_perm_avl_pool;
 			avl = fsperm->fsp_uge_avl;
 			break;
+
 		default:
-			break;
+			assert(!"unhandled zfs_deleg_who_type_t");
 		}
 
 		if (is_set) {
@@ -4617,6 +4649,7 @@ parse_fs_perm(fs_perm_t *fsperm, nvlist_t *nvl)
 						if (g)
 							nice_name = g->gr_name;
 						break;
+
 					default:
 						break;
 					}
@@ -4954,8 +4987,8 @@ store_allow_perm(zfs_deleg_who_type_t type, boolean_t local, boolean_t descend,
 	int i;
 	char ld[2] = { '\0', '\0' };
 	char who_buf[MAXNAMELEN + 32];
-	char base_type = ZFS_DELEG_WHO_UNKNOWN;
-	char set_type = ZFS_DELEG_WHO_UNKNOWN;
+	char base_type = '\0';
+	char set_type = '\0';
 	nvlist_t *base_nvl = NULL;
 	nvlist_t *set_nvl = NULL;
 	nvlist_t *nvl;
@@ -5004,8 +5037,10 @@ store_allow_perm(zfs_deleg_who_type_t type, boolean_t local, boolean_t descend,
 			ld[0] = ZFS_DELEG_LOCAL;
 		if (descend)
 			ld[1] = ZFS_DELEG_DESCENDENT;
-	default:
 		break;
+
+	default:
+		assert(set_type != '\0' && base_type != '\0');
 	}
 
 	if (perms != NULL) {
@@ -5239,7 +5274,7 @@ print_set_creat_perms(uu_avl_t *who_avl)
 	}
 }
 
-static void inline
+static void
 print_uge_deleg_perms(uu_avl_t *who_avl, boolean_t local, boolean_t descend,
     const char *title)
 {
@@ -5290,8 +5325,10 @@ print_uge_deleg_perms(uu_avl_t *who_avl, boolean_t local, boolean_t descend,
 				case ZFS_DELEG_EVERYONE:
 					who = gettext("everyone");
 					who_name = NULL;
-				default:
 					break;
+
+				default:
+					assert(who != NULL);
 				}
 
 				prt_who = B_FALSE;
@@ -5996,10 +6033,10 @@ share_mount_one(zfs_handle_t *zhp, int op, int flags, char *protocol,
 		shared_smb = zfs_is_shared_smb(zhp, NULL);
 
 		if ((shared_nfs && shared_smb) ||
-		    ((shared_nfs && strcmp(shareopts, "on") == 0) &&
-		    (strcmp(smbshareopts, "off") == 0)) ||
-		    ((shared_smb && strcmp(smbshareopts, "on") == 0) &&
-		    (strcmp(shareopts, "off") == 0))) {
+		    (shared_nfs && strcmp(shareopts, "on") == 0 &&
+		    strcmp(smbshareopts, "off") == 0) ||
+		    (shared_smb && strcmp(smbshareopts, "on") == 0 &&
+		    strcmp(shareopts, "off") == 0)) {
 			if (!explicit)
 				return (0);
 
@@ -6526,6 +6563,15 @@ unshare_unmount(int op, int argc, char **argv)
 				continue;
 			}
 
+			/*
+			 * Ignore datasets that are excluded/restricted by
+			 * parent pool name.
+			 */
+			if (zpool_skip_pool(zfs_get_pool_name(zhp))) {
+				zfs_close(zhp);
+				continue;
+			}
+
 			switch (op) {
 			case OP_SHARE:
 				verify(zfs_prop_get(zhp, ZFS_PROP_SHARENFS,
@@ -6787,7 +6833,7 @@ zfs_do_diff(int argc, char **argv)
 	if (copy == NULL)
 		usage(B_FALSE);
 
-	if ((atp = strchr(copy, '@')))
+	if ((atp = strchr(copy, '@')) != NULL)
 		*atp = '\0';
 
 	if ((zhp = zfs_open(g_zfs, copy, ZFS_TYPE_FILESYSTEM)) == NULL) {

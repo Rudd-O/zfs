@@ -26,7 +26,8 @@
 #
 
 #
-# Copyright (c) 2013 by Delphix. All rights reserved.
+# Copyright (c) 2013, 2015 by Delphix. All rights reserved.
+# Copyright 2016 Nexenta Systems, Inc.
 #
 
 . $STF_SUITE/include/libtest.shlib
@@ -45,6 +46,8 @@
 
 verify_runnable "global"
 
+volsize=$($ZFS get -H -o value volsize $TESTPOOL/$TESTVOL)
+
 function cleanup
 {
 	typeset dumpdev=$(get_dumpdevice)
@@ -55,6 +58,7 @@ function cleanup
 	if poolexists $TESTPOOL1 ; then
 		destroy_pool $TESTPOOL1
 	fi
+	$ZFS set volsize=$volsize $TESTPOOL/$TESTVOL
 }
 
 log_assert "Verify zpool creation and newfs on dump zvol is denied."
@@ -65,6 +69,7 @@ savedumpdev=$(get_dumpdevice)
 
 safe_dumpadm $voldev
 
+unset NOINUSE_CHECK
 $ECHO "y" | $NEWFS -v $voldev > /dev/null 2>&1
 if (( $? == 0 )) ; then
 	log_fail "newfs on dump zvol succeeded unexpectedly"

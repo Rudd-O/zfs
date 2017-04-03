@@ -55,7 +55,6 @@ ZFS_AC_LICENSE
 ZFS_AC_PACKAGE
 ZFS_AC_CONFIG
 ZFS_AC_DEBUG
-ZFS_AC_DEBUG_DMU_TX
 
 AC_CONFIG_FILES([
 	Makefile
@@ -180,6 +179,7 @@ AC_CONFIG_FILES([
 	tests/zfs-tests/tests/functional/cachefile/Makefile
 	tests/zfs-tests/tests/functional/casenorm/Makefile
 	tests/zfs-tests/tests/functional/checksum/Makefile
+	tests/zfs-tests/tests/functional/chattr/Makefile
 	tests/zfs-tests/tests/functional/clean_mirror/Makefile
 	tests/zfs-tests/tests/functional/cli_root/Makefile
 	tests/zfs-tests/tests/functional/cli_root/zdb/Makefile
@@ -234,6 +234,7 @@ AC_CONFIG_FILES([
 	tests/zfs-tests/tests/functional/delegate/Makefile
 	tests/zfs-tests/tests/functional/devices/Makefile
 	tests/zfs-tests/tests/functional/exec/Makefile
+	tests/zfs-tests/tests/functional/fault/Makefile
 	tests/zfs-tests/tests/functional/features/async_destroy/Makefile
 	tests/zfs-tests/tests/functional/features/large_dnode/Makefile
 	tests/zfs-tests/tests/functional/features/Makefile
@@ -245,6 +246,7 @@ AC_CONFIG_FILES([
 	tests/zfs-tests/tests/functional/large_files/Makefile
 	tests/zfs-tests/tests/functional/largest_pool/Makefile
 	tests/zfs-tests/tests/functional/link_count/Makefile
+	tests/zfs-tests/tests/functional/libzfs/Makefile
 	tests/zfs-tests/tests/functional/migration/Makefile
 	tests/zfs-tests/tests/functional/mmap/Makefile
 	tests/zfs-tests/tests/functional/mount/Makefile

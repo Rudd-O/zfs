@@ -39,6 +39,7 @@ function cleanup
 	if datasetexists $TESTPOOL2 ; then
 		log_must $ZPOOL destroy -f $TESTPOOL2
 	fi
+	rm -rf $TESTDIR
 }
 
 #
@@ -87,13 +88,6 @@ function verify_slog_device
 	if [[ -z $pool || -z $device || -z $status ]]; then
 		log_fail "Usage: verify_slog_device <pool> <device> " \
 			"<status> [type]"
-	fi
-
-	if [[ $WRAPPER == *"smi"* ]]; then
-		$ECHO $device | $EGREP "^c[0-F]+([td][0-F]+)+$" > /dev/null 2>&1
-		if (( $? == 0 )); then
-			device=${device}s2
-		fi
 	fi
 
 	#

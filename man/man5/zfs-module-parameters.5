@@ -182,6 +182,30 @@ Use \fB1\fR for yes (default) and \fB0\fR for no.
 .sp
 .ne 2
 .na
+\fBzfs_metaslab_segment_weight_enabled\fR (int)
+.ad
+.RS 12n
+Enable/disable segment-based metaslab selection.
+.sp
+Use \fB1\fR for yes (default) and \fB0\fR for no.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs_metaslab_switch_threshold\fR (int)
+.ad
+.RS 12n
+When using segment-based metaslab selection, continue allocating
+from the active metaslab until \fBlzfs_metaslab_switch_threshold\fR
+worth of buckets have been exhausted.
+.sp
+Default value: \fB2\fR.
+.RE
+
+.sp
+.ne 2
+.na
 \fBmetaslab_debug_load\fR (int)
 .ad
 .RS 12n
@@ -598,15 +622,16 @@ Default value: \fB0\fR.
 .sp
 .ne 2
 .na
-\fBzfs_arc_num_sublists_per_state\fR (int)
+\fBzfs_multilist_num_sublists\fR (int)
 .ad
 .RS 12n
 To allow more fine-grained locking, each ARC state contains a series
 of lists for both data and meta data objects.  Locking is performed at
 the level of these "sub-lists".  This parameters controls the number of
-sub-lists per ARC state.
+sub-lists per ARC state, and also applies to other uses of the
+multilist data structure.
 .sp
-Default value: \fB1\fR or the number of online CPUs, whichever is greater
+Default value: \fB4\fR or the number of online CPUs, whichever is greater
 .RE
 
 .sp
@@ -741,9 +766,28 @@ Default value: \fB0\fR.
 \fBzfs_deadman_enabled\fR (int)
 .ad
 .RS 12n
-Enable deadman timer. See description below.
+When a pool sync operation takes longer than \fBzfs_deadman_synctime_ms\fR
+milliseconds, a "slow spa_sync" message is logged to the debug log
+(see \fBzfs_dbgmsg_enable\fR).  If \fBzfs_deadman_enabled\fR is set,
+all pending IO operations are also checked and if any haven't completed
+within \fBzfs_deadman_synctime_ms\fR milliseconds, a "SLOW IO" message
+is logged to the debug log and a "delay" system event with the details of
+the hung IO is posted.
 .sp
-Use \fB1\fR for yes (default) and \fB0\fR to disable.
+Use \fB1\fR (default) to enable the slow IO check and \fB0\fR to disable.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs_deadman_checktime_ms\fR (int)
+.ad
+.RS 12n
+Once a pool sync operation has taken longer than
+\fBzfs_deadman_synctime_ms\fR milliseconds, continue to check for slow
+operations every \fBzfs_deadman_checktime_ms\fR milliseconds.
+.sp
+Default value: \fB5,000\fR.
 .RE
 
 .sp
@@ -752,12 +796,11 @@ Use \fB1\fR for yes (default) and \fB0\fR to disable.
 \fBzfs_deadman_synctime_ms\fR (ulong)
 .ad
 .RS 12n
-Expiration time in milliseconds. This value has two meanings. First it is
-used to determine when the spa_deadman() logic should fire. By default the
-spa_deadman() will fire if spa_sync() has not completed in 1000 seconds.
-Secondly, the value determines if an I/O is considered "hung". Any I/O that
-has not completed in zfs_deadman_synctime_ms is considered "hung" resulting
-in a zevent being logged.
+Interval in milliseconds after which the deadman is triggered and also
+the interval after which an IO operation is considered to be "hung"
+if \fBzfs_deadman_enabled\fR is set.
+
+See \fBzfs_deadman_enabled\fR.
 .sp
 Default value: \fB1,000,000\fR.
 .RE
@@ -863,7 +906,7 @@ time, and will be ignored if \fBzfs_dirty_data_max\fR is later changed.
 The parameter \fBzfs_dirty_data_max_max\fR takes precedence over this
 one. See the section "ZFS TRANSACTION DELAY".
 .sp
-Default value: \fN25\fR.
+Default value: \fB25\fR.
 .RE
 
 .sp
@@ -1399,6 +1442,22 @@ Default value: \fB52,428,800\fR.
 .sp
 .ne 2
 .na
+\fBzfs_per_txg_dirty_frees_percent \fR (ulong)
+.ad
+.RS 12n
+Tunable to control percentage of dirtied blocks from frees in one TXG.
+After this threshold is crossed, additional dirty blocks from frees
+wait until the next TXG.
+A value of zero will disable this throttle.
+.sp
+Default value: \fB30\fR and \fB0\fR to disable.
+.RE
+
+
+
+.sp
+.ne 2
+.na
 \fBzfs_prefetch_disable\fR (int)
 .ad
 .RS 12n
@@ -1863,7 +1922,7 @@ Default value: \fB30,000\fR.
 Throttle block allocations in the ZIO pipeline. This allows for
 dynamic allocation distribution when devices are imbalanced.
 .sp
-Default value: \fB0\fR.
+Default value: \fB1\fR.
 .RE
 
 .sp
@@ -1943,6 +2002,19 @@ immediately by \fBblkid(8)\fR or by the kernel scanning for a partition
 table.
 .sp
 Default value: \fB131,072\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs_qat_disable\fR (int)
+.ad
+.RS 12n
+This tunable disables qat hardware acceleration for gzip compression.
+It is available only if qat acceleration is compiled in and qat driver
+is present.
+.sp
+Use \fB1\fR for yes and \fB0\fR for no (default).
 .RE
 
 .SH ZFS I/O SCHEDULER

@@ -26,6 +26,7 @@
  * Copyright (c) 2012 by Frederik Wessels. All rights reserved.
  * Copyright (c) 2012 by Cyril Plisko. All rights reserved.
  * Copyright (c) 2013 by Prasad Joshi (sTec). All rights reserved.
+ * Copyright 2016 Igor Kozhukhov <ikozhukhov@gmail.com>.
  */
 
 #include <assert.h>
@@ -279,7 +280,8 @@ static boolean_t log_history = B_TRUE;
 static uint_t timestamp_fmt = NODATE;
 
 static const char *
-get_usage(zpool_help_t idx) {
+get_usage(zpool_help_t idx)
+{
 	switch (idx) {
 	case HELP_ADD:
 		return (gettext("\tadd [-fgLnP] [-o property=value] "
@@ -312,7 +314,7 @@ get_usage(zpool_help_t idx) {
 		    "[-R root] [-F [-n]]\n"
 		    "\t    <pool | id> [newpool]\n"));
 	case HELP_IOSTAT:
-		return (gettext("\tiostat [-T d | u] [-ghHLpPvy] "
+		return (gettext("\tiostat [-c CMD] [-T d | u] [-ghHLpPvy] "
 		    "[[-lq]|[-r|-w]]\n"
 		    "\t    [[pool ...]|[pool vdev ...]|[vdev ...]] "
 		    "[interval [count]]\n"));
@@ -335,8 +337,8 @@ get_usage(zpool_help_t idx) {
 	case HELP_SCRUB:
 		return (gettext("\tscrub [-s] <pool> ...\n"));
 	case HELP_STATUS:
-		return (gettext("\tstatus [-gLPvxD] [-T d|u] [pool] ... "
-		    "[interval [count]]\n"));
+		return (gettext("\tstatus [-c CMD] [-gLPvxD] [-T d|u] [pool]"
+		    " ... [interval [count]]\n"));
 	case HELP_UPGRADE:
 		return (gettext("\tupgrade\n"
 		    "\tupgrade -v\n"
@@ -1909,7 +1911,7 @@ show_import(nvlist_t *config)
 
 	case ZPOOL_STATUS_UNSUP_FEAT_READ:
 		(void) printf(gettext("status: The pool uses the following "
-		    "feature(s) not supported on this sytem:\n"));
+		    "feature(s) not supported on this system:\n"));
 		zpool_print_unsup_feat(config);
 		break;
 
@@ -2752,7 +2754,7 @@ print_iostat_labels(iostat_cbdata_t *cb, unsigned int force_column_width,
 			rw_column_width = (column_width * columns) +
 			    (2 * (columns - 1));
 
-			text_start = (int) ((rw_column_width)/columns -
+			text_start = (int)((rw_column_width)/columns -
 			    slen/columns);
 
 			printf("  ");	/* Two spaces between columns */
@@ -2951,7 +2953,8 @@ struct stat_array {
 };
 
 static uint64_t
-stat_histo_max(struct stat_array *nva, unsigned int len) {
+stat_histo_max(struct stat_array *nva, unsigned int len)
+{
 	uint64_t max = 0;
 	int i;
 	for (i = 0; i < len; i++)
@@ -2967,7 +2970,8 @@ stat_histo_max(struct stat_array *nva, unsigned int len) {
  */
 static int
 nvpair64_to_stat_array(nvlist_t *nvl, const char *name,
-    struct stat_array *nva) {
+    struct stat_array *nva)
+{
 	nvpair_t *tmp;
 	int ret;
 
@@ -3090,7 +3094,7 @@ print_iostat_histo(struct stat_array *nva, unsigned int len,
 		}
 
 		if (cb->cb_scripted)
-			printf("%llu", (u_longlong_t) val);
+			printf("%llu", (u_longlong_t)val);
 		else
 			printf("%-*s", namewidth, buf);
 
@@ -3567,7 +3571,7 @@ print_iostat(zpool_handle_t *zhp, void *data)
 		    &oldnvroot) == 0);
 
 	ret = print_vdev_stats(zhp, zpool_get_name(zhp), oldnvroot, newnvroot,
-									cb, 0);
+	    cb, 0);
 	if ((ret != 0) && !(cb->cb_flags & IOS_ANYHISTO_M) &&
 	    !cb->cb_scripted && cb->cb_verbose && !cb->cb_vdev_names_count) {
 		print_iostat_separator(cb);
@@ -3869,7 +3873,8 @@ is_pool(char *name)
 
 /* Are all our argv[] strings pool names?  If so return 1, 0 otherwise. */
 static int
-are_all_pools(int argc, char **argv) {
+are_all_pools(int argc, char **argv)
+{
 	if ((argc == 0) || !*argv)
 		return (0);
 
@@ -3950,7 +3955,8 @@ get_interval_count_filter_guids(int *argc, char **argv, float *interval,
  * seconds.
  */
 static void
-fsleep(float sec) {
+fsleep(float sec)
+{
 	struct timespec req;
 	req.tv_sec = floor(sec);
 	req.tv_nsec = (sec - (float)req.tv_sec) * NANOSEC;
@@ -4055,8 +4061,13 @@ zpool_do_iostat(int argc, char **argv)
 			usage(B_FALSE);
 			break;
 		case '?':
-			(void) fprintf(stderr, gettext("invalid option '%c'\n"),
-			    optopt);
+			if (optopt == 'c') {
+				fprintf(stderr,
+				    gettext("Missing CMD for -c\n"));
+			} else {
+				fprintf(stderr,
+				    gettext("invalid option '%c'\n"), optopt);
+			}
 			usage(B_FALSE);
 		}
 	}
@@ -4201,7 +4212,7 @@ zpool_do_iostat(int argc, char **argv)
 			fprintf(stderr, " -%c", flag_to_arg[idx]);
 		}
 
-		fprintf(stderr, ".  Try running a newer module.\n"),
+		fprintf(stderr, ".  Try running a newer module.\n");
 		pool_list_free(list);
 
 		return (1);
@@ -4256,9 +4267,10 @@ zpool_do_iostat(int argc, char **argv)
 				continue;
 			}
 
-			if (cmd != NULL)
+			if (cmd != NULL && cb.cb_verbose)
 				cb.vcdl = all_pools_for_each_vdev_run(argc,
-				    argv, cmd);
+				    argv, cmd, g_zfs, cb.cb_vdev_names,
+				    cb.cb_vdev_names_count, cb.cb_name_flags);
 
 			pool_list_iter(list, B_FALSE, print_iostat, &cb);
 
@@ -5591,11 +5603,8 @@ print_error_log(zpool_handle_t *zhp)
 	char *pathname;
 	size_t len = MAXPATHLEN * 2;
 
-	if (zpool_get_errlog(zhp, &nverrlist) != 0) {
-		(void) printf("errors: List of errors unavailable "
-		    "(insufficient privileges)\n");
+	if (zpool_get_errlog(zhp, &nverrlist) != 0)
 		return;
-	}
 
 	(void) printf("errors: Permanent errors have been "
 	    "detected in the following files:\n\n");
@@ -6113,8 +6122,13 @@ zpool_do_status(int argc, char **argv)
 			get_timestamp_arg(*optarg);
 			break;
 		case '?':
-			(void) fprintf(stderr, gettext("invalid option '%c'\n"),
-			    optopt);
+			if (optopt == 'c') {
+				fprintf(stderr,
+				    gettext("Missing CMD for -c\n"));
+			} else {
+				fprintf(stderr,
+				    gettext("invalid option '%c'\n"), optopt);
+			}
 			usage(B_FALSE);
 		}
 	}
@@ -6135,7 +6149,8 @@ zpool_do_status(int argc, char **argv)
 			print_timestamp(timestamp_fmt);
 
 		if (cmd != NULL)
-			cb.vcdl = all_pools_for_each_vdev_run(argc, argv, cmd);
+			cb.vcdl = all_pools_for_each_vdev_run(argc, argv, cmd,
+			    NULL, NULL, 0, 0);
 
 		ret = for_each_pool(argc, argv, B_TRUE, NULL,
 		    status_callback, &cb);
@@ -6173,7 +6188,7 @@ typedef struct upgrade_cbdata {
 static int
 check_unsupp_fs(zfs_handle_t *zhp, void *unsupp_fs)
 {
-	int zfs_version = (int) zfs_prop_get_int(zhp, ZFS_PROP_VERSION);
+	int zfs_version = (int)zfs_prop_get_int(zhp, ZFS_PROP_VERSION);
 	int *count = (int *)unsupp_fs;
 
 	if (zfs_version > ZPL_VERSION) {
@@ -6212,7 +6227,7 @@ upgrade_version(zpool_handle_t *zhp, uint64_t version)
 	if (unsupp_fs) {
 		(void) fprintf(stderr, gettext("Upgrade not performed due "
 		    "to %d unsupported filesystems (max v%d).\n"),
-		    unsupp_fs, (int) ZPL_VERSION);
+		    unsupp_fs, (int)ZPL_VERSION);
 		return (1);
 	}
 
@@ -6223,12 +6238,12 @@ upgrade_version(zpool_handle_t *zhp, uint64_t version)
 	if (version >= SPA_VERSION_FEATURES) {
 		(void) printf(gettext("Successfully upgraded "
 		    "'%s' from version %llu to feature flags.\n"),
-		    zpool_get_name(zhp), (u_longlong_t) oldversion);
+		    zpool_get_name(zhp), (u_longlong_t)oldversion);
 	} else {
 		(void) printf(gettext("Successfully upgraded "
 		    "'%s' from version %llu to version %llu.\n"),
-		    zpool_get_name(zhp), (u_longlong_t) oldversion,
-		    (u_longlong_t) version);
+		    zpool_get_name(zhp), (u_longlong_t)oldversion,
+		    (u_longlong_t)version);
 	}
 
 	return (0);
@@ -6435,14 +6450,14 @@ upgrade_one(zpool_handle_t *zhp, void *data)
 	if (cur_version > cbp->cb_version) {
 		(void) printf(gettext("Pool '%s' is already formatted "
 		    "using more current version '%llu'.\n\n"),
-		    zpool_get_name(zhp), (u_longlong_t) cur_version);
+		    zpool_get_name(zhp), (u_longlong_t)cur_version);
 		return (0);
 	}
 
 	if (cbp->cb_version != SPA_VERSION && cur_version == cbp->cb_version) {
 		(void) printf(gettext("Pool '%s' is already formatted "
 		    "using version %llu.\n\n"), zpool_get_name(zhp),
-		    (u_longlong_t) cbp->cb_version);
+		    (u_longlong_t)cbp->cb_version);
 		return (0);
 	}
 
@@ -6629,7 +6644,7 @@ zpool_do_upgrade(int argc, char **argv)
 			} else {
 				(void) printf(gettext("All pools are already "
 				    "formatted with version %llu or higher.\n"),
-				    (u_longlong_t) cb.cb_version);
+				    (u_longlong_t)cb.cb_version);
 			}
 		}
 	} else if (argc == 0) {
@@ -6720,14 +6735,14 @@ get_history_one(zpool_handle_t *zhp, void *data)
 			}
 			(void) printf("%s [internal %s txg:%lld] %s", tbuf,
 			    zfs_history_event_names[ievent],
-			    (longlong_t) fnvlist_lookup_uint64(
+			    (longlong_t)fnvlist_lookup_uint64(
 			    rec, ZPOOL_HIST_TXG),
 			    fnvlist_lookup_string(rec, ZPOOL_HIST_INT_STR));
 		} else if (nvlist_exists(rec, ZPOOL_HIST_INT_NAME)) {
 			if (!cb->internal)
 				continue;
 			(void) printf("%s [txg:%lld] %s", tbuf,
-			    (longlong_t) fnvlist_lookup_uint64(
+			    (longlong_t)fnvlist_lookup_uint64(
 			    rec, ZPOOL_HIST_TXG),
 			    fnvlist_lookup_string(rec, ZPOOL_HIST_INT_NAME));
 			if (nvlist_exists(rec, ZPOOL_HIST_DSNAME)) {
@@ -7239,7 +7254,7 @@ get_callback(zpool_handle_t *zhp, void *data)
  *		by a single tab.
  *	-o	List of columns to display.  Defaults to
  *		"name,property,value,source".
- * 	-p	Diplay values in parsable (exact) format.
+ * 	-p	Display values in parsable (exact) format.
  *
  * Get properties of pools in the system. Output space statistics
  * for each one as well as other attributes.
@@ -7451,7 +7466,7 @@ find_command_idx(char *command, int *idx)
 int
 main(int argc, char **argv)
 {
-	int ret;
+	int ret = 0;
 	int i = 0;
 	char *cmdname;
 

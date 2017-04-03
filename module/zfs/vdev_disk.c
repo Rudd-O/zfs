@@ -488,11 +488,6 @@ bio_map_abd_off(struct bio *bio, abd_t *abd, unsigned int size, size_t off)
 	return (abd_scatter_bio_map_off(bio, abd, size, off));
 }
 
-#ifndef bio_set_op_attrs
-#define	bio_set_op_attrs(bio, rw, flags) \
-	do { (bio)->bi_rw |= (rw)|(flags); } while (0)
-#endif
-
 static inline void
 vdev_submit_bio_impl(struct bio *bio)
 {
@@ -576,7 +571,7 @@ retry:
 		/* bio_alloc() with __GFP_WAIT never returns NULL */
 		dr->dr_bio[i] = bio_alloc(GFP_NOIO,
 		    MIN(abd_nr_pages_off(zio->io_abd, bio_size, abd_offset),
-			BIO_MAX_PAGES));
+		    BIO_MAX_PAGES));
 		if (unlikely(dr->dr_bio[i] == NULL)) {
 			vdev_disk_dio_free(dr);
 			return (ENOMEM);
@@ -593,7 +588,7 @@ retry:
 
 		/* Remaining size is returned to become the new size */
 		bio_size = bio_map_abd_off(dr->dr_bio[i], zio->io_abd,
-						bio_size, abd_offset);
+		    bio_size, abd_offset);
 
 		/* Advance in buffer and construct another bio if needed */
 		abd_offset += BIO_BI_SIZE(dr->dr_bio[i]);
@@ -659,7 +654,7 @@ vdev_disk_io_flush(struct block_device *bdev, zio_t *zio)
 	bio->bi_end_io = vdev_disk_io_flush_completion;
 	bio->bi_private = zio;
 	bio->bi_bdev = bdev;
-	bio_set_op_attrs(bio, 0, VDEV_WRITE_FLUSH_FUA);
+	bio_set_flush(bio);
 	vdev_submit_bio(bio);
 	invalidate_bdev(bdev);
 
@@ -698,8 +693,6 @@ vdev_disk_io_start(zio_t *zio)
 				return;
 
 			zio->io_error = error;
-			if (error == ENOTSUP)
-				v->vdev_nowritecache = B_TRUE;
 
 			break;
 

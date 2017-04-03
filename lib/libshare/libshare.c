@@ -108,7 +108,8 @@ libshare_init(void)
 }
 
 static void
-parse_sharetab(sa_handle_impl_t impl_handle) {
+parse_sharetab(sa_handle_impl_t impl_handle)
+{
 	FILE *fp;
 	char line[512];
 	char *eol, *pathname, *resource, *fstype, *options, *description;
@@ -498,7 +499,7 @@ sa_enable_share(sa_share_t share, char *protocol)
 
 #ifdef DEBUG
 	fprintf(stderr, "sa_enable_share: share->sharepath=%s, protocol=%s\n",
-		impl_share->sharepath, protocol);
+	    impl_share->sharepath, protocol);
 #endif
 
 	assert(impl_share->handle != NULL);
@@ -539,7 +540,7 @@ sa_disable_share(sa_share_t share, char *protocol)
 
 #ifdef DEBUG
 	fprintf(stderr, "sa_disable_share: share->sharepath=%s, protocol=%s\n",
-		impl_share->sharepath, protocol);
+	    impl_share->sharepath, protocol);
 #endif
 
 	ret = SA_OK;
@@ -697,7 +698,7 @@ sa_parse_legacy_options(sa_group_t group, char *options, char *proto)
 
 #ifdef DEBUG
 	fprintf(stderr, "sa_parse_legacy_options: options=%s, proto=%s\n",
-		options, proto);
+	    options, proto);
 #endif
 
 	fstype = fstypes;
@@ -759,7 +760,8 @@ alloc_share(const char *sharepath)
 }
 
 static void
-free_share(sa_share_impl_t impl_share) {
+free_share(sa_share_impl_t impl_share)
+{
 	sa_fstype_t *fstype;
 
 	fstype = fstypes;

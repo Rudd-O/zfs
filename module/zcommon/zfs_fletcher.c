@@ -141,6 +141,7 @@
 #include <sys/zfs_context.h>
 #include <zfs_fletcher.h>
 
+#define	FLETCHER_MIN_SIMD_SIZE	64
 
 static void fletcher_4_scalar_init(fletcher_4_ctx_t *ctx);
 static void fletcher_4_scalar_fini(fletcher_4_ctx_t *ctx, zio_cksum_t *zcp);
@@ -456,7 +457,7 @@ void
 fletcher_4_native(const void *buf, uint64_t size,
     const void *ctx_template, zio_cksum_t *zcp)
 {
-	const uint64_t p2size = P2ALIGN(size, 64);
+	const uint64_t p2size = P2ALIGN(size, FLETCHER_MIN_SIMD_SIZE);
 
 	ASSERT(IS_P2ALIGNED(size, sizeof (uint32_t)));
 
@@ -498,7 +499,7 @@ void
 fletcher_4_byteswap(const void *buf, uint64_t size,
     const void *ctx_template, zio_cksum_t *zcp)
 {
-	const uint64_t p2size = P2ALIGN(size, 64);
+	const uint64_t p2size = P2ALIGN(size, FLETCHER_MIN_SIMD_SIZE);
 
 	ASSERT(IS_P2ALIGNED(size, sizeof (uint32_t)));
 
@@ -608,7 +609,7 @@ fletcher_4_kstat_data(char *buf, size_t size, void *data)
 {
 	struct fletcher_4_kstat *fastest_stat =
 	    &fletcher_4_stat_data[fletcher_4_supp_impls_cnt];
-	struct fletcher_4_kstat *curr_stat = (struct fletcher_4_kstat *) data;
+	struct fletcher_4_kstat *curr_stat = (struct fletcher_4_kstat *)data;
 	ssize_t off = 0;
 
 	if (curr_stat == fastest_stat) {
@@ -623,9 +624,9 @@ fletcher_4_kstat_data(char *buf, size_t size, void *data)
 		off += snprintf(buf + off, size - off, "%-17s",
 		    fletcher_4_supp_impls[id]->name);
 		off += snprintf(buf + off, size - off, "%-15llu",
-			    (u_longlong_t) curr_stat->native);
+		    (u_longlong_t)curr_stat->native);
 		off += snprintf(buf + off, size - off, "%-15llu\n",
-			    (u_longlong_t) curr_stat->byteswap);
+		    (u_longlong_t)curr_stat->byteswap);
 	}
 
 	return (0);
@@ -723,7 +724,7 @@ fletcher_4_init(void)
 
 	/* move supported impl into fletcher_4_supp_impls */
 	for (i = 0, c = 0; i < ARRAY_SIZE(fletcher_4_impls); i++) {
-		curr_impl = (fletcher_4_ops_t *) fletcher_4_impls[i];
+		curr_impl = (fletcher_4_ops_t *)fletcher_4_impls[i];
 
 		if (curr_impl->valid && curr_impl->valid())
 			fletcher_4_supp_impls[c++] = curr_impl;
@@ -754,7 +755,7 @@ fletcher_4_init(void)
 
 	/* install kstats for all implementations */
 	fletcher_4_kstat = kstat_create("zfs", 0, "fletcher_4_bench", "misc",
-		KSTAT_TYPE_RAW, 0, KSTAT_FLAG_VIRTUAL);
+	    KSTAT_TYPE_RAW, 0, KSTAT_FLAG_VIRTUAL);
 	if (fletcher_4_kstat != NULL) {
 		fletcher_4_kstat->ks_data = NULL;
 		fletcher_4_kstat->ks_ndata = UINT32_MAX;
@@ -777,6 +778,87 @@ fletcher_4_fini(void)
 		fletcher_4_kstat = NULL;
 	}
 }
+
+/* ABD adapters */
+
+static void
+abd_fletcher_4_init(zio_abd_checksum_data_t *cdp)
+{
+	const fletcher_4_ops_t *ops = fletcher_4_impl_get();
+	cdp->acd_private = (void *) ops;
+
+	if (cdp->acd_byteorder == ZIO_CHECKSUM_NATIVE)
+		ops->init_native(cdp->acd_ctx);
+	else
+		ops->init_byteswap(cdp->acd_ctx);
+}
+
+static void
+abd_fletcher_4_fini(zio_abd_checksum_data_t *cdp)
+{
+	fletcher_4_ops_t *ops = (fletcher_4_ops_t *)cdp->acd_private;
+
+	ASSERT(ops);
+
+	if (cdp->acd_byteorder == ZIO_CHECKSUM_NATIVE)
+		ops->fini_native(cdp->acd_ctx, cdp->acd_zcp);
+	else
+		ops->fini_byteswap(cdp->acd_ctx, cdp->acd_zcp);
+}
+
+static void
+abd_fletcher_4_simd2scalar(boolean_t native, void *data, size_t size,
+    zio_abd_checksum_data_t *cdp)
+{
+	zio_cksum_t *zcp = cdp->acd_zcp;
+
+	ASSERT3U(size, <, FLETCHER_MIN_SIMD_SIZE);
+
+	abd_fletcher_4_fini(cdp);
+	cdp->acd_private = (void *)&fletcher_4_scalar_ops;
+
+	if (native)
+		fletcher_4_incremental_native(data, size, zcp);
+	else
+		fletcher_4_incremental_byteswap(data, size, zcp);
+}
+
+static int
+abd_fletcher_4_iter(void *data, size_t size, void *private)
+{
+	zio_abd_checksum_data_t *cdp = (zio_abd_checksum_data_t *)private;
+	fletcher_4_ctx_t *ctx = cdp->acd_ctx;
+	fletcher_4_ops_t *ops = (fletcher_4_ops_t *)cdp->acd_private;
+	boolean_t native = cdp->acd_byteorder == ZIO_CHECKSUM_NATIVE;
+	uint64_t asize = P2ALIGN(size, FLETCHER_MIN_SIMD_SIZE);
+
+	ASSERT(IS_P2ALIGNED(size, sizeof (uint32_t)));
+
+	if (asize > 0) {
+		if (native)
+			ops->compute_native(ctx, data, asize);
+		else
+			ops->compute_byteswap(ctx, data, asize);
+
+		size -= asize;
+		data = (char *)data + asize;
+	}
+
+	if (size > 0) {
+		ASSERT3U(size, <, FLETCHER_MIN_SIMD_SIZE);
+		/* At this point we have to switch to scalar impl */
+		abd_fletcher_4_simd2scalar(native, data, size, cdp);
+	}
+
+	return (0);
+}
+
+zio_abd_checksum_func_t fletcher_4_abd_ops = {
+	.acf_init = abd_fletcher_4_init,
+	.acf_fini = abd_fletcher_4_fini,
+	.acf_iter = abd_fletcher_4_iter
+};
+
 
 #if defined(_KERNEL) && defined(HAVE_SPL)
 #include <linux/mod_compat.h>
@@ -829,4 +911,5 @@ EXPORT_SYMBOL(fletcher_4_native_varsize);
 EXPORT_SYMBOL(fletcher_4_byteswap);
 EXPORT_SYMBOL(fletcher_4_incremental_native);
 EXPORT_SYMBOL(fletcher_4_incremental_byteswap);
+EXPORT_SYMBOL(fletcher_4_abd_ops);
 #endif

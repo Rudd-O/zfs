@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2011, 2015 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2017 by Delphix. All rights reserved.
  * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2014 Spectra Logic Corporation, All rights reserved.
  * Copyright 2013 Saso Kiselkov. All rights reserved.
@@ -55,6 +55,7 @@
 #include <sys/kstat.h>
 #include "zfs_prop.h"
 #include <sys/zfeature.h>
+#include "qat_compress.h"
 
 /*
  * SPA locking
@@ -298,6 +299,12 @@ int zfs_free_leak_on_eio = B_FALSE;
 unsigned long zfs_deadman_synctime_ms = 1000000ULL;
 
 /*
+ * Check time in milliseconds. This defines the frequency at which we check
+ * for hung I/O.
+ */
+unsigned long  zfs_deadman_checktime_ms = 5000ULL;
+
+/*
  * By default the deadman is enabled.
  */
 int zfs_deadman_enabled = 1;
@@ -335,9 +342,14 @@ int spa_asize_inflation = 24;
  * it is possible to run the pool completely out of space, causing it to
  * be permanently read-only.
  *
+ * Note that on very small pools, the slop space will be larger than
+ * 3.2%, in an effort to have it be at least spa_min_slop (128MB),
+ * but we never allow it to be more than half the pool size.
+ *
  * See also the comments in zfs_space_check_t.
  */
 int spa_slop_shift = 5;
+uint64_t spa_min_slop = 128 * 1024 * 1024;
 
 /*
  * ==========================================================================
@@ -524,15 +536,19 @@ spa_deadman(void *arg)
 {
 	spa_t *spa = arg;
 
+	/* Disable the deadman if the pool is suspended. */
+	if (spa_suspended(spa))
+		return;
+
 	zfs_dbgmsg("slow spa_sync: started %llu seconds ago, calls %llu",
 	    (gethrtime() - spa->spa_sync_starttime) / NANOSEC,
 	    ++spa->spa_deadman_calls);
 	if (zfs_deadman_enabled)
 		vdev_deadman(spa->spa_root_vdev);
 
-	spa->spa_deadman_tqid = taskq_dispatch_delay(system_taskq,
+	spa->spa_deadman_tqid = taskq_dispatch_delay(system_delay_taskq,
 	    spa_deadman, spa, TQ_SLEEP, ddi_get_lbolt() +
-	    NSEC_TO_TICK(spa->spa_deadman_synctime));
+	    MSEC_TO_TICK(zfs_deadman_checktime_ms));
 }
 
 /*
@@ -597,7 +613,7 @@ spa_add(const char *name, nvlist_t *config, const char *altroot)
 	if (altroot)
 		spa->spa_root = spa_strdup(altroot);
 
-	avl_create(&spa->spa_alloc_tree, zio_timestamp_compare,
+	avl_create(&spa->spa_alloc_tree, zio_bookmark_compare,
 	    sizeof (zio_t), offsetof(zio_t, io_alloc_node));
 
 	/*
@@ -634,6 +650,9 @@ spa_add(const char *name, nvlist_t *config, const char *altroot)
 
 	spa->spa_min_ashift = INT_MAX;
 	spa->spa_max_ashift = 0;
+
+	/* Reset cached value */
+	spa->spa_dedup_dspace = ~0ULL;
 
 	/*
 	 * As a pool is being created, treat all features as disabled by
@@ -1597,21 +1616,23 @@ spa_freeze_txg(spa_t *spa)
 
 /* ARGSUSED */
 uint64_t
-spa_get_asize(spa_t *spa, uint64_t lsize)
+spa_get_worst_case_asize(spa_t *spa, uint64_t lsize)
 {
 	return (lsize * spa_asize_inflation);
 }
 
 /*
  * Return the amount of slop space in bytes.  It is 1/32 of the pool (3.2%),
- * or at least 32MB.
+ * or at least 128MB, unless that would cause it to be more than half the
+ * pool size.
  *
  * See the comment above spa_slop_shift for details.
  */
 uint64_t
-spa_get_slop_space(spa_t *spa) {
+spa_get_slop_space(spa_t *spa)
+{
 	uint64_t space = spa_get_dspace(spa);
-	return (MAX(space >> spa_slop_shift, SPA_MINDEVSIZE >> 1));
+	return (MAX(space >> spa_slop_shift, MIN(space >> 1, spa_min_slop)));
 }
 
 uint64_t
@@ -1830,17 +1851,20 @@ spa_init(int mode)
 	refcount_init();
 	unique_init();
 	range_tree_init();
+	metaslab_alloc_trace_init();
 	ddt_init();
 	zio_init();
 	dmu_init();
 	zil_init();
 	vdev_cache_stat_init();
 	vdev_raidz_math_init();
+	vdev_file_init();
 	zfs_prop_init();
 	zpool_prop_init();
 	zpool_feature_init();
 	spa_config_load();
 	l2arc_start();
+	qat_init();
 }
 
 void
@@ -1850,16 +1874,19 @@ spa_fini(void)
 
 	spa_evict_all();
 
+	vdev_file_fini();
 	vdev_cache_stat_fini();
 	vdev_raidz_math_fini();
 	zil_fini();
 	dmu_fini();
 	zio_fini();
 	ddt_fini();
+	metaslab_alloc_trace_fini();
 	range_tree_fini();
 	unique_fini();
 	refcount_fini();
 	fm_fini();
+	qat_fini();
 
 	avl_destroy(&spa_namespace_avl);
 	avl_destroy(&spa_spare_avl);
@@ -2054,7 +2081,6 @@ EXPORT_SYMBOL(spa_version);
 EXPORT_SYMBOL(spa_state);
 EXPORT_SYMBOL(spa_load_state);
 EXPORT_SYMBOL(spa_freeze_txg);
-EXPORT_SYMBOL(spa_get_asize);
 EXPORT_SYMBOL(spa_get_dspace);
 EXPORT_SYMBOL(spa_update_dspace);
 EXPORT_SYMBOL(spa_deflate);
@@ -2090,9 +2116,9 @@ EXPORT_SYMBOL(spa_has_slogs);
 EXPORT_SYMBOL(spa_is_root);
 EXPORT_SYMBOL(spa_writeable);
 EXPORT_SYMBOL(spa_mode);
-
 EXPORT_SYMBOL(spa_namespace_lock);
 
+/* BEGIN CSTYLED */
 module_param(zfs_flags, uint, 0644);
 MODULE_PARM_DESC(zfs_flags, "Set additional debugging flags");
 
@@ -2106,6 +2132,10 @@ MODULE_PARM_DESC(zfs_free_leak_on_eio,
 module_param(zfs_deadman_synctime_ms, ulong, 0644);
 MODULE_PARM_DESC(zfs_deadman_synctime_ms, "Expiration time in milliseconds");
 
+module_param(zfs_deadman_checktime_ms, ulong, 0644);
+MODULE_PARM_DESC(zfs_deadman_checktime_ms,
+	"Dead I/O check interval in milliseconds");
+
 module_param(zfs_deadman_enabled, int, 0644);
 MODULE_PARM_DESC(zfs_deadman_enabled, "Enable deadman timer");
 
@@ -2115,4 +2145,5 @@ MODULE_PARM_DESC(spa_asize_inflation,
 
 module_param(spa_slop_shift, int, 0644);
 MODULE_PARM_DESC(spa_slop_shift, "Reserved free space in pool");
+/* END CSTYLED */
 #endif

@@ -21,8 +21,8 @@
 
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2011, 2015 by Delphix. All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #include <sys/zfs_context.h>
@@ -1345,8 +1345,15 @@ vdev_open(vdev_t *vd)
 		 */
 		vd->vdev_asize = asize;
 		vd->vdev_max_asize = max_asize;
-		if (vd->vdev_ashift == 0)
-			vd->vdev_ashift = ashift;
+		if (vd->vdev_ashift == 0) {
+			vd->vdev_ashift = ashift; /* use detected value */
+		}
+		if (vd->vdev_ashift != 0 && (vd->vdev_ashift < ASHIFT_MIN ||
+		    vd->vdev_ashift > ASHIFT_MAX)) {
+			vdev_set_state(vd, B_TRUE, VDEV_STATE_CANT_OPEN,
+			    VDEV_AUX_BAD_ASHIFT);
+			return (SET_ERROR(EDOM));
+		}
 	} else {
 		/*
 		 * Detect if the alignment requirement has increased.
@@ -2706,7 +2713,7 @@ vdev_clear(spa_t *spa, vdev_t *vd)
 	    !vdev_readable(vd) || !vdev_writeable(vd)) {
 
 		/*
-		 * When reopening in reponse to a clear event, it may be due to
+		 * When reopening in response to a clear event, it may be due to
 		 * a fmadm repair request.  In this case, if the device is
 		 * still broken, we want to still post the ereport again.
 		 */
@@ -2900,6 +2907,7 @@ vdev_get_stats_ex_impl(vdev_t *vd, vdev_stat_t *vs, vdev_stat_ex_t *vsx)
 void
 vdev_get_stats_ex(vdev_t *vd, vdev_stat_t *vs, vdev_stat_ex_t *vsx)
 {
+	vdev_t *tvd = vd->vdev_top;
 	mutex_enter(&vd->vdev_stat_lock);
 	if (vs) {
 		bcopy(&vd->vdev_stat, vs, sizeof (*vs));
@@ -2909,6 +2917,17 @@ vdev_get_stats_ex(vdev_t *vd, vdev_stat_t *vs, vdev_stat_ex_t *vsx)
 		if (vd->vdev_ops->vdev_op_leaf)
 			vs->vs_rsize += VDEV_LABEL_START_SIZE +
 			    VDEV_LABEL_END_SIZE;
+		/*
+		 * Report expandable space on top-level, non-auxillary devices
+		 * only. The expandable space is reported in terms of metaslab
+		 * sized units since that determines how much space the pool
+		 * can expand.
+		 */
+		if (vd->vdev_aux == NULL && tvd != NULL) {
+			vs->vs_esize = P2ALIGN(
+			    vd->vdev_max_asize - vd->vdev_asize,
+			    1ULL << tvd->vdev_ms_shift);
+		}
 		vs->vs_esize = vd->vdev_max_asize - vd->vdev_asize;
 		if (vd->vdev_aux == NULL && vd == vd->vdev_top &&
 		    !vd->vdev_ishole) {
@@ -3475,6 +3494,9 @@ vdev_set_state(vdev_t *vd, boolean_t isopen, vdev_state_t state, vdev_aux_t aux)
 			case VDEV_AUX_BAD_LABEL:
 				class = FM_EREPORT_ZFS_DEVICE_BAD_LABEL;
 				break;
+			case VDEV_AUX_BAD_ASHIFT:
+				class = FM_EREPORT_ZFS_DEVICE_BAD_ASHIFT;
+				break;
 			default:
 				class = FM_EREPORT_ZFS_DEVICE_UNKNOWN;
 			}
@@ -3533,8 +3555,6 @@ vdev_is_bootable(vdev_t *vd)
 		    strcmp(vdev_type, VDEV_TYPE_MISSING) == 0) {
 			return (B_FALSE);
 		}
-	} else if (vd->vdev_wholedisk == 1) {
-		return (B_FALSE);
 	}
 
 	for (c = 0; c < vd->vdev_children; c++) {
@@ -3676,9 +3696,10 @@ EXPORT_SYMBOL(vdev_degrade);
 EXPORT_SYMBOL(vdev_online);
 EXPORT_SYMBOL(vdev_offline);
 EXPORT_SYMBOL(vdev_clear);
-
+/* BEGIN CSTYLED */
 module_param(metaslabs_per_vdev, int, 0644);
 MODULE_PARM_DESC(metaslabs_per_vdev,
 	"Divide added vdev into approximately (but no more than) this number "
 	"of metaslabs");
+/* END CSTYLED */
 #endif

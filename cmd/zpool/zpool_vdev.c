@@ -21,8 +21,9 @@
 
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2013 by Delphix. All rights reserved.
+ * Copyright (c) 2013, 2015 by Delphix. All rights reserved.
  * Copyright (c) 2016 Intel Corporation.
+ * Copyright 2016 Igor Kozhukhov <ikozhukhov@gmail.com>.
  */
 
 /*
@@ -69,6 +70,7 @@
 #include <libintl.h>
 #include <libnvpair.h>
 #include <limits.h>
+#include <sys/spa.h>
 #include <scsi/scsi.h>
 #include <scsi/sg.h>
 #include <stdio.h>
@@ -720,8 +722,18 @@ make_leaf_vdev(nvlist_t *props, const char *arg, uint64_t is_log)
 		char *value = NULL;
 
 		if (nvlist_lookup_string(props,
-		    zpool_prop_to_name(ZPOOL_PROP_ASHIFT), &value) == 0)
+		    zpool_prop_to_name(ZPOOL_PROP_ASHIFT), &value) == 0) {
 			zfs_nicestrtonum(NULL, value, &ashift);
+			if (ashift != 0 &&
+			    (ashift < ASHIFT_MIN || ashift > ASHIFT_MAX)) {
+				(void) fprintf(stderr,
+				    gettext("invalid 'ashift=%" PRIu64 "' "
+				    "property: only values between %" PRId32 " "
+				    "and %" PRId32 " are allowed.\n"),
+				    ashift, ASHIFT_MIN, ASHIFT_MAX);
+				return (NULL);
+			}
+		}
 	}
 
 	/*
@@ -776,7 +788,9 @@ get_replication(nvlist_t *nvroot, boolean_t fatal)
 	uint_t c, children;
 	nvlist_t *nv;
 	char *type;
-	replication_level_t lastrep = { 0 }, rep, *ret;
+	replication_level_t lastrep = {0};
+	replication_level_t rep;
+	replication_level_t *ret;
 	boolean_t dontreport;
 
 	ret = safe_malloc(sizeof (replication_level_t));
@@ -784,7 +798,6 @@ get_replication(nvlist_t *nvroot, boolean_t fatal)
 	verify(nvlist_lookup_nvlist_array(nvroot, ZPOOL_CONFIG_CHILDREN,
 	    &top, &toplevels) == 0);
 
-	lastrep.zprl_type = NULL;
 	for (t = 0; t < toplevels; t++) {
 		uint64_t is_log = B_FALSE;
 

@@ -23,6 +23,7 @@
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2013, Joyent, Inc. All rights reserved.
  * Copyright (c) 2011, 2014 by Delphix. All rights reserved.
+ * Copyright 2016 Igor Kozhukhov <ikozhukhov@gmail.com>
  */
 
 /*
@@ -617,7 +618,7 @@ zfs_nicenum_format(uint64_t num, char *buf, size_t buflen,
 	double val;
 
 	if (format == ZFS_NICENUM_RAW) {
-		snprintf(buf, buflen, "%llu", (u_longlong_t) num);
+		snprintf(buf, buflen, "%llu", (u_longlong_t)num);
 		return;
 	}
 
@@ -633,12 +634,12 @@ zfs_nicenum_format(uint64_t num, char *buf, size_t buflen,
 	if ((format == ZFS_NICENUM_TIME) && (num == 0)) {
 		(void) snprintf(buf, buflen, "-");
 	} else if ((index == 0) || ((num %
-	    (uint64_t) powl(k_unit[format], index)) == 0)) {
+	    (uint64_t)powl(k_unit[format], index)) == 0)) {
 		/*
 		 * If this is an even multiple of the base, always display
 		 * without any decimal precision.
 		 */
-		(void) snprintf(buf, buflen, "%llu%s", (u_longlong_t) n, u);
+		(void) snprintf(buf, buflen, "%llu%s", (u_longlong_t)n, u);
 
 	} else {
 		/*
@@ -652,8 +653,8 @@ zfs_nicenum_format(uint64_t num, char *buf, size_t buflen,
 		 */
 		int i;
 		for (i = 2; i >= 0; i--) {
-			val = (double) num /
-			    (uint64_t) powl(k_unit[format], index);
+			val = (double)num /
+			    (uint64_t)powl(k_unit[format], index);
 
 			/*
 			 * Don't print floating point values for time.  Note,
@@ -752,7 +753,7 @@ libzfs_run_process(const char *path, char *argv[], int flags)
 		int status;
 
 		while ((error = waitpid(pid, &status, 0)) == -1 &&
-			errno == EINTR);
+		    errno == EINTR) { }
 		if (error < 0 || !WIFEXITED(status))
 			return (-1);
 
@@ -927,7 +928,7 @@ zfs_get_pool_handle(const zfs_handle_t *zhp)
  * Given a name, determine whether or not it's a valid path
  * (starts with '/' or "./").  If so, walk the mnttab trying
  * to match the device number.  If not, treat the path as an
- * fs/vol/snap name.
+ * fs/vol/snap/bkmark name.
  */
 zfs_handle_t *
 zfs_path_to_zhandle(libzfs_handle_t *hdl, char *path, zfs_type_t argtype)
@@ -1465,6 +1466,10 @@ zprop_print_one_property(const char *name, zprop_get_cbdata_t *cbp,
 			case ZPROP_SRC_RECEIVED:
 				str = "received";
 				break;
+
+			default:
+				str = NULL;
+				assert(!"unhandled zprop_source_t");
 			}
 			break;
 

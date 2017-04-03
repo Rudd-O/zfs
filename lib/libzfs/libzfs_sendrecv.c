@@ -27,6 +27,7 @@
  * All rights reserved
  * Copyright (c) 2013 Steven Hartland. All rights reserved.
  * Copyright 2015, OmniTI Computer Consulting, Inc. All rights reserved.
+ * Copyright 2016 Igor Kozhukhov <ikozhukhov@gmail.com>
  */
 
 #include <assert.h>
@@ -245,12 +246,16 @@ cksummer(void *arg)
 	int outfd;
 	dedup_table_t ddt;
 	zio_cksum_t stream_cksum;
-	uint64_t physmem = sysconf(_SC_PHYS_PAGES) * sysconf(_SC_PAGESIZE);
 	uint64_t numbuckets;
 
+#ifdef _ILP32
+	ddt.max_ddt_size = SMALLEST_POSSIBLE_MAX_DDT_MB << 20;
+#else
+	uint64_t physmem = sysconf(_SC_PHYS_PAGES) * sysconf(_SC_PAGESIZE);
 	ddt.max_ddt_size =
 	    MAX((physmem * MAX_DDT_PHYSMEM_PERCENT) / 100,
 	    SMALLEST_POSSIBLE_MAX_DDT_MB << 20);
+#endif
 
 	numbuckets = ddt.max_ddt_size / (sizeof (dedup_entry_t));
 
@@ -271,6 +276,15 @@ cksummer(void *arg)
 	outfd = dda->outputfd;
 	ofp = fdopen(dda->inputfd, "r");
 	while (ssread(drr, sizeof (*drr), ofp) != 0) {
+
+		/*
+		 * kernel filled in checksum, we are going to write same
+		 * record, but need to regenerate checksum.
+		 */
+		if (drr->drr_type != DRR_BEGIN) {
+			bzero(&drr->drr_u.drr_checksum.drr_checksum,
+			    sizeof (drr->drr_u.drr_checksum.drr_checksum));
+		}
 
 		switch (drr->drr_type) {
 		case DRR_BEGIN:
@@ -412,7 +426,7 @@ cksummer(void *arg)
 				wbr_drrr->drr_checksumtype =
 				    drrw->drr_checksumtype;
 				wbr_drrr->drr_checksumflags =
-				    drrw->drr_checksumtype;
+				    drrw->drr_checksumflags;
 				wbr_drrr->drr_key.ddk_cksum =
 				    drrw->drr_key.ddk_cksum;
 				wbr_drrr->drr_key.ddk_prop =
@@ -1312,7 +1326,7 @@ dump_snapshot(zfs_handle_t *zhp, void *arg)
 			pa.pa_parsable = sdd->parsable;
 
 			if ((err = pthread_create(&tid, NULL,
-			    send_progress_thread, &pa))) {
+			    send_progress_thread, &pa)) != 0) {
 				zfs_close(zhp);
 				return (err);
 			}
@@ -1787,7 +1801,7 @@ zfs_send(zfs_handle_t *zhp, const char *fromsnap, const char *tosnap,
 	if (flags->dedup && !flags->dryrun) {
 		featureflags |= (DMU_BACKUP_FEATURE_DEDUP |
 		    DMU_BACKUP_FEATURE_DEDUPPROPS);
-		if ((err = socketpair(AF_UNIX, SOCK_STREAM, 0, pipefd))) {
+		if ((err = socketpair(AF_UNIX, SOCK_STREAM, 0, pipefd)) != 0) {
 			zfs_error_aux(zhp->zfs_hdl, strerror(errno));
 			return (zfs_error(zhp->zfs_hdl, EZFS_PIPEFAILED,
 			    errbuf));
@@ -1795,7 +1809,7 @@ zfs_send(zfs_handle_t *zhp, const char *fromsnap, const char *tosnap,
 		dda.outputfd = outfd;
 		dda.inputfd = pipefd[1];
 		dda.dedup_hdl = zhp->zfs_hdl;
-		if ((err = pthread_create(&tid, NULL, cksummer, &dda))) {
+		if ((err = pthread_create(&tid, NULL, cksummer, &dda)) != 0) {
 			(void) close(pipefd[0]);
 			(void) close(pipefd[1]);
 			zfs_error_aux(zhp->zfs_hdl, strerror(errno));
@@ -2615,7 +2629,7 @@ again:
 			else
 				progress = B_TRUE;
 			sprintf(guidname, "%llu",
-			    (u_longlong_t) parent_fromsnap_guid);
+			    (u_longlong_t)parent_fromsnap_guid);
 			nvlist_add_boolean(deleted, guidname);
 			continue;
 		}
@@ -2649,7 +2663,7 @@ again:
 		    parent_fromsnap_guid != 0 &&
 		    stream_parent_fromsnap_guid != parent_fromsnap_guid) {
 			sprintf(guidname, "%llu",
-			    (u_longlong_t) parent_fromsnap_guid);
+			    (u_longlong_t)parent_fromsnap_guid);
 			if (nvlist_exists(deleted, guidname)) {
 				progress = B_TRUE;
 				needagain = B_TRUE;
@@ -3225,7 +3239,12 @@ zfs_receive_one(libzfs_handle_t *hdl, int infd, const char *tosnap,
 	/*
 	 * Determine the name of the origin snapshot.
 	 */
-	if (drrb->drr_flags & DRR_FLAG_CLONE) {
+	if (originsnap) {
+		(void) strncpy(origin, originsnap, sizeof (origin));
+		if (flags->verbose)
+			(void) printf("using provided clone origin %s\n",
+			    origin);
+	} else if (drrb->drr_flags & DRR_FLAG_CLONE) {
 		if (guid_to_name(hdl, destsnap,
 		    drrb->drr_fromguid, B_FALSE, origin) != 0) {
 			zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
@@ -3236,11 +3255,6 @@ zfs_receive_one(libzfs_handle_t *hdl, int infd, const char *tosnap,
 		}
 		if (flags->verbose)
 			(void) printf("found clone origin %s\n", origin);
-	} else if (originsnap) {
-		(void) strncpy(origin, originsnap, sizeof (origin));
-		if (flags->verbose)
-			(void) printf("using provided clone origin %s\n",
-			    origin);
 	}
 
 	boolean_t resuming = DMU_GET_FEATUREFLAGS(drrb->drr_versioninfo) &
@@ -3601,7 +3615,8 @@ zfs_receive_one(libzfs_handle_t *hdl, int infd, const char *tosnap,
 	}
 
 	if (clp) {
-		err |= changelist_postfix(clp);
+		if (!flags->nomount)
+			err |= changelist_postfix(clp);
 		changelist_free(clp);
 	}
 

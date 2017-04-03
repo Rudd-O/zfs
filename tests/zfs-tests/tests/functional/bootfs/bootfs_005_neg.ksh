@@ -25,6 +25,10 @@
 # Use is subject to license terms.
 #
 
+#
+# Copyright (c) 2012, 2017 by Delphix. All rights reserved.
+#
+
 . $STF_SUITE/include/libtest.shlib
 . $STF_SUITE/tests/functional/cli_root/zpool_upgrade/zpool_upgrade.kshlib
 
@@ -49,14 +53,10 @@ function cleanup {
 	typeset pool_name
 	for config in $CONFIGS; do
 		pool_name=$(eval $ECHO \$ZPOOL_VERSION_${config}_NAME)
-		if poolexists $pool_name; then
-			log_must $ZPOOL destroy $pool_name
-		fi
+		destroy_pool $pool_name
 	done
 
-	if poolexists $TESTPOOL ; then
-		log_must $ZPOOL destroy $TESTPOOL
-	fi
+	destroy_pool $TESTPOOL
 }
 
 log_assert "Boot properties cannot be set on pools with older versions"

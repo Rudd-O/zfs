@@ -20,7 +20,7 @@
 #
 # CDDL HEADER END
 #
-basedir="$(dirname $0)"
+basedir=$(dirname "$0")
 
 SCRIPT_COMMON=common.sh
 if [ -f "${basedir}/${SCRIPT_COMMON}" ]; then
@@ -29,7 +29,7 @@ else
 echo "Missing helper script ${SCRIPT_COMMON}" && exit 1
 fi
 
-. $STF_SUITE/include/default.cfg
+. "$STF_SUITE/include/default.cfg"
 
 PROG=zfs-tests.sh
 SUDO=/usr/bin/sudo
@@ -39,10 +39,12 @@ QUIET=
 CLEANUP=1
 CLEANUPALL=0
 LOOPBACK=1
-FILESIZE="2G"
+FILESIZE="4G"
 RUNFILE=${RUNFILE:-"linux.run"}
 FILEDIR=${FILEDIR:-/var/tmp}
 DISKS=${DISKS:-""}
+SINGLETEST=()
+SINGLETESTUSER="root"
 
 #
 # Attempt to remove loopback devices and files which where created earlier
@@ -56,24 +58,24 @@ cleanup() {
 
 	if [ $LOOPBACK -eq 1 ]; then
 		for TEST_LOOPBACK in ${LOOPBACKS}; do
-			LOOP_DEV=$(basename $TEST_LOOPBACK)
-			DM_DEV=$(${SUDO} ${DMSETUP} ls 2>/dev/null | \
-			    grep ${LOOP_DEV} | cut -f1)
+			LOOP_DEV=$(basename "$TEST_LOOPBACK")
+			DM_DEV=$(${SUDO} "${DMSETUP}" ls 2>/dev/null | \
+			    grep "${LOOP_DEV}" | cut -f1)
 
 			if [ -n "$DM_DEV" ]; then
-				${SUDO} ${DMSETUP} remove ${DM_DEV} ||
+				${SUDO} "${DMSETUP}" remove "${DM_DEV}" ||
 				    echo "Failed to remove: ${DM_DEV}"
 			fi
 
 			if [ -n "${TEST_LOOPBACK}" ]; then
-				${SUDO} ${LOSETUP} -d ${TEST_LOOPBACK} ||
+				${SUDO} "${LOSETUP}" -d "${TEST_LOOPBACK}" ||
 				    echo "Failed to remove: ${TEST_LOOPBACK}"
 			fi
 		done
 	fi
 
 	for TEST_FILE in ${FILES}; do
-		rm -f ${TEST_FILE} &>/dev/null
+		rm -f "${TEST_FILE}" &>/dev/null
 	done
 }
 trap cleanup EXIT
@@ -85,29 +87,32 @@ trap cleanup EXIT
 # be dangerous and should only be used in a dedicated test environment.
 #
 cleanup_all() {
-	local TEST_POOLS=$(${SUDO} ${ZPOOL} list -H -o name | grep testpool)
-	local TEST_LOOPBACKS=$(${SUDO} ${LOSETUP} -a|grep file-vdev|cut -f1 -d:)
-	local TEST_FILES=$(ls /var/tmp/file-vdev* 2>/dev/null)
+	local TEST_POOLS
+	TEST_POOLS=$(${SUDO} "${ZPOOL}" list -H -o name | grep testpool)
+	local TEST_LOOPBACKS
+	TEST_LOOPBACKS=$(${SUDO} "${LOSETUP}" -a|grep file-vdev|cut -f1 -d:)
+	local TEST_FILES
+	TEST_FILES=$(ls /var/tmp/file-vdev* 2>/dev/null)
 
 	msg
 	msg "--- Cleanup ---"
-	msg "Removing pool(s):     $(echo ${TEST_POOLS} | tr '\n' ' ')"
+	msg "Removing pool(s):     $(echo "${TEST_POOLS}" | tr '\n' ' ')"
 	for TEST_POOL in $TEST_POOLS; do
-		${SUDO} ${ZPOOL} destroy ${TEST_POOL}
+		${SUDO} "${ZPOOL}" destroy "${TEST_POOL}"
 	done
 
-	msg "Removing dm(s):       $(${SUDO} ${DMSETUP} ls |
+	msg "Removing dm(s):       $(${SUDO} "${DMSETUP}" ls |
 	    grep loop | tr '\n' ' ')"
-	${SUDO} ${DMSETUP} remove_all
+	${SUDO} "${DMSETUP}" remove_all
 
-	msg "Removing loopback(s): $(echo ${TEST_LOOPBACKS} | tr '\n' ' ')"
+	msg "Removing loopback(s): $(echo "${TEST_LOOPBACKS}" | tr '\n' ' ')"
 	for TEST_LOOPBACK in $TEST_LOOPBACKS; do
-		${SUDO} ${LOSETUP} -d ${TEST_LOOPBACK}
+		${SUDO} "${LOSETUP}" -d "${TEST_LOOPBACK}"
 	done
 
-	msg "Removing files(s):    $(echo ${TEST_FILES} | tr '\n' ' ')"
+	msg "Removing files(s):    $(echo "${TEST_FILES}" | tr '\n' ' ')"
 	for TEST_FILE in $TEST_FILES; do
-		${SUDO} rm -f ${TEST_FILE}
+		${SUDO} rm -f "${TEST_FILE}"
 	done
 }
 
@@ -152,7 +157,7 @@ find_runfile() {
 usage() {
 cat << EOF
 USAGE:
-$0 [hvqxkf] [-s SIZE] [-r RUNFILE]
+$0 [hvqxkf] [-s SIZE] [-r RUNFILE] [-t PATH] [-u USER]
 
 DESCRIPTION:
 	ZFS Test Suite launch script
@@ -165,8 +170,10 @@ OPTIONS:
 	-k          Disable cleanup after test failure
 	-f          Use files only, disables block device tests
 	-d DIR      Use DIR for files and loopback devices
-	-s SIZE     Use vdevs of SIZE (default: 2G)
+	-s SIZE     Use vdevs of SIZE (default: 4G)
 	-r RUNFILE  Run tests in RUNFILE (default: linux.run)
+	-t PATH     Run single test at PATH relative to test suite
+	-u USER     Run single test as USER (default: root)
 
 EXAMPLES:
 # Run the default (linux) suite of tests and output the configuration used.
@@ -182,13 +189,14 @@ $0 -x
 EOF
 }
 
-while getopts 'hvqxkfd:s:r:?' OPTION; do
+while getopts 'hvqxkfd:s:r:?t:u:' OPTION; do
 	case $OPTION in
 	h)
 		usage
 		exit 1
 		;;
 	v)
+		# shellcheck disable=SC2034
 		VERBOSE=1
 		;;
 	q)
@@ -212,6 +220,15 @@ while getopts 'hvqxkfd:s:r:?' OPTION; do
 	r)
 		RUNFILE="$OPTARG"
 		;;
+	t)
+		if [ ${#SINGLETEST[@]} -ne 0 ]; then
+			fail "-t can only be provided once."
+		fi
+		SINGLETEST+=("$OPTARG")
+		;;
+	u)
+		SINGLETESTUSER="$OPTARG"
+		;;
 	?)
 		usage
 		exit
@@ -223,6 +240,51 @@ shift $((OPTIND-1))
 
 FILES=${FILES:-"$FILEDIR/file-vdev0 $FILEDIR/file-vdev1 $FILEDIR/file-vdev2"}
 LOOPBACKS=${LOOPBACKS:-""}
+
+if [ ${#SINGLETEST[@]} -ne 0 ]; then
+	RUNFILEDIR="/var/tmp"
+	RUNFILE="zfs-tests.$$.run"
+	SINGLEQUIET="False"
+
+	if [ -n "$QUIET" ]; then
+		SINGLEQUIET="True"
+	fi
+
+	cat >$RUNFILEDIR/$RUNFILE << EOF
+[DEFAULT]
+pre =
+quiet = $SINGLEQUIET
+pre_user = root
+user = $SINGLETESTUSER
+timeout = 600
+post_user = root
+post =
+outputdir = /var/tmp/test_results
+EOF
+	for t in "${SINGLETEST[@]}"
+	do
+		SINGLETESTDIR=$(dirname "$t")
+		SINGLETESTFILE=$(basename "$t")
+		SETUPSCRIPT=
+		CLEANUPSCRIPT=
+
+		if [ -f "$STF_SUITE/$SINGLETESTDIR/setup.ksh" ]; then
+			SETUPSCRIPT="setup"
+		fi
+
+		if [ -f "$STF_SUITE/$SINGLETESTDIR/cleanup.ksh" ]; then
+			CLEANUPSCRIPT="cleanup"
+		fi
+
+		cat >>$RUNFILEDIR/$RUNFILE << EOF
+
+[$SINGLETESTDIR]
+tests = ['$SINGLETESTFILE']
+pre = $SETUPSCRIPT
+post = $CLEANUPSCRIPT
+EOF
+	done
+fi
 
 #
 # Attempt to locate the runfile describing the test workload.
@@ -242,11 +304,11 @@ fi
 # be a normal user account, needs to be configured such that it can
 # run commands via sudo passwordlessly.
 #
-if [ $(id -u) = "0" ]; then
+if [ "$(id -u)" = "0" ]; then
 	fail "This script must not be run as root."
 fi
 
-if [ $(sudo whoami) != "root" ]; then
+if [ "$(sudo whoami)" != "root" ]; then
 	fail "Passwordless sudo access required."
 fi
 
@@ -260,7 +322,7 @@ fi
 #
 # Verify the ZFS module stack if loaded.
 #
-${SUDO} ${ZFS_SH} &>/dev/null
+${SUDO} "${ZFS_SH}" &>/dev/null
 
 #
 # Attempt to cleanup all previous state for a new test run.
@@ -273,11 +335,13 @@ fi
 # By default preserve any existing pools
 #
 if [ -z "${KEEP}" ]; then
-	KEEP=$(${SUDO} ${ZPOOL} list -H -o name)
+	KEEP=$(${SUDO} "${ZPOOL}" list -H -o name)
 	if [ -z "${KEEP}" ]; then
 		KEEP="rpool"
 	fi
 fi
+
+__ZFS_POOL_EXCLUDE="$(echo $KEEP | sed ':a;N;s/\n/ /g;ba')"
 
 msg
 msg "--- Configuration ---"
@@ -296,7 +360,7 @@ if [ -z "${DISKS}" ]; then
 	#
 	for TEST_FILE in ${FILES}; do
 		[ -f "$TEST_FILE" ] && fail "Failed file exists: ${TEST_FILE}"
-		truncate -s ${FILESIZE} ${TEST_FILE} ||
+		truncate -s "${FILESIZE}" "${TEST_FILE}" ||
 		    fail "Failed creating: ${TEST_FILE} ($?)"
 		DISKS="$DISKS$TEST_FILE "
 	done
@@ -309,17 +373,18 @@ if [ -z "${DISKS}" ]; then
 		check_loop_utils
 
 		for TEST_FILE in ${FILES}; do
-			TEST_LOOPBACK=$(${SUDO} ${LOSETUP} -f)
-			${SUDO} ${LOSETUP} ${TEST_LOOPBACK} ${TEST_FILE} ||
+			TEST_LOOPBACK=$(${SUDO} "${LOSETUP}" -f)
+			${SUDO} "${LOSETUP}" "${TEST_LOOPBACK}" "${TEST_FILE}" ||
 			    fail "Failed: ${TEST_FILE} -> ${TEST_LOOPBACK}"
 			LOOPBACKS="${LOOPBACKS}${TEST_LOOPBACK} "
-			DISKS="$DISKS$(basename $TEST_LOOPBACK) "
+			BASELOOPBACKS=$(basename "$TEST_LOOPBACK")
+			DISKS="$DISKS$BASELOOPBACKS "
 		done
 	fi
 fi
 
-NUM_DISKS=$(echo ${DISKS} | $AWK '{print NF}')
-[ $NUM_DISKS -lt 3 ] && fail "Not enough disks ($NUM_DISKS/3 minimum)"
+NUM_DISKS=$(echo "${DISKS}" | $AWK '{print NF}')
+[ "$NUM_DISKS" -lt 3 ] && fail "Not enough disks ($NUM_DISKS/3 minimum)"
 
 #
 # Disable SELinux until the ZFS Test Suite has been updated accordingly.
@@ -341,10 +406,15 @@ export STF_TOOLS
 export STF_SUITE
 export DISKS
 export KEEP
+export __ZFS_POOL_EXCLUDE
 
 msg "${TEST_RUNNER} ${QUIET} -c ${RUNFILE} -i ${STF_SUITE}"
-${TEST_RUNNER} ${QUIET} -c ${RUNFILE} -i ${STF_SUITE}
+${TEST_RUNNER} ${QUIET} -c "${RUNFILE}" -i "${STF_SUITE}"
 RESULT=$?
 echo
+
+if [ ${#SINGLETEST[@]} -ne 0 ]; then
+	rm -f "$RUNFILE" &>/dev/null
+fi
 
 exit ${RESULT}

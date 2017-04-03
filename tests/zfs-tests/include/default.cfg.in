@@ -26,6 +26,7 @@
 
 #
 # Copyright (c) 2016 by Delphix. All rights reserved.
+# Copyright (c) 2017 Lawrence Livermore National Security, LLC.
 #
 
 . $STF_SUITE/include/commands.cfg
@@ -33,6 +34,10 @@
 # Common paths
 bindir=@bindir@
 sbindir=@sbindir@
+etcdir=@sysconfdir@
+
+# ZFS Directories
+export ZEDLETDIR=${ZEDLETDIR:-${etcdir}/zfs/zed.d}
 
 # ZFS Commands
 export ZDB=${ZDB:-${sbindir}/zdb}
@@ -46,6 +51,7 @@ export RAIDZ_TEST=${RAIDZ_TEST:-${bindir}/raidz_test}
 export ARC_SUMMARY=${ARC_SUMMARY:-${bindir}/arc_summary.py}
 export ARCSTAT=${ARCSTAT:-${bindir}/arcstat.py}
 export DBUFSTAT=${DBUFSTAT:-${bindir}/dbufstat.py}
+export ZED=${ZED:-${sbindir}/zed}
 
 . $STF_SUITE/include/libtest.shlib
 
@@ -129,6 +135,12 @@ export TESTDIR0=${TEST_BASE_DIR%%/}/testdir0$$
 export TESTDIR1=${TEST_BASE_DIR%%/}/testdir1$$
 export TESTDIR2=${TEST_BASE_DIR%%/}/testdir2$$
 
+# some temp files
+export TEMPFILE=${TEST_BASE_DIR%%/}/tempfile$$
+export TEMPFILE0=${TEST_BASE_DIR%%/}/tempfile0$$
+export TEMPFILE1=${TEST_BASE_DIR%%/}/tempfile1$$
+export TEMPFILE2=${TEST_BASE_DIR%%/}/tempfile2$$
+
 export ZFSROOT=
 
 export TESTSNAP=testsnap$$
@@ -147,6 +159,7 @@ export TESTVOL2=testvol2$$
 export TESTFILE0=testfile0.$$
 export TESTFILE1=testfile1.$$
 export TESTFILE2=testfile2.$$
+export TESTBKMARK=testbkmark$$
 
 export LONGPNAME="poolname50charslong_012345678901234567890123456789"
 export LONGFSNAME="fsysname50charslong_012345678901234567890123456789"
@@ -158,6 +171,12 @@ export BIGVOLSIZE=1eb
 
 # Default to limit disks to be checked
 export MAX_FINDDISKSNUM=6
+
+# Default minimum size for file based vdevs in the test suite
+export MINVDEVSIZE=$((256 * 1024 * 1024))
+
+# Minimum vdev size possible as defined in the OS
+export SPA_MINDEVSIZE=$((64 * 1024 * 1024))
 
 # For iscsi target support
 export ISCSITGTFILE=/tmp/iscsitgt_file

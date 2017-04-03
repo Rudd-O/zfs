@@ -54,7 +54,7 @@ _zed_exec_create_env(zed_strings_t *zsp)
 	if (!buf)
 		return (NULL);
 
-	pp = (char **) buf;
+	pp = (char **)buf;
 	p = buf + (num_ptrs * sizeof (char *));
 	i = 0;
 	for (q = zed_strings_first(zsp); q; q = zed_strings_next(zsp)) {
@@ -66,12 +66,12 @@ _zed_exec_create_env(zed_strings_t *zsp)
 	}
 	pp[i] = NULL;
 	assert(buf + buflen == p);
-	return ((char **) buf);
+	return ((char **)buf);
 }
 
 /*
  * Fork a child process to handle event [eid].  The program [prog]
- * in directory [dir] is executed with the envionment [env].
+ * in directory [dir] is executed with the environment [env].
  *
  * The file descriptor [zfd] is the zevent_fd used to track the
  * current cursor location within the zevent nvlist.
@@ -131,7 +131,7 @@ _zed_exec_fork_child(uint64_t eid, const char *dir, const char *prog,
 	 */
 	for (n = 0; n < 1000; n++) {
 		wpid = waitpid(pid, &status, WNOHANG);
-		if (wpid == (pid_t) -1) {
+		if (wpid == (pid_t)-1) {
 			if (errno == EINTR)
 				continue;
 			zed_log_msg(LOG_WARNING,

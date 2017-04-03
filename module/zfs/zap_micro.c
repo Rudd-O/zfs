@@ -18,10 +18,12 @@
  *
  * CDDL HEADER END
  */
+
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2011, 2016 by Delphix. All rights reserved.
  * Copyright (c) 2014 Spectra Logic Corporation, All rights reserved.
+ * Copyright 2017 Nexenta Systems, Inc.
  */
 
 #include <sys/zio.h>
@@ -124,7 +126,7 @@ zap_hash(zap_name_t *zn)
 	 * Don't use all 64 bits, since we need some in the cookie for
 	 * the collision differentiator.  We MUST use the high bits,
 	 * since those are the ones that we first pay attention to when
-	 * chosing the bucket.
+	 * choosing the bucket.
 	 */
 	h &= ~((1ULL << (64 - zap_hashbits(zap))) - 1);
 
@@ -132,7 +134,7 @@ zap_hash(zap_name_t *zn)
 }
 
 static int
-zap_normalize(zap_t *zap, const char *name, char *namenorm)
+zap_normalize(zap_t *zap, const char *name, char *namenorm, int normflags)
 {
 	size_t inlen, outlen;
 	int err;
@@ -144,8 +146,8 @@ zap_normalize(zap_t *zap, const char *name, char *namenorm)
 
 	err = 0;
 	(void) u8_textprep_str((char *)name, &inlen, namenorm, &outlen,
-	    zap->zap_normflags | U8_TEXTPREP_IGNORE_NULL |
-	    U8_TEXTPREP_IGNORE_INVALID, U8_UNICODE_LATEST, &err);
+	    normflags | U8_TEXTPREP_IGNORE_NULL | U8_TEXTPREP_IGNORE_INVALID,
+	    U8_UNICODE_LATEST, &err);
 
 	return (err);
 }
@@ -155,15 +157,15 @@ zap_match(zap_name_t *zn, const char *matchname)
 {
 	ASSERT(!(zap_getflags(zn->zn_zap) & ZAP_FLAG_UINT64_KEY));
 
-	if (zn->zn_matchtype == MT_FIRST) {
+	if (zn->zn_matchtype & MT_NORMALIZE) {
 		char norm[ZAP_MAXNAMELEN];
 
-		if (zap_normalize(zn->zn_zap, matchname, norm) != 0)
+		if (zap_normalize(zn->zn_zap, matchname, norm,
+		    zn->zn_normflags) != 0)
 			return (B_FALSE);
 
 		return (strcmp(zn->zn_key_norm, norm) == 0);
 	} else {
-		/* MT_BEST or MT_EXACT */
 		return (strcmp(zn->zn_key_orig, matchname) == 0);
 	}
 }
@@ -184,15 +186,30 @@ zap_name_alloc(zap_t *zap, const char *key, matchtype_t mt)
 	zn->zn_key_orig = key;
 	zn->zn_key_orig_numints = strlen(zn->zn_key_orig) + 1;
 	zn->zn_matchtype = mt;
+	zn->zn_normflags = zap->zap_normflags;
+
+	/*
+	 * If we're dealing with a case sensitive lookup on a mixed or
+	 * insensitive fs, remove U8_TEXTPREP_TOUPPER or the lookup
+	 * will fold case to all caps overriding the lookup request.
+	 */
+	if (mt & MT_MATCH_CASE)
+		zn->zn_normflags &= ~U8_TEXTPREP_TOUPPER;
+
 	if (zap->zap_normflags) {
-		if (zap_normalize(zap, key, zn->zn_normbuf) != 0) {
+		/*
+		 * We *must* use zap_normflags because this normalization is
+		 * what the hash is computed from.
+		 */
+		if (zap_normalize(zap, key, zn->zn_normbuf,
+		    zap->zap_normflags) != 0) {
 			zap_name_free(zn);
 			return (NULL);
 		}
 		zn->zn_key_norm = zn->zn_normbuf;
 		zn->zn_key_norm_numints = strlen(zn->zn_key_norm) + 1;
 	} else {
-		if (mt != MT_EXACT) {
+		if (mt != 0) {
 			zap_name_free(zn);
 			return (NULL);
 		}
@@ -201,6 +218,20 @@ zap_name_alloc(zap_t *zap, const char *key, matchtype_t mt)
 	}
 
 	zn->zn_hash = zap_hash(zn);
+
+	if (zap->zap_normflags != zn->zn_normflags) {
+		/*
+		 * We *must* use zn_normflags because this normalization is
+		 * what the matching is based on.  (Not the hash!)
+		 */
+		if (zap_normalize(zap, key, zn->zn_normbuf,
+		    zn->zn_normflags) != 0) {
+			zap_name_free(zn);
+			return (NULL);
+		}
+		zn->zn_key_norm_numints = strlen(zn->zn_key_norm) + 1;
+	}
+
 	return (zn);
 }
 
@@ -214,7 +245,7 @@ zap_name_alloc_uint64(zap_t *zap, const uint64_t *key, int numints)
 	zn->zn_key_intlen = sizeof (*key);
 	zn->zn_key_orig = zn->zn_key_norm = key;
 	zn->zn_key_orig_numints = zn->zn_key_norm_numints = numints;
-	zn->zn_matchtype = MT_EXACT;
+	zn->zn_matchtype = 0;
 
 	zn->zn_hash = zap_hash(zn);
 	return (zn);
@@ -294,7 +325,6 @@ mze_find(zap_name_t *zn)
 	mze_tofind.mze_hash = zn->zn_hash;
 	mze_tofind.mze_cd = 0;
 
-again:
 	mze = avl_find(avl, &mze_tofind, &idx);
 	if (mze == NULL)
 		mze = avl_nearest(avl, idx, AVL_AFTER);
@@ -303,10 +333,7 @@ again:
 		if (zap_match(zn, MZE_PHYS(zn->zn_zap, mze)->mze_name))
 			return (mze);
 	}
-	if (zn->zn_matchtype == MT_BEST) {
-		zn->zn_matchtype = MT_FIRST;
-		goto again;
-	}
+
 	return (NULL);
 }
 
@@ -392,7 +419,7 @@ mzap_open(objset_t *os, uint64_t obj, dmu_buf_t *db)
 	 * it, because zap_lockdir() checks zap_ismicro without the lock
 	 * held.
 	 */
-	dmu_buf_init_user(&zap->zap_dbu, zap_evict, &zap->zap_dbuf);
+	dmu_buf_init_user(&zap->zap_dbu, zap_evict_sync, NULL, &zap->zap_dbuf);
 	winner = dmu_buf_set_user(db, &zap->zap_dbu);
 
 	if (winner != NULL)
@@ -412,8 +439,7 @@ mzap_open(objset_t *os, uint64_t obj, dmu_buf_t *db)
 				zap_name_t *zn;
 
 				zap->zap_m.zap_num_entries++;
-				zn = zap_name_alloc(zap, mze->mze_name,
-				    MT_EXACT);
+				zn = zap_name_alloc(zap, mze->mze_name, 0);
 				mze_insert(zap, i, zn->zn_hash);
 				zap_name_free(zn);
 			}
@@ -611,7 +637,7 @@ mzap_upgrade(zap_t **zapp, void *tag, dmu_tx_t *tx, zap_flags_t flags)
 			continue;
 		dprintf("adding %s=%llu\n",
 		    mze->mze_name, mze->mze_value);
-		zn = zap_name_alloc(zap, mze->mze_name, MT_EXACT);
+		zn = zap_name_alloc(zap, mze->mze_name, 0);
 		err = fzap_add_cd(zn, 8, 1, &mze->mze_value, mze->mze_cd,
 		    tag, tx);
 		zap = zn->zn_zap;	/* fzap_add_cd() may change zap */
@@ -624,6 +650,23 @@ mzap_upgrade(zap_t **zapp, void *tag, dmu_tx_t *tx, zap_flags_t flags)
 	return (err);
 }
 
+/*
+ * The "normflags" determine the behavior of the matchtype_t which is
+ * passed to zap_lookup_norm().  Names which have the same normalized
+ * version will be stored with the same hash value, and therefore we can
+ * perform normalization-insensitive lookups.  We can be Unicode form-
+ * insensitive and/or case-insensitive.  The following flags are valid for
+ * "normflags":
+ *
+ * U8_TEXTPREP_NFC
+ * U8_TEXTPREP_NFD
+ * U8_TEXTPREP_NFKC
+ * U8_TEXTPREP_NFKD
+ * U8_TEXTPREP_TOUPPER
+ *
+ * The *_NF* (Normalization Form) flags are mutually exclusive; at most one
+ * of them may be supplied.
+ */
 void
 mzap_create_impl(objset_t *os, uint64_t obj, int normflags, zap_flags_t flags,
     dmu_tx_t *tx)
@@ -774,7 +817,7 @@ zap_destroy(objset_t *os, uint64_t zapobj, dmu_tx_t *tx)
 }
 
 void
-zap_evict(void *dbu)
+zap_evict_sync(void *dbu)
 {
 	zap_t *zap = dbu;
 
@@ -827,7 +870,7 @@ again:
 
 		if (zn == NULL) {
 			zn = zap_name_alloc(zap, MZE_PHYS(zap, mze)->mze_name,
-			    MT_FIRST);
+			    MT_NORMALIZE);
 			allocdzn = B_TRUE;
 		}
 		if (zap_match(zn, MZE_PHYS(zap, other)->mze_name)) {
@@ -856,7 +899,7 @@ zap_lookup(objset_t *os, uint64_t zapobj, const char *name,
     uint64_t integer_size, uint64_t num_integers, void *buf)
 {
 	return (zap_lookup_norm(os, zapobj, name, integer_size,
-	    num_integers, buf, MT_EXACT, NULL, 0, NULL));
+	    num_integers, buf, 0, NULL, 0, NULL));
 }
 
 static int
@@ -929,7 +972,7 @@ zap_prefetch(objset_t *os, uint64_t zapobj, const char *name)
 	err = zap_lockdir(os, zapobj, NULL, RW_READER, TRUE, FALSE, FTAG, &zap);
 	if (err)
 		return (err);
-	zn = zap_name_alloc(zap, name, MT_EXACT);
+	zn = zap_name_alloc(zap, name, 0);
 	if (zn == NULL) {
 		zap_unlockdir(zap, FTAG);
 		return (SET_ERROR(ENOTSUP));
@@ -946,7 +989,7 @@ zap_lookup_by_dnode(dnode_t *dn, const char *name,
     uint64_t integer_size, uint64_t num_integers, void *buf)
 {
 	return (zap_lookup_norm_by_dnode(dn, name, integer_size,
-	    num_integers, buf, MT_EXACT, NULL, 0, NULL));
+	    num_integers, buf, 0, NULL, 0, NULL));
 }
 
 int
@@ -1019,7 +1062,7 @@ int
 zap_contains(objset_t *os, uint64_t zapobj, const char *name)
 {
 	int err = zap_lookup_norm(os, zapobj, name, 0,
-	    0, NULL, MT_EXACT, NULL, 0, NULL);
+	    0, NULL, 0, NULL, 0, NULL);
 	if (err == EOVERFLOW || err == EINVAL)
 		err = 0; /* found, but skipped reading the value */
 	return (err);
@@ -1037,7 +1080,7 @@ zap_length(objset_t *os, uint64_t zapobj, const char *name,
 	err = zap_lockdir(os, zapobj, NULL, RW_READER, TRUE, FALSE, FTAG, &zap);
 	if (err)
 		return (err);
-	zn = zap_name_alloc(zap, name, MT_EXACT);
+	zn = zap_name_alloc(zap, name, 0);
 	if (zn == NULL) {
 		zap_unlockdir(zap, FTAG);
 		return (SET_ERROR(ENOTSUP));
@@ -1128,34 +1171,30 @@ again:
 	cmn_err(CE_PANIC, "out of entries!");
 }
 
-int
-zap_add(objset_t *os, uint64_t zapobj, const char *key,
+static int
+zap_add_impl(zap_t *zap, const char *key,
     int integer_size, uint64_t num_integers,
-    const void *val, dmu_tx_t *tx)
+    const void *val, dmu_tx_t *tx, void *tag)
 {
-	zap_t *zap;
-	int err;
+	int err = 0;
 	mzap_ent_t *mze;
 	const uint64_t *intval = val;
 	zap_name_t *zn;
 
-	err = zap_lockdir(os, zapobj, tx, RW_WRITER, TRUE, TRUE, FTAG, &zap);
-	if (err)
-		return (err);
-	zn = zap_name_alloc(zap, key, MT_EXACT);
+	zn = zap_name_alloc(zap, key, 0);
 	if (zn == NULL) {
-		zap_unlockdir(zap, FTAG);
+		zap_unlockdir(zap, tag);
 		return (SET_ERROR(ENOTSUP));
 	}
 	if (!zap->zap_ismicro) {
-		err = fzap_add(zn, integer_size, num_integers, val, FTAG, tx);
+		err = fzap_add(zn, integer_size, num_integers, val, tag, tx);
 		zap = zn->zn_zap;	/* fzap_add() may change zap */
 	} else if (integer_size != 8 || num_integers != 1 ||
 	    strlen(key) >= MZAP_NAME_LEN) {
-		err = mzap_upgrade(&zn->zn_zap, FTAG, tx, 0);
+		err = mzap_upgrade(&zn->zn_zap, tag, tx, 0);
 		if (err == 0) {
 			err = fzap_add(zn, integer_size, num_integers, val,
-			    FTAG, tx);
+			    tag, tx);
 		}
 		zap = zn->zn_zap;	/* fzap_add() may change zap */
 	} else {
@@ -1169,7 +1208,39 @@ zap_add(objset_t *os, uint64_t zapobj, const char *key,
 	ASSERT(zap == zn->zn_zap);
 	zap_name_free(zn);
 	if (zap != NULL)	/* may be NULL if fzap_add() failed */
-		zap_unlockdir(zap, FTAG);
+		zap_unlockdir(zap, tag);
+	return (err);
+}
+
+int
+zap_add(objset_t *os, uint64_t zapobj, const char *key,
+    int integer_size, uint64_t num_integers,
+    const void *val, dmu_tx_t *tx)
+{
+	zap_t *zap;
+	int err;
+
+	err = zap_lockdir(os, zapobj, tx, RW_WRITER, TRUE, TRUE, FTAG, &zap);
+	if (err != 0)
+		return (err);
+	err = zap_add_impl(zap, key, integer_size, num_integers, val, tx, FTAG);
+	/* zap_add_impl() calls zap_unlockdir() */
+	return (err);
+}
+
+int
+zap_add_by_dnode(dnode_t *dn, const char *key,
+    int integer_size, uint64_t num_integers,
+    const void *val, dmu_tx_t *tx)
+{
+	zap_t *zap;
+	int err;
+
+	err = zap_lockdir_by_dnode(dn, tx, RW_WRITER, TRUE, TRUE, FTAG, &zap);
+	if (err != 0)
+		return (err);
+	err = zap_add_impl(zap, key, integer_size, num_integers, val, tx, FTAG);
+	/* zap_add_impl() calls zap_unlockdir() */
 	return (err);
 }
 
@@ -1222,7 +1293,7 @@ zap_update(objset_t *os, uint64_t zapobj, const char *name,
 	err = zap_lockdir(os, zapobj, tx, RW_WRITER, TRUE, TRUE, FTAG, &zap);
 	if (err)
 		return (err);
-	zn = zap_name_alloc(zap, name, MT_EXACT);
+	zn = zap_name_alloc(zap, name, 0);
 	if (zn == NULL) {
 		zap_unlockdir(zap, FTAG);
 		return (SET_ERROR(ENOTSUP));
@@ -1285,26 +1356,20 @@ zap_update_uint64(objset_t *os, uint64_t zapobj, const uint64_t *key,
 int
 zap_remove(objset_t *os, uint64_t zapobj, const char *name, dmu_tx_t *tx)
 {
-	return (zap_remove_norm(os, zapobj, name, MT_EXACT, tx));
+	return (zap_remove_norm(os, zapobj, name, 0, tx));
 }
 
-int
-zap_remove_norm(objset_t *os, uint64_t zapobj, const char *name,
+static int
+zap_remove_impl(zap_t *zap, const char *name,
     matchtype_t mt, dmu_tx_t *tx)
 {
-	zap_t *zap;
-	int err;
 	mzap_ent_t *mze;
 	zap_name_t *zn;
+	int err = 0;
 
-	err = zap_lockdir(os, zapobj, tx, RW_WRITER, TRUE, FALSE, FTAG, &zap);
-	if (err)
-		return (err);
 	zn = zap_name_alloc(zap, name, mt);
-	if (zn == NULL) {
-		zap_unlockdir(zap, FTAG);
+	if (zn == NULL)
 		return (SET_ERROR(ENOTSUP));
-	}
 	if (!zap->zap_ismicro) {
 		err = fzap_remove(zn, tx);
 	} else {
@@ -1319,6 +1384,34 @@ zap_remove_norm(objset_t *os, uint64_t zapobj, const char *name,
 		}
 	}
 	zap_name_free(zn);
+	return (err);
+}
+
+int
+zap_remove_norm(objset_t *os, uint64_t zapobj, const char *name,
+    matchtype_t mt, dmu_tx_t *tx)
+{
+	zap_t *zap;
+	int err;
+
+	err = zap_lockdir(os, zapobj, tx, RW_WRITER, TRUE, FALSE, FTAG, &zap);
+	if (err)
+		return (err);
+	err = zap_remove_impl(zap, name, mt, tx);
+	zap_unlockdir(zap, FTAG);
+	return (err);
+}
+
+int
+zap_remove_by_dnode(dnode_t *dn, const char *name, dmu_tx_t *tx)
+{
+	zap_t *zap;
+	int err;
+
+	err = zap_lockdir_by_dnode(dn, tx, RW_WRITER, TRUE, FALSE, FTAG, &zap);
+	if (err)
+		return (err);
+	err = zap_remove_impl(zap, name, 0, tx);
 	zap_unlockdir(zap, FTAG);
 	return (err);
 }
@@ -1501,82 +1594,6 @@ zap_get_stats(objset_t *os, uint64_t zapobj, zap_stats_t *zs)
 	return (0);
 }
 
-int
-zap_count_write_by_dnode(dnode_t *dn, const char *name, int add,
-    uint64_t *towrite, uint64_t *tooverwrite)
-{
-	zap_t *zap;
-	int err = 0;
-
-	/*
-	 * Since, we don't have a name, we cannot figure out which blocks will
-	 * be affected in this operation. So, account for the worst case :
-	 * - 3 blocks overwritten: target leaf, ptrtbl block, header block
-	 * - 4 new blocks written if adding:
-	 * 	- 2 blocks for possibly split leaves,
-	 * 	- 2 grown ptrtbl blocks
-	 *
-	 * This also accommodates the case where an add operation to a fairly
-	 * large microzap results in a promotion to fatzap.
-	 */
-	if (name == NULL) {
-		*towrite += (3 + (add ? 4 : 0)) * SPA_OLD_MAXBLOCKSIZE;
-		return (err);
-	}
-
-	/*
-	 * We lock the zap with adding == FALSE. Because, if we pass
-	 * the actual value of add, it could trigger a mzap_upgrade().
-	 * At present we are just evaluating the possibility of this operation
-	 * and hence we do not want to trigger an upgrade.
-	 */
-	err = zap_lockdir_by_dnode(dn, NULL, RW_READER, TRUE, FALSE,
-	    FTAG, &zap);
-	if (err != 0)
-		return (err);
-
-	if (!zap->zap_ismicro) {
-		zap_name_t *zn = zap_name_alloc(zap, name, MT_EXACT);
-		if (zn) {
-			err = fzap_count_write(zn, add, towrite,
-			    tooverwrite);
-			zap_name_free(zn);
-		} else {
-			/*
-			 * We treat this case as similar to (name == NULL)
-			 */
-			*towrite += (3 + (add ? 4 : 0)) * SPA_OLD_MAXBLOCKSIZE;
-		}
-	} else {
-		/*
-		 * We are here if (name != NULL) and this is a micro-zap.
-		 * We account for the header block depending on whether it
-		 * is freeable.
-		 *
-		 * Incase of an add-operation it is hard to find out
-		 * if this add will promote this microzap to fatzap.
-		 * Hence, we consider the worst case and account for the
-		 * blocks assuming this microzap would be promoted to a
-		 * fatzap.
-		 *
-		 * 1 block overwritten  : header block
-		 * 4 new blocks written : 2 new split leaf, 2 grown
-		 *			ptrtbl blocks
-		 */
-		if (dmu_buf_freeable(zap->zap_dbuf))
-			*tooverwrite += MZAP_MAX_BLKSZ;
-		else
-			*towrite += MZAP_MAX_BLKSZ;
-
-		if (add) {
-			*towrite += 4 * MZAP_MAX_BLKSZ;
-		}
-	}
-
-	zap_unlockdir(zap, FTAG);
-	return (err);
-}
-
 #if defined(_KERNEL) && defined(HAVE_SPL)
 EXPORT_SYMBOL(zap_create);
 EXPORT_SYMBOL(zap_create_dnsize);
@@ -1589,19 +1606,21 @@ EXPORT_SYMBOL(zap_create_claim_norm);
 EXPORT_SYMBOL(zap_create_claim_norm_dnsize);
 EXPORT_SYMBOL(zap_destroy);
 EXPORT_SYMBOL(zap_lookup);
+EXPORT_SYMBOL(zap_lookup_by_dnode);
 EXPORT_SYMBOL(zap_lookup_norm);
 EXPORT_SYMBOL(zap_lookup_uint64);
 EXPORT_SYMBOL(zap_contains);
 EXPORT_SYMBOL(zap_prefetch);
 EXPORT_SYMBOL(zap_prefetch_uint64);
-EXPORT_SYMBOL(zap_count_write_by_dnode);
 EXPORT_SYMBOL(zap_add);
+EXPORT_SYMBOL(zap_add_by_dnode);
 EXPORT_SYMBOL(zap_add_uint64);
 EXPORT_SYMBOL(zap_update);
 EXPORT_SYMBOL(zap_update_uint64);
 EXPORT_SYMBOL(zap_length);
 EXPORT_SYMBOL(zap_length_uint64);
 EXPORT_SYMBOL(zap_remove);
+EXPORT_SYMBOL(zap_remove_by_dnode);
 EXPORT_SYMBOL(zap_remove_norm);
 EXPORT_SYMBOL(zap_remove_uint64);
 EXPORT_SYMBOL(zap_count);

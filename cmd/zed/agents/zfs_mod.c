@@ -343,7 +343,7 @@ zfs_process_add(zpool_handle_t *zhp, nvlist_t *vdev, boolean_t labeled)
 		list_insert_tail(&g_device_list, device);
 
 		zed_log_msg(LOG_INFO, "  zpool_label_disk: async '%s' (%llu)",
-		    leafname, (u_longlong_t) guid);
+		    leafname, (u_longlong_t)guid);
 
 		return;	/* resumes at EC_DEV_ADD.ESC_DISK for partition */
 
@@ -373,7 +373,7 @@ zfs_process_add(zpool_handle_t *zhp, nvlist_t *vdev, boolean_t labeled)
 		}
 
 		zed_log_msg(LOG_INFO, "  zpool_label_disk: resume '%s' (%llu)",
-		    physpath, (u_longlong_t) guid);
+		    physpath, (u_longlong_t)guid);
 
 		(void) snprintf(devpath, sizeof (devpath), "%s%s",
 		    DEV_BYID_PATH, new_devid);
@@ -477,7 +477,7 @@ zfs_iter_vdev(zpool_handle_t *zhp, nvlist_t *nvl, void *data)
 	} else if (dp->dd_compare != NULL) {
 		/*
 		 * NOTE: On Linux there is an event for partition, so unlike
-		 * illumos, substring matching is not required to accomodate
+		 * illumos, substring matching is not required to accommodate
 		 * the partition suffix. An exact match will be present in
 		 * the dp->dd_compare value.
 		 */

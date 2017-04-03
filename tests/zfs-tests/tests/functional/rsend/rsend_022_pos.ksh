@@ -33,10 +33,15 @@
 # 6. Mess up the contents of the stream state file on disk
 # 7. Try ZFS receive, which should fail with a checksum mismatch error
 # 8. ZFS send to the stream state file again using the receive_resume_token
-# 9. ZFS receieve and verify the receive completes successfully
+# 9. ZFS receive and verify the receive completes successfully
 #
 
 verify_runnable "both"
+
+# See issue: https://github.com/zfsonlinux/zfs/issues/5654
+if is_32bit; then
+	log_unsupported "Test case fails on 32-bit systems"
+fi
 
 log_assert "Verify resumability of an incremental ZFS send/receive with ZFS " \
     "bookmarks"

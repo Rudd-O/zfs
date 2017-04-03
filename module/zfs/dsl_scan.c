@@ -73,7 +73,7 @@ int zfs_no_scrub_prefetch = B_FALSE; /* set to disable scrub prefetch */
 enum ddt_class zfs_scrub_ddt_class_max = DDT_CLASS_DUPLICATE;
 int dsl_scan_delay_completion = B_FALSE; /* set to delay scan completion */
 /* max number of blocks to free in a single TXG */
-ulong zfs_free_max_blocks = 100000;
+unsigned long zfs_free_max_blocks = 100000;
 
 #define	DSL_SCAN_IS_SCRUB_RESILVER(scn) \
 	((scn)->scn_phys.scn_func == POOL_SCAN_SCRUB || \
@@ -834,7 +834,7 @@ dsl_scan_visitbp(blkptr_t *bp, const zbookmark_phys_t *zb,
 		goto out;
 
 	/*
-	 * If dsl_scan_ddt() has aready visited this block, it will have
+	 * If dsl_scan_ddt() has already visited this block, it will have
 	 * already done any translations or scrubbing, so don't call the
 	 * callback again.
 	 */
@@ -1142,7 +1142,9 @@ dsl_scan_visitds(dsl_scan_t *scn, uint64_t dsobj, dmu_tx_t *tx)
 	 * Iterate over the bps in this ds.
 	 */
 	dmu_buf_will_dirty(ds->ds_dbuf, tx);
+	rrw_enter(&ds->ds_bp_rwlock, RW_READER, FTAG);
 	dsl_scan_visit_rootbp(scn, ds, &dsl_dataset_phys(ds)->ds_bp, tx);
+	rrw_exit(&ds->ds_bp_rwlock, FTAG);
 
 	dsname = kmem_alloc(ZFS_MAX_DATASET_NAME_LEN, KM_SLEEP);
 	dsl_dataset_name(ds, dsname);
@@ -1985,6 +1987,7 @@ MODULE_PARM_DESC(zfs_no_scrub_io, "Set to disable scrub I/O");
 module_param(zfs_no_scrub_prefetch, int, 0644);
 MODULE_PARM_DESC(zfs_no_scrub_prefetch, "Set to disable scrub prefetching");
 
+/* CSTYLED */
 module_param(zfs_free_max_blocks, ulong, 0644);
 MODULE_PARM_DESC(zfs_free_max_blocks, "Max number of blocks freed in one txg");
 

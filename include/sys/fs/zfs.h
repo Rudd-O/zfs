@@ -54,6 +54,10 @@ typedef enum {
 	ZFS_TYPE_BOOKMARK	= (1 << 4)
 } zfs_type_t;
 
+/*
+ * NB: lzc_dataset_type should be updated whenever a new objset type is added,
+ * if it represents a real type of a dataset that can be created from userland.
+ */
 typedef enum dmu_objset_type {
 	DMU_OST_NONE,
 	DMU_OST_META,
@@ -82,7 +86,8 @@ typedef enum dmu_objset_type {
  * the property table in module/zcommon/zfs_prop.c.
  */
 typedef enum {
-	ZFS_PROP_TYPE,
+	ZFS_PROP_BAD = -1,
+	ZFS_PROP_TYPE = 0,
 	ZFS_PROP_CREATION,
 	ZFS_PROP_USED,
 	ZFS_PROP_AVAILABLE,
@@ -727,7 +732,8 @@ typedef enum vdev_aux {
 	VDEV_AUX_IO_FAILURE,	/* experienced I/O failure		*/
 	VDEV_AUX_BAD_LOG,	/* cannot read log chain(s)		*/
 	VDEV_AUX_EXTERNAL,	/* external diagnosis			*/
-	VDEV_AUX_SPLIT_POOL	/* vdev was split off into another pool	*/
+	VDEV_AUX_SPLIT_POOL,	/* vdev was split off into another pool	*/
+	VDEV_AUX_BAD_ASHIFT	/* vdev ashift is invalid		*/
 } vdev_aux_t;
 
 /*
@@ -894,7 +900,7 @@ typedef struct vdev_stat_ex {
  * is passed between kernel and userland as an nvlist uint64 array.
  */
 typedef struct ddt_object {
-	uint64_t	ddo_count;	/* number of elments in ddt 	*/
+	uint64_t	ddo_count;	/* number of elements in ddt 	*/
 	uint64_t	ddo_dspace;	/* size of ddt on disk		*/
 	uint64_t	ddo_mspace;	/* size of ddt in-core		*/
 } ddt_object_t;
@@ -918,6 +924,8 @@ typedef struct ddt_histogram {
 #define	ZFS_DRIVER	"zfs"
 #define	ZFS_DEV		"/dev/zfs"
 #define	ZFS_SHARETAB	"/etc/dfs/sharetab"
+
+#define	ZFS_SUPER_MAGIC	0x2fc12fc1
 
 /* general zvol path */
 #define	ZVOL_DIR	"/dev"

@@ -22,7 +22,7 @@
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2011 Nexenta Systems, Inc. All rights reserved.
- * Copyright (c) 2012, 2016 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2017 by Delphix. All rights reserved.
  * Copyright (c) 2013 by Saso Kiselkov. All rights reserved.
  */
 
@@ -296,7 +296,7 @@ typedef struct zio_prop {
 typedef struct zio_cksum_report zio_cksum_report_t;
 
 typedef void zio_cksum_finish_f(zio_cksum_report_t *rep,
-    const void *good_data);
+    const abd_t *good_data);
 typedef void zio_cksum_free_f(void *cbdata, size_t size);
 
 struct zio_bad_cksum;				/* defined in zio_checksum.h */
@@ -358,6 +358,11 @@ typedef int zio_pipe_stage_t(zio_t *zio);
 #define	ZIO_REEXECUTE_NOW	0x01
 #define	ZIO_REEXECUTE_SUSPEND	0x02
 
+typedef struct zio_alloc_list {
+	list_t  zal_list;
+	uint64_t zal_size;
+} zio_alloc_list_t;
+
 typedef struct zio_link {
 	zio_t		*zl_parent;
 	zio_t		*zl_child;
@@ -417,6 +422,7 @@ struct zio {
 	avl_node_t	io_queue_node;
 	avl_node_t	io_offset_node;
 	avl_node_t	io_alloc_node;
+	zio_alloc_list_t 	io_alloc_list;
 
 	/* Internal pipeline state */
 	enum zio_flag	io_flags;
@@ -448,7 +454,7 @@ struct zio {
 	taskq_ent_t	io_tqent;
 };
 
-extern int zio_timestamp_compare(const void *, const void *);
+extern int zio_bookmark_compare(const void *, const void *);
 
 extern zio_t *zio_null(zio_t *pio, spa_t *spa, vdev_t *vd,
     zio_done_func_t *done, void *private, enum zio_flag flags);
@@ -581,14 +587,14 @@ extern hrtime_t zio_handle_io_delay(zio_t *zio);
 extern void zfs_ereport_start_checksum(spa_t *spa, vdev_t *vd, struct zio *zio,
     uint64_t offset, uint64_t length, void *arg, struct zio_bad_cksum *info);
 extern void zfs_ereport_finish_checksum(zio_cksum_report_t *report,
-    const void *good_data, const void *bad_data, boolean_t drop_if_identical);
+    const abd_t *good_data, const abd_t *bad_data, boolean_t drop_if_identical);
 
 extern void zfs_ereport_free_checksum(zio_cksum_report_t *report);
 
 /* If we have the good data in hand, this function can be used */
 extern void zfs_ereport_post_checksum(spa_t *spa, vdev_t *vd,
     struct zio *zio, uint64_t offset, uint64_t length,
-    const void *good_data, const void *bad_data, struct zio_bad_cksum *info);
+    const abd_t *good_data, const abd_t *bad_data, struct zio_bad_cksum *info);
 
 /* Called from spa_sync(), but primarily an injection handler */
 extern void spa_handle_ignored_writes(spa_t *spa);

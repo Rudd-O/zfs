@@ -23,7 +23,9 @@
  * Use is subject to license terms.
  */
 
-
+/*
+ * Copyright 2016 Igor Kozhukhov <ikozhukhov@gmail.com>.
+ */
 
 #include <libintl.h>
 #include <libuutil.h>
@@ -132,7 +134,8 @@ pool_list_get(int argc, char **argv, zprop_list_t **proplist, int *err)
 		for (i = 0; i < argc; i++) {
 			zpool_handle_t *zhp;
 
-			if ((zhp = zpool_open_canfail(g_zfs, argv[i]))) {
+			if ((zhp = zpool_open_canfail(g_zfs, argv[i])) !=
+			    NULL) {
 				if (add_pool(zhp, zlp) != 0)
 					*err = B_TRUE;
 			} else {
@@ -329,9 +332,11 @@ vdev_run_cmd_thread(void *cb_cmd_data)
 	char cmd[_POSIX_ARG_MAX];
 
 	/* Set our VDEV_PATH and VDEV_UPATH env vars and run command */
-	if (snprintf(cmd, sizeof (cmd), "VDEV_PATH=%s && VDEV_UPATH=%s && %s",
-	    data->path, data->upath ? data->upath : "\"\"", data->cmd) >=
-	    sizeof (cmd)) {
+	if (snprintf(cmd, sizeof (cmd), "VDEV_PATH=%s && VDEV_UPATH=\"%s\" && "
+	    "VDEV_ENC_SYSFS_PATH=\"%s\" && %s", data->path ? data->path : "",
+	    data->upath ? data->upath : "",
+	    data->vdev_enc_sysfs_path ? data->vdev_enc_sysfs_path : "",
+	    data->cmd) >= sizeof (cmd)) {
 		/* Our string was truncated */
 		return;
 	}
@@ -346,7 +351,7 @@ vdev_run_cmd_thread(void *cb_cmd_data)
 	if (getline(&data->line, &len, fp) != -1) {
 		/* Success.  Remove newline from the end, if necessary. */
 		if ((pos = strchr(data->line, '\n')) != NULL)
-		    *pos = '\0';
+			*pos = '\0';
 	} else {
 		data->line = NULL;
 	}
@@ -360,10 +365,15 @@ for_each_vdev_run_cb(zpool_handle_t *zhp, nvlist_t *nv, void *cb_vcdl)
 	vdev_cmd_data_list_t *vcdl = cb_vcdl;
 	vdev_cmd_data_t *data;
 	char *path = NULL;
-	int i;
+	char *vname = NULL;
+	char *vdev_enc_sysfs_path = NULL;
+	int i, match = 0;
 
 	if (nvlist_lookup_string(nv, ZPOOL_CONFIG_PATH, &path) != 0)
 		return (1);
+
+	nvlist_lookup_string(nv, ZPOOL_CONFIG_VDEV_ENC_SYSFS_PATH,
+	    &vdev_enc_sysfs_path);
 
 	/* Spares show more than once if they're in use, so skip if exists */
 	for (i = 0; i < vcdl->count; i++) {
@@ -373,6 +383,21 @@ for_each_vdev_run_cb(zpool_handle_t *zhp, nvlist_t *nv, void *cb_vcdl)
 			return (0);
 		}
 	}
+
+	/* Check for whitelisted vdevs here, if any */
+	for (i = 0; i < vcdl->vdev_names_count; i++) {
+		vname = zpool_vdev_name(g_zfs, zhp, nv, vcdl->cb_name_flags);
+		if (strcmp(vcdl->vdev_names[i], vname) == 0) {
+			free(vname);
+			match = 1;
+			break; /* match */
+		}
+		free(vname);
+	}
+
+	/* If we whitelisted vdevs, and this isn't one of them, then bail out */
+	if (!match && vcdl->vdev_names_count)
+		return (0);
 
 	/*
 	 * Resize our array and add in the new element.
@@ -387,6 +412,10 @@ for_each_vdev_run_cb(zpool_handle_t *zhp, nvlist_t *nv, void *cb_vcdl)
 	data->path = strdup(path);
 	data->upath = zfs_get_underlying_path(path);
 	data->cmd = vcdl->cmd;
+	if (vdev_enc_sysfs_path)
+		data->vdev_enc_sysfs_path = strdup(vdev_enc_sysfs_path);
+	else
+		data->vdev_enc_sysfs_path = NULL;
 
 	vcdl->count++;
 
@@ -437,18 +466,27 @@ all_pools_for_each_vdev_run_vcdl(vdev_cmd_data_list_t *vcdl)
 }
 
 /*
- * Run command 'cmd' on all vdevs in all pools.  Saves the first line of output
- * from the command in vcdk->data[].line for all vdevs.
+ * Run command 'cmd' on all vdevs in all pools in argv.  Saves the first line of
+ * output from the command in vcdk->data[].line for all vdevs.  If you want
+ * to run the command on only certain vdevs, fill in g_zfs, vdev_names,
+ * vdev_names_count, and cb_name_flags.  Otherwise leave them as zero.
  *
  * Returns a vdev_cmd_data_list_t that must be freed with
  * free_vdev_cmd_data_list();
  */
 vdev_cmd_data_list_t *
-all_pools_for_each_vdev_run(int argc, char **argv, char *cmd)
+all_pools_for_each_vdev_run(int argc, char **argv, char *cmd,
+    libzfs_handle_t *g_zfs, char **vdev_names, int vdev_names_count,
+    int cb_name_flags)
 {
 	vdev_cmd_data_list_t *vcdl;
 	vcdl = safe_malloc(sizeof (vdev_cmd_data_list_t));
 	vcdl->cmd = cmd;
+
+	vcdl->vdev_names = vdev_names;
+	vcdl->vdev_names_count = vdev_names_count;
+	vcdl->cb_name_flags = cb_name_flags;
+	vcdl->g_zfs = g_zfs;
 
 	/* Gather our list of all vdevs in all pools */
 	for_each_pool(argc, argv, B_TRUE, NULL,
@@ -472,6 +510,7 @@ free_vdev_cmd_data_list(vdev_cmd_data_list_t *vcdl)
 		free(vcdl->data[i].pool);
 		free(vcdl->data[i].upath);
 		free(vcdl->data[i].line);
+		free(vcdl->data[i].vdev_enc_sysfs_path);
 	}
 	free(vcdl->data);
 	free(vcdl);

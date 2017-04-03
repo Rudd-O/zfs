@@ -39,7 +39,7 @@
  * DTRACE_PROBE1(...,
  *     zilog_t *, ...);
  */
-
+/* BEGIN CSTYLED */
 DECLARE_EVENT_CLASS(zfs_zil_class,
 	TP_PROTO(zilog_t *zilog),
 	TP_ARGS(zilog),
@@ -111,13 +111,16 @@ DECLARE_EVENT_CLASS(zfs_zil_class,
 	    __entry->zl_itx_list_sz, __entry->zl_cur_used,
 	    __entry->zl_replay_time, __entry->zl_replay_blks)
 );
+/* END CSTYLED */
 
+/* BEGIN CSTYLED */
 #define	DEFINE_ZIL_EVENT(name) \
 DEFINE_EVENT(zfs_zil_class, name, \
 	TP_PROTO(zilog_t *zilog), \
 	TP_ARGS(zilog))
 DEFINE_ZIL_EVENT(zfs_zil__cw1);
 DEFINE_ZIL_EVENT(zfs_zil__cw2);
+/* END CSTYLED */
 
 #endif /* _TRACE_ZIL_H */
 
