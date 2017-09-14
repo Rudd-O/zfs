@@ -24,6 +24,7 @@
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2014, 2015 by Delphix. All rights reserved.
  * Copyright 2016 Igor Kozhukhov <ikozhukhov@gmail.com>
+ * Copyright 2017 RackTop Systems.
  */
 
 /*
@@ -77,6 +78,7 @@
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/vfs.h>
+#include <sys/dsl_crypt.h>
 
 #include <libzfs.h>
 
@@ -91,7 +93,7 @@ zfs_share_type_t zfs_is_shared_proto(zfs_handle_t *, char **,
     zfs_share_proto_t);
 
 /*
- * The share protocols table must be in the same order as the zfs_share_prot_t
+ * The share protocols table must be in the same order as the zfs_share_proto_t
  * enum in libzfs_impl.h
  */
 typedef struct {
@@ -209,6 +211,7 @@ dir_is_empty_readdir(const char *dirname)
 	}
 
 	if ((dirp = fdopendir(dirfd)) == NULL) {
+		(void) close(dirfd);
 		return (B_TRUE);
 	}
 
@@ -342,8 +345,9 @@ zfs_is_mountable(zfs_handle_t *zhp, char *buf, size_t buflen,
 static int
 do_mount(const char *src, const char *mntpt, char *opts)
 {
-	char *argv[8] = {
+	char *argv[9] = {
 	    "/bin/mount",
+	    "--no-canonicalize",
 	    "-t", MNTTYPE_ZFS,
 	    "-o", opts,
 	    (char *)src,
@@ -463,6 +467,7 @@ zfs_mount(zfs_handle_t *zhp, const char *options, int flags)
 	char mntopts[MNT_LINE_MAX];
 	char overlay[ZFS_MAXPROPLEN];
 	libzfs_handle_t *hdl = zhp->zfs_hdl;
+	uint64_t keystatus;
 	int remount = 0, rc;
 
 	if (options == NULL) {
@@ -497,6 +502,39 @@ zfs_mount(zfs_handle_t *zhp, const char *options, int flags)
 		return (zfs_error_fmt(hdl, EZFS_MOUNTFAILED,
 		    dgettext(TEXT_DOMAIN, "cannot mount '%s'"),
 		    mountpoint));
+	}
+
+	/*
+	 * If the filesystem is encrypted the key must be loaded  in order to
+	 * mount. If the key isn't loaded, the MS_CRYPT flag decides whether
+	 * or not we attempt to load the keys. Note: we must call
+	 * zfs_refresh_properties() here since some callers of this function
+	 * (most notably zpool_enable_datasets()) may implicitly load our key
+	 * by loading the parent's key first.
+	 */
+	if (zfs_prop_get_int(zhp, ZFS_PROP_ENCRYPTION) != ZIO_CRYPT_OFF) {
+		zfs_refresh_properties(zhp);
+		keystatus = zfs_prop_get_int(zhp, ZFS_PROP_KEYSTATUS);
+
+		/*
+		 * If the key is unavailable and MS_CRYPT is set give the
+		 * user a chance to enter the key. Otherwise just fail
+		 * immediately.
+		 */
+		if (keystatus == ZFS_KEYSTATUS_UNAVAILABLE) {
+			if (flags & MS_CRYPT) {
+				rc = zfs_crypto_load_key(zhp, B_FALSE, NULL);
+				if (rc)
+					return (rc);
+			} else {
+				zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
+				    "encryption key not loaded"));
+				return (zfs_error_fmt(hdl, EZFS_MOUNTFAILED,
+				    dgettext(TEXT_DOMAIN, "cannot mount '%s'"),
+				    mountpoint));
+			}
+		}
+
 	}
 
 	/*
@@ -936,7 +974,7 @@ unshare_one(libzfs_handle_t *hdl, const char *name, const char *mountpoint,
 	/* make sure libshare initialized */
 	if ((err = zfs_init_libshare(hdl, SA_INIT_SHARE_API)) != SA_OK) {
 		free(mntpt);	/* don't need the copy anymore */
-		return (zfs_error_fmt(hdl, EZFS_UNSHARENFSFAILED,
+		return (zfs_error_fmt(hdl, proto_table[proto].p_unshare_err,
 		    dgettext(TEXT_DOMAIN, "cannot unshare '%s': %s"),
 		    name, sa_errorstr(err)));
 	}
@@ -947,12 +985,13 @@ unshare_one(libzfs_handle_t *hdl, const char *name, const char *mountpoint,
 	if (share != NULL) {
 		err = sa_disable_share(share, proto_table[proto].p_name);
 		if (err != SA_OK) {
-			return (zfs_error_fmt(hdl, EZFS_UNSHARENFSFAILED,
+			return (zfs_error_fmt(hdl,
+			    proto_table[proto].p_unshare_err,
 			    dgettext(TEXT_DOMAIN, "cannot unshare '%s': %s"),
 			    name, sa_errorstr(err)));
 		}
 	} else {
-		return (zfs_error_fmt(hdl, EZFS_UNSHARENFSFAILED,
+		return (zfs_error_fmt(hdl, proto_table[proto].p_unshare_err,
 		    dgettext(TEXT_DOMAIN, "cannot unshare '%s': not found"),
 		    name));
 	}
@@ -1133,6 +1172,12 @@ mount_cb(zfs_handle_t *zhp, void *data)
 		return (0);
 	}
 
+	if (zfs_prop_get_int(zhp, ZFS_PROP_KEYSTATUS) ==
+	    ZFS_KEYSTATUS_UNAVAILABLE) {
+		zfs_close(zhp);
+		return (0);
+	}
+
 	/*
 	 * If this filesystem is inconsistent and has a receive resume
 	 * token, we can not mount it.
@@ -1222,6 +1267,14 @@ zpool_enable_datasets(zpool_handle_t *zhp, const char *mntopts, int flags)
 
 	ret = 0;
 	for (i = 0; i < cb.cb_used; i++) {
+		/*
+		 * don't attempt to mount encrypted datasets with
+		 * unloaded keys
+		 */
+		if (zfs_prop_get_int(cb.cb_handles[i], ZFS_PROP_KEYSTATUS) ==
+		    ZFS_KEYSTATUS_UNAVAILABLE)
+			continue;
+
 		if (zfs_mount(cb.cb_handles[i], mntopts, flags) != 0)
 			ret = -1;
 		else

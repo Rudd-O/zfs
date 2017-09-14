@@ -84,7 +84,7 @@ fzap_upgrade(zap_t *zap, dmu_tx_t *tx, zap_flags_t flags)
 	zap->zap_dbu.dbu_evict_func_sync = zap_evict_sync;
 	zap->zap_dbu.dbu_evict_func_async = NULL;
 
-	mutex_init(&zap->zap_f.zap_num_entries_mtx, 0, 0, 0);
+	mutex_init(&zap->zap_f.zap_num_entries_mtx, 0, MUTEX_DEFAULT, 0);
 	zap->zap_f.zap_block_shift = highbit64(zap->zap_dbuf->db_size) - 1;
 
 	zp = zap_f_phys(zap);
@@ -525,7 +525,7 @@ zap_get_leaf_byblk(zap_t *zap, uint64_t blkid, dmu_tx_t *tx, krw_t lt,
 	 * already be freed, so this should be perfectly fine.
 	 */
 	if (blkid == 0)
-		return (ENOENT);
+		return (SET_ERROR(ENOENT));
 
 	dn = dmu_buf_dnode_enter(zap->zap_dbuf);
 	err = dmu_buf_hold_by_dnode(dn,
@@ -767,7 +767,7 @@ fzap_checksize(uint64_t integer_size, uint64_t num_integers)
 	}
 
 	if (integer_size * num_integers > ZAP_MAXVALUELEN)
-		return (E2BIG);
+		return (SET_ERROR(E2BIG));
 
 	return (0);
 }

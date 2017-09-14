@@ -1056,17 +1056,28 @@ kcf_sched_destroy(void)
 	if (kcf_misc_kstat)
 		kstat_delete(kcf_misc_kstat);
 
-	if (kcfpool)
-		kmem_free(kcfpool, sizeof (kcf_pool_t));
+	if (kcfpool) {
+		mutex_destroy(&kcfpool->kp_thread_lock);
+		cv_destroy(&kcfpool->kp_nothr_cv);
+		mutex_destroy(&kcfpool->kp_user_lock);
+		cv_destroy(&kcfpool->kp_user_cv);
 
-	for (i = 0; i < REQID_TABLES; i++) {
-		if (kcf_reqid_table[i])
-			kmem_free(kcf_reqid_table[i],
-			    sizeof (kcf_reqid_table_t));
+		kmem_free(kcfpool, sizeof (kcf_pool_t));
 	}
 
-	if (gswq)
+	for (i = 0; i < REQID_TABLES; i++) {
+		if (kcf_reqid_table[i]) {
+			mutex_destroy(&(kcf_reqid_table[i]->rt_lock));
+			kmem_free(kcf_reqid_table[i],
+			    sizeof (kcf_reqid_table_t));
+		}
+	}
+
+	if (gswq) {
+		mutex_destroy(&gswq->gs_lock);
+		cv_destroy(&gswq->gs_cv);
 		kmem_free(gswq, sizeof (kcf_global_swq_t));
+	}
 
 	if (kcf_context_cache)
 		kmem_cache_destroy(kcf_context_cache);
@@ -1074,6 +1085,9 @@ kcf_sched_destroy(void)
 		kmem_cache_destroy(kcf_areq_cache);
 	if (kcf_sreq_cache)
 		kmem_cache_destroy(kcf_sreq_cache);
+
+	mutex_destroy(&ntfy_list_lock);
+	cv_destroy(&ntfy_list_cv);
 }
 
 /*
@@ -1292,8 +1306,11 @@ kcf_reqid_insert(kcf_areq_node_t *areq)
 	int indx;
 	crypto_req_id_t id;
 	kcf_areq_node_t *headp;
-	kcf_reqid_table_t *rt =
-	    kcf_reqid_table[CPU_SEQID & REQID_TABLE_MASK];
+	kcf_reqid_table_t *rt;
+
+	kpreempt_disable();
+	rt = kcf_reqid_table[CPU_SEQID & REQID_TABLE_MASK];
+	kpreempt_enable();
 
 	mutex_enter(&rt->rt_lock);
 

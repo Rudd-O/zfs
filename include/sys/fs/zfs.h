@@ -23,7 +23,9 @@
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2011, 2014 by Delphix. All rights reserved.
  * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
- * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2013, 2017 Joyent, Inc. All rights reserved.
+ * Copyright (c) 2014 Integros [integros.com]
+ * Copyright (c) 2017 Datto Inc.
  */
 
 /* Portions Copyright 2010 Robert Milkowski */
@@ -113,7 +115,7 @@ typedef enum {
 	ZFS_PROP_SNAPDIR,
 	ZFS_PROP_PRIVATE,		/* not exposed to user, temporary */
 	ZFS_PROP_ACLINHERIT,
-	ZFS_PROP_CREATETXG,		/* not exposed to the user */
+	ZFS_PROP_CREATETXG,
 	ZFS_PROP_NAME,			/* not exposed to the user */
 	ZFS_PROP_CANMOUNT,
 	ZFS_PROP_ISCSIOPTIONS,		/* not exposed to the user */
@@ -153,6 +155,7 @@ typedef enum {
 	ZFS_PROP_LOGICALUSED,
 	ZFS_PROP_LOGICALREFERENCED,
 	ZFS_PROP_INCONSISTENT,		/* not exposed to the user */
+	ZFS_PROP_VOLMODE,
 	ZFS_PROP_FILESYSTEM_LIMIT,
 	ZFS_PROP_SNAPSHOT_LIMIT,
 	ZFS_PROP_FILESYSTEM_COUNT,
@@ -168,6 +171,14 @@ typedef enum {
 	ZFS_PROP_OVERLAY,
 	ZFS_PROP_PREV_SNAP,
 	ZFS_PROP_RECEIVE_RESUME_TOKEN,
+	ZFS_PROP_ENCRYPTION,
+	ZFS_PROP_KEYLOCATION,
+	ZFS_PROP_KEYFORMAT,
+	ZFS_PROP_PBKDF2_SALT,
+	ZFS_PROP_PBKDF2_ITERS,
+	ZFS_PROP_ENCRYPTION_ROOT,
+	ZFS_PROP_KEY_GUID,
+	ZFS_PROP_KEYSTATUS,
 	ZFS_NUM_PROPS
 } zfs_prop_t;
 
@@ -220,6 +231,7 @@ typedef enum {
 	ZPOOL_PROP_MAXBLOCKSIZE,
 	ZPOOL_PROP_TNAME,
 	ZPOOL_PROP_MAXDNODESIZE,
+	ZPOOL_PROP_MULTIHOST,
 	ZPOOL_NUM_PROPS
 } zpool_prop_t;
 
@@ -277,6 +289,8 @@ uint64_t zfs_prop_default_numeric(zfs_prop_t);
 boolean_t zfs_prop_readonly(zfs_prop_t);
 boolean_t zfs_prop_inheritable(zfs_prop_t);
 boolean_t zfs_prop_setonce(zfs_prop_t);
+boolean_t zfs_prop_encryption_key_param(zfs_prop_t);
+boolean_t zfs_prop_valid_keylocation(const char *, boolean_t);
 const char *zfs_prop_to_name(zfs_prop_t);
 zfs_prop_t zfs_name_to_prop(const char *);
 boolean_t zfs_prop_user(const char *);
@@ -392,6 +406,37 @@ typedef enum {
 	ZFS_REDUNDANT_METADATA_ALL,
 	ZFS_REDUNDANT_METADATA_MOST
 } zfs_redundant_metadata_type_t;
+
+typedef enum {
+	ZFS_VOLMODE_DEFAULT = 0,
+	ZFS_VOLMODE_GEOM = 1,
+	ZFS_VOLMODE_DEV = 2,
+	ZFS_VOLMODE_NONE = 3
+} zfs_volmode_t;
+
+typedef enum zfs_keystatus {
+	ZFS_KEYSTATUS_NONE = 0,
+	ZFS_KEYSTATUS_UNAVAILABLE,
+	ZFS_KEYSTATUS_AVAILABLE,
+} zfs_keystatus_t;
+
+typedef enum zfs_keyformat {
+	ZFS_KEYFORMAT_NONE = 0,
+	ZFS_KEYFORMAT_RAW,
+	ZFS_KEYFORMAT_HEX,
+	ZFS_KEYFORMAT_PASSPHRASE,
+	ZFS_KEYFORMAT_FORMATS
+} zfs_keyformat_t;
+
+typedef enum zfs_key_location {
+	ZFS_KEYLOCATION_NONE = 0,
+	ZFS_KEYLOCATION_PROMPT,
+	ZFS_KEYLOCATION_URI,
+	ZFS_KEYLOCATION_LOCATIONS
+} zfs_keylocation_t;
+
+#define	DEFAULT_PBKDF2_ITERATIONS 350000
+#define	MIN_PBKDF2_ITERATIONS 100000
 
 /*
  * On-disk version number.
@@ -641,6 +686,11 @@ typedef struct zpool_rewind_policy {
 #define	ZPOOL_CONFIG_VDEV_TOP_ZAP	"com.delphix:vdev_zap_top"
 #define	ZPOOL_CONFIG_VDEV_LEAF_ZAP	"com.delphix:vdev_zap_leaf"
 #define	ZPOOL_CONFIG_HAS_PER_VDEV_ZAPS	"com.delphix:has_per_vdev_zaps"
+#define	ZPOOL_CONFIG_MMP_STATE		"mmp_state"	/* not stored on disk */
+#define	ZPOOL_CONFIG_MMP_TXG		"mmp_txg"	/* not stored on disk */
+#define	ZPOOL_CONFIG_MMP_HOSTNAME	"mmp_hostname"	/* not stored on disk */
+#define	ZPOOL_CONFIG_MMP_HOSTID		"mmp_hostid"	/* not stored on disk */
+
 /*
  * The persistent vdev state is stored as separate values rather than a single
  * 'vdev_state' entry.  This is because a device can be in multiple states, such
@@ -731,9 +781,11 @@ typedef enum vdev_aux {
 	VDEV_AUX_ERR_EXCEEDED,	/* too many errors			*/
 	VDEV_AUX_IO_FAILURE,	/* experienced I/O failure		*/
 	VDEV_AUX_BAD_LOG,	/* cannot read log chain(s)		*/
-	VDEV_AUX_EXTERNAL,	/* external diagnosis			*/
+	VDEV_AUX_EXTERNAL,	/* external diagnosis or forced fault	*/
 	VDEV_AUX_SPLIT_POOL,	/* vdev was split off into another pool	*/
-	VDEV_AUX_BAD_ASHIFT	/* vdev ashift is invalid		*/
+	VDEV_AUX_BAD_ASHIFT,	/* vdev ashift is invalid		*/
+	VDEV_AUX_EXTERNAL_PERSIST,	/* persistent forced fault	*/
+	VDEV_AUX_ACTIVE,	/* vdev active on a different host	*/
 } vdev_aux_t;
 
 /*
@@ -754,6 +806,16 @@ typedef enum pool_state {
 } pool_state_t;
 
 /*
+ * mmp state. The following states provide additional detail describing
+ * why a pool couldn't be safely imported.
+ */
+typedef enum mmp_state {
+	MMP_STATE_ACTIVE = 0,		/* In active use		*/
+	MMP_STATE_INACTIVE,		/* Inactive and safe to import	*/
+	MMP_STATE_NO_HOSTID		/* System hostid is not set	*/
+} mmp_state_t;
+
+/*
  * Scan Functions.
  */
 typedef enum pool_scan_func {
@@ -762,6 +824,16 @@ typedef enum pool_scan_func {
 	POOL_SCAN_RESILVER,
 	POOL_SCAN_FUNCS
 } pool_scan_func_t;
+
+/*
+ * Used to control scrub pause and resume.
+ */
+typedef enum pool_scrub_cmd {
+	POOL_SCRUB_NORMAL = 0,
+	POOL_SCRUB_PAUSE,
+	POOL_SCRUB_FLAGS_END
+} pool_scrub_cmd_t;
+
 
 /*
  * ZIO types.  Needed to interpret vdev statistics below.
@@ -795,6 +867,9 @@ typedef struct pool_scan_stat {
 	/* values not stored on disk */
 	uint64_t	pss_pass_exam;	/* examined bytes per scan pass */
 	uint64_t	pss_pass_start;	/* start time of a scan pass */
+	uint64_t	pss_pass_scrub_pause; /* pause time of a scurb pass */
+	/* cumulative time scrub spent paused, needed for rate calculation */
+	uint64_t	pss_pass_scrub_spent_paused;
 } pool_scan_stat_t;
 
 typedef enum dsl_scan_state {
@@ -1019,6 +1094,10 @@ typedef enum zfs_ioc {
 	ZFS_IOC_GET_BOOKMARKS,
 	ZFS_IOC_DESTROY_BOOKMARKS,
 	ZFS_IOC_RECV_NEW,
+	ZFS_IOC_POOL_SYNC,
+	ZFS_IOC_LOAD_KEY,
+	ZFS_IOC_UNLOAD_KEY,
+	ZFS_IOC_CHANGE_KEY,
 
 	/*
 	 * Linux - 3/64 numbers reserved.
@@ -1084,6 +1163,12 @@ typedef enum {
 #define	ZPOOL_HIST_DSID		"dsid"
 
 /*
+ * Special nvlist name that will not have its args recorded in the pool's
+ * history log.
+ */
+#define	ZPOOL_HIDDEN_ARGS	"hidden_args"
+
+/*
  * Flags for ZFS_IOC_VDEV_SET_STATE
  */
 #define	ZFS_ONLINE_CHECKREMOVE	0x1
@@ -1101,6 +1186,8 @@ typedef enum {
 #define	ZFS_IMPORT_MISSING_LOG	0x4
 #define	ZFS_IMPORT_ONLY		0x8
 #define	ZFS_IMPORT_TEMP_NAME	0x10
+#define	ZFS_IMPORT_SKIP_MMP	0x20
+#define	ZFS_IMPORT_LOAD_KEYS	0x40
 
 /*
  * Sysevent payload members.  ZFS will generate the following sysevents with the
@@ -1122,11 +1209,45 @@ typedef enum {
  *		ZFS_EV_POOL_GUID	DATA_TYPE_UINT64
  *		ZFS_EV_VDEV_PATH	DATA_TYPE_STRING	(optional)
  *		ZFS_EV_VDEV_GUID	DATA_TYPE_UINT64
+ *
+ *	ESC_ZFS_HISTORY_EVENT
+ *
+ *		ZFS_EV_POOL_NAME	DATA_TYPE_STRING
+ *		ZFS_EV_POOL_GUID	DATA_TYPE_UINT64
+ *		ZFS_EV_HIST_TIME	DATA_TYPE_UINT64	(optional)
+ *		ZFS_EV_HIST_CMD		DATA_TYPE_STRING	(optional)
+ *		ZFS_EV_HIST_WHO		DATA_TYPE_UINT64	(optional)
+ *		ZFS_EV_HIST_ZONE	DATA_TYPE_STRING	(optional)
+ *		ZFS_EV_HIST_HOST	DATA_TYPE_STRING	(optional)
+ *		ZFS_EV_HIST_TXG		DATA_TYPE_UINT64	(optional)
+ *		ZFS_EV_HIST_INT_EVENT	DATA_TYPE_UINT64	(optional)
+ *		ZFS_EV_HIST_INT_STR	DATA_TYPE_STRING	(optional)
+ *		ZFS_EV_HIST_INT_NAME	DATA_TYPE_STRING	(optional)
+ *		ZFS_EV_HIST_IOCTL	DATA_TYPE_STRING	(optional)
+ *		ZFS_EV_HIST_DSNAME	DATA_TYPE_STRING	(optional)
+ *		ZFS_EV_HIST_DSID	DATA_TYPE_UINT64	(optional)
+ *
+ * The ZFS_EV_HIST_* members will correspond to the ZPOOL_HIST_* members in the
+ * history log nvlist.  The keynames will be free of any spaces or other
+ * characters that could be potentially unexpected to consumers of the
+ * sysevents.
  */
 #define	ZFS_EV_POOL_NAME	"pool_name"
 #define	ZFS_EV_POOL_GUID	"pool_guid"
 #define	ZFS_EV_VDEV_PATH	"vdev_path"
 #define	ZFS_EV_VDEV_GUID	"vdev_guid"
+#define	ZFS_EV_HIST_TIME	"history_time"
+#define	ZFS_EV_HIST_CMD		"history_command"
+#define	ZFS_EV_HIST_WHO		"history_who"
+#define	ZFS_EV_HIST_ZONE	"history_zone"
+#define	ZFS_EV_HIST_HOST	"history_hostname"
+#define	ZFS_EV_HIST_TXG		"history_txg"
+#define	ZFS_EV_HIST_INT_EVENT	"history_internal_event"
+#define	ZFS_EV_HIST_INT_STR	"history_internal_str"
+#define	ZFS_EV_HIST_INT_NAME	"history_internal_name"
+#define	ZFS_EV_HIST_IOCTL	"history_ioctl"
+#define	ZFS_EV_HIST_DSNAME	"history_dsname"
+#define	ZFS_EV_HIST_DSID	"history_dsid"
 
 #ifdef	__cplusplus
 }

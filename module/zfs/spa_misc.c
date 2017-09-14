@@ -24,6 +24,7 @@
  * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2014 Spectra Logic Corporation, All rights reserved.
  * Copyright 2013 Saso Kiselkov. All rights reserved.
+ * Copyright (c) 2017 Datto Inc.
  */
 
 #include <sys/zfs_context.h>
@@ -1181,13 +1182,21 @@ int
 spa_vdev_state_exit(spa_t *spa, vdev_t *vd, int error)
 {
 	boolean_t config_changed = B_FALSE;
+	vdev_t *vdev_top;
+
+	if (vd == NULL || vd == spa->spa_root_vdev) {
+		vdev_top = spa->spa_root_vdev;
+	} else {
+		vdev_top = vd->vdev_top;
+	}
 
 	if (vd != NULL || error == 0)
-		vdev_dtl_reassess(vd ? vd->vdev_top : spa->spa_root_vdev,
-		    0, 0, B_FALSE);
+		vdev_dtl_reassess(vdev_top, 0, 0, B_FALSE);
 
 	if (vd != NULL) {
-		vdev_state_dirty(vd->vdev_top);
+		if (vd != spa->spa_root_vdev)
+			vdev_state_dirty(vdev_top);
+
 		config_changed = B_TRUE;
 		spa->spa_config_generation++;
 	}
@@ -1375,6 +1384,9 @@ spa_get_random(uint64_t range)
 
 	ASSERT(range != 0);
 
+	if (range == 1)
+		return (0);
+
 	(void) random_get_pseudo_bytes((void *)&r, sizeof (uint64_t));
 
 	return (r % range);
@@ -1402,6 +1414,7 @@ snprintf_blkptr(char *buf, size_t buflen, const blkptr_t *bp)
 	char type[256];
 	char *checksum = NULL;
 	char *compress = NULL;
+	char *crypt_type = NULL;
 
 	if (bp != NULL) {
 		if (BP_GET_TYPE(bp) & DMU_OT_NEWTYPE) {
@@ -1415,6 +1428,15 @@ snprintf_blkptr(char *buf, size_t buflen, const blkptr_t *bp)
 			(void) strlcpy(type, dmu_ot[BP_GET_TYPE(bp)].ot_name,
 			    sizeof (type));
 		}
+		if (BP_IS_ENCRYPTED(bp)) {
+			crypt_type = "encrypted";
+		} else if (BP_IS_AUTHENTICATED(bp)) {
+			crypt_type = "authenticated";
+		} else if (BP_HAS_INDIRECT_MAC_CKSUM(bp)) {
+			crypt_type = "indirect-MAC";
+		} else {
+			crypt_type = "unencrypted";
+		}
 		if (!BP_IS_EMBEDDED(bp)) {
 			checksum =
 			    zio_checksum_table[BP_GET_CHECKSUM(bp)].ci_name;
@@ -1423,7 +1445,7 @@ snprintf_blkptr(char *buf, size_t buflen, const blkptr_t *bp)
 	}
 
 	SNPRINTF_BLKPTR(snprintf, ' ', buf, buflen, bp, type, checksum,
-	    compress);
+	    crypt_type, compress);
 }
 
 void
@@ -1456,7 +1478,7 @@ zfs_panic_recover(const char *fmt, ...)
  * lowercase hexadecimal numbers that don't overflow.
  */
 uint64_t
-strtonum(const char *str, char **nptr)
+zfs_strtonum(const char *str, char **nptr)
 {
 	uint64_t val = 0;
 	char c;
@@ -1596,6 +1618,16 @@ spa_syncing_txg(spa_t *spa)
 	return (spa->spa_syncing_txg);
 }
 
+/*
+ * Return the last txg where data can be dirtied. The final txgs
+ * will be used to just clear out any deferred frees that remain.
+ */
+uint64_t
+spa_final_dirty_txg(spa_t *spa)
+{
+	return (spa->spa_final_txg - TXG_DEFER_SIZE);
+}
+
 pool_state_t
 spa_state(spa_t *spa)
 {
@@ -1614,11 +1646,19 @@ spa_freeze_txg(spa_t *spa)
 	return (spa->spa_freeze_txg);
 }
 
-/* ARGSUSED */
+/*
+ * Return the inflated asize for a logical write in bytes. This is used by the
+ * DMU to calculate the space a logical write will require on disk.
+ * If lsize is smaller than the largest physical block size allocatable on this
+ * pool we use its value instead, since the write will end up using the whole
+ * block anyway.
+ */
 uint64_t
 spa_get_worst_case_asize(spa_t *spa, uint64_t lsize)
 {
-	return (lsize * spa_asize_inflation);
+	if (lsize == 0)
+		return (0);	/* No inflation needed */
+	return (MAX(lsize, 1 << spa->spa_max_ashift) * spa_asize_inflation);
 }
 
 /*
@@ -1857,6 +1897,7 @@ spa_init(int mode)
 	dmu_init();
 	zil_init();
 	vdev_cache_stat_init();
+	vdev_mirror_stat_init();
 	vdev_raidz_math_init();
 	vdev_file_init();
 	zfs_prop_init();
@@ -1876,6 +1917,7 @@ spa_fini(void)
 
 	vdev_file_fini();
 	vdev_cache_stat_fini();
+	vdev_mirror_stat_fini();
 	vdev_raidz_math_fini();
 	zil_fini();
 	dmu_fini();
@@ -1981,6 +2023,11 @@ spa_scan_stat_init(spa_t *spa)
 {
 	/* data not stored on disk */
 	spa->spa_scan_pass_start = gethrestime_sec();
+	if (dsl_scan_is_paused_scrub(spa->spa_dsl_pool->dp_scan))
+		spa->spa_scan_pass_scrub_pause = spa->spa_scan_pass_start;
+	else
+		spa->spa_scan_pass_scrub_pause = 0;
+	spa->spa_scan_pass_scrub_spent_paused = 0;
 	spa->spa_scan_pass_exam = 0;
 	vdev_scan_stat_init(spa->spa_root_vdev);
 }
@@ -2011,6 +2058,8 @@ spa_scan_get_stats(spa_t *spa, pool_scan_stat_t *ps)
 	/* data not stored on disk */
 	ps->pss_pass_start = spa->spa_scan_pass_start;
 	ps->pss_pass_exam = spa->spa_scan_pass_exam;
+	ps->pss_pass_scrub_pause = spa->spa_scan_pass_scrub_pause;
+	ps->pss_pass_scrub_spent_paused = spa->spa_scan_pass_scrub_spent_paused;
 
 	return (0);
 }
@@ -2037,6 +2086,30 @@ spa_maxdnodesize(spa_t *spa)
 		return (DNODE_MAX_SIZE);
 	else
 		return (DNODE_MIN_SIZE);
+}
+
+boolean_t
+spa_multihost(spa_t *spa)
+{
+	return (spa->spa_multihost ? B_TRUE : B_FALSE);
+}
+
+unsigned long
+spa_get_hostid(void)
+{
+	unsigned long myhostid;
+
+#ifdef	_KERNEL
+	myhostid = zone_get_hostid(NULL);
+#else	/* _KERNEL */
+	/*
+	 * We're emulating the system's hostid in userland, so
+	 * we can't use zone_get_hostid().
+	 */
+	(void) ddi_strtoul(hw_serial, NULL, 10, &myhostid);
+#endif	/* _KERNEL */
+
+	return (myhostid);
 }
 
 #if defined(_KERNEL) && defined(HAVE_SPL)

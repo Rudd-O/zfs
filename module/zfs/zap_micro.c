@@ -404,7 +404,8 @@ mzap_open(objset_t *os, uint64_t obj, dmu_buf_t *db)
 	zap->zap_dbuf = db;
 
 	if (zap_block_type != ZBT_MICRO) {
-		mutex_init(&zap->zap_f.zap_num_entries_mtx, 0, 0, 0);
+		mutex_init(&zap->zap_f.zap_num_entries_mtx, 0, MUTEX_DEFAULT,
+		    0);
 		zap->zap_f.zap_block_shift = highbit64(db->db_size) - 1;
 		if (zap_block_type != ZBT_HEADER || zap_magic != ZAP_MAGIC) {
 			winner = NULL;	/* No actual winner here... */
@@ -674,7 +675,7 @@ mzap_create_impl(objset_t *os, uint64_t obj, int normflags, zap_flags_t flags,
 	dmu_buf_t *db;
 	mzap_phys_t *zp;
 
-	VERIFY(0 == dmu_buf_hold(os, obj, 0, FTAG, &db, DMU_READ_NO_PREFETCH));
+	VERIFY0(dmu_buf_hold(os, obj, 0, FTAG, &db, DMU_READ_NO_PREFETCH));
 
 #ifdef ZFS_DEBUG
 	{

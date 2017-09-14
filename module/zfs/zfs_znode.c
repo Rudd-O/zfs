@@ -763,7 +763,7 @@ zfs_mknode(znode_t *dzp, vattr_t *vap, dmu_tx_t *tx, cred_t *cr,
 	}
 
 	zh = zfs_znode_hold_enter(zfsvfs, obj);
-	VERIFY(0 == sa_buf_hold(zfsvfs->z_os, obj, NULL, &db));
+	VERIFY0(sa_buf_hold(zfsvfs->z_os, obj, NULL, &db));
 
 	/*
 	 * If this is the root, fix up the half-initialized parent pointer
@@ -1780,14 +1780,6 @@ zfs_create_fs(objset_t *os, cred_t *cr, nvlist_t *zplprops, dmu_tx_t *tx)
 	ASSERT(error == 0);
 
 	/*
-	 * Give dmu_object_alloc() a hint about where to start
-	 * allocating new objects. Otherwise, since the metadnode's
-	 * dnode_phys_t structure isn't initialized yet, dmu_object_next()
-	 * would fail and we'd have to skip to the next dnode block.
-	 */
-	os->os_obj_next = moid + 1;
-
-	/*
 	 * Set starting attributes.
 	 */
 	version = zfs_zpl_version_map(spa_version(dmu_objset_spa(os)));
@@ -1913,6 +1905,8 @@ zfs_create_fs(objset_t *os, cred_t *cr, nvlist_t *zplprops, dmu_tx_t *tx)
 		mutex_destroy(&zfsvfs->z_hold_locks[i]);
 	}
 
+	mutex_destroy(&zfsvfs->z_znodes_lock);
+
 	vmem_free(zfsvfs->z_hold_trees, sizeof (avl_tree_t) * size);
 	vmem_free(zfsvfs->z_hold_locks, sizeof (kmutex_t) * size);
 	kmem_free(sb, sizeof (struct super_block));
@@ -2019,7 +2013,7 @@ zfs_obj_to_pobj(objset_t *osp, sa_handle_t *hdl, sa_attr_type_t *sa_table,
 	 * Otherwise the parent must be a directory.
 	 */
 	if (!*is_xattrdir && !S_ISDIR(parent_mode))
-		return (EINVAL);
+		return (SET_ERROR(EINVAL));
 
 	*pobjp = parent;
 

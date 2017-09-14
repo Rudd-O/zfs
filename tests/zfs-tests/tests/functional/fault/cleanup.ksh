@@ -20,7 +20,7 @@
 # CDDL HEADER END
 
 #
-# Copyright (c) 2016 by Intel Corporation. All rights reserved.
+# Copyright (c) 2016, 2017 by Intel Corporation. All rights reserved.
 #
 
 . $STF_SUITE/include/libtest.shlib
@@ -30,29 +30,19 @@ verify_runnable "global"
 
 cleanup_devices $DISKS
 
-if [[ -f ${ZEDLET_DIR}/zed.pid ]]; then
-	zedpid=$($CAT ${ZEDLET_DIR}/zed.pid)
-	log_must $KILL $zedpid
-fi
+zed_stop
+zed_cleanup
 
-log_must $RM ${ZEDLET_DIR}/all-syslog.sh
-log_must $RM ${ZEDLET_DIR}/zed.pid
-log_must $RM ${ZEDLET_DIR}/zedlog
-log_must $RM ${ZEDLET_DIR}/state
-log_must $RMDIR $ZEDLET_DIR
+SD=$(lsscsi | nawk '/scsi_debug/ {print $6; exit}')
+SDDEVICE=$(echo $SD | nawk -F / '{print $3}')
 
-if is_loop_device $DISK1; then
-	SD=$($LSSCSI | $NAWK '/scsi_debug/ {print $6; exit}')
-	SDDEVICE=$($ECHO $SD | $NAWK -F / '{print $3}')
-
-	if [[ -z $SDDEVICE ]]; then
-		log_pass
+# Offline disk and remove scsi_debug module
+if is_linux; then
+	if [ -n "$SDDEVICE" ]; then
+		on_off_disk $SDDEVICE "offline"
+		block_device_wait
 	fi
-	#offline disk
-	on_off_disk $SDDEVICE "offline"
-	block_device_wait
-
-	log_must $MODUNLOAD scsi_debug
+	modprobe -r scsi_debug
 fi
 
 log_pass

@@ -24,7 +24,7 @@
  */
 
 /*
- * Copyright (c) 2012, 2014 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2017 by Delphix. All rights reserved.
  */
 
 #include <sys/zfs_context.h>
@@ -148,7 +148,7 @@ uint32_t zfs_vdev_sync_write_min_active = 10;
 uint32_t zfs_vdev_sync_write_max_active = 10;
 uint32_t zfs_vdev_async_read_min_active = 1;
 uint32_t zfs_vdev_async_read_max_active = 3;
-uint32_t zfs_vdev_async_write_min_active = 1;
+uint32_t zfs_vdev_async_write_min_active = 2;
 uint32_t zfs_vdev_async_write_max_active = 10;
 uint32_t zfs_vdev_scrub_min_active = 1;
 uint32_t zfs_vdev_scrub_max_active = 2;
@@ -393,7 +393,7 @@ vdev_queue_init(vdev_t *vd)
 		    sizeof (zio_t), offsetof(struct zio, io_queue_node));
 	}
 
-	vq->vq_lastoffset = 0;
+	vq->vq_last_offset = 0;
 }
 
 void
@@ -521,13 +521,14 @@ vdev_queue_aggregate(vdev_queue_t *vq, zio_t *zio)
 	uint64_t maxgap = 0;
 	uint64_t size;
 	uint64_t limit;
+	int maxblocksize;
 	boolean_t stretch = B_FALSE;
 	avl_tree_t *t = vdev_queue_type_tree(vq, zio->io_type);
 	enum zio_flag flags = zio->io_flags & ZIO_FLAG_AGG_INHERIT;
 	abd_t *abd;
 
-	limit = MAX(MIN(zfs_vdev_aggregation_limit,
-	    spa_maxblocksize(vq->vq_vdev->vdev_spa)), 0);
+	maxblocksize = spa_maxblocksize(vq->vq_vdev->vdev_spa);
+	limit = MAX(MIN(zfs_vdev_aggregation_limit, maxblocksize), 0);
 
 	if (zio->io_flags & ZIO_FLAG_DONT_AGGREGATE || limit == 0)
 		return (NULL);
@@ -554,7 +555,7 @@ vdev_queue_aggregate(vdev_queue_t *vq, zio_t *zio)
 
 	/*
 	 * Walk backwards through sufficiently contiguous I/Os
-	 * recording the last non-option I/O.
+	 * recording the last non-optional I/O.
 	 */
 	while ((dio = AVL_PREV(t, first)) != NULL &&
 	    (dio->io_flags & ZIO_FLAG_AGG_INHERIT) == flags &&
@@ -576,10 +577,15 @@ vdev_queue_aggregate(vdev_queue_t *vq, zio_t *zio)
 
 	/*
 	 * Walk forward through sufficiently contiguous I/Os.
+	 * The aggregation limit does not apply to optional i/os, so that
+	 * we can issue contiguous writes even if they are larger than the
+	 * aggregation limit.
 	 */
 	while ((dio = AVL_NEXT(t, last)) != NULL &&
 	    (dio->io_flags & ZIO_FLAG_AGG_INHERIT) == flags &&
-	    IO_SPAN(first, dio) <= limit &&
+	    (IO_SPAN(first, dio) <= limit ||
+	    (dio->io_flags & ZIO_FLAG_OPTIONAL)) &&
+	    IO_SPAN(first, dio) <= maxblocksize &&
 	    IO_GAP(last, dio) <= maxgap) {
 		last = dio;
 		if (!(last->io_flags & ZIO_FLAG_OPTIONAL))
@@ -610,10 +616,16 @@ vdev_queue_aggregate(vdev_queue_t *vq, zio_t *zio)
 	}
 
 	if (stretch) {
-		/* This may be a no-op. */
+		/*
+		 * We are going to include an optional io in our aggregated
+		 * span, thus closing the write gap.  Only mandatory i/os can
+		 * start aggregated spans, so make sure that the next i/o
+		 * after our span is mandatory.
+		 */
 		dio = AVL_NEXT(t, last);
 		dio->io_flags &= ~ZIO_FLAG_OPTIONAL;
 	} else {
+		/* do not include the optional i/o */
 		while (last != mandatory && last != first) {
 			ASSERT(last->io_flags & ZIO_FLAG_OPTIONAL);
 			last = AVL_PREV(t, last);
@@ -625,7 +637,7 @@ vdev_queue_aggregate(vdev_queue_t *vq, zio_t *zio)
 		return (NULL);
 
 	size = IO_SPAN(first, last);
-	ASSERT3U(size, <=, limit);
+	ASSERT3U(size, <=, maxblocksize);
 
 	abd = abd_alloc_for_io(size, B_TRUE);
 	if (abd == NULL)
@@ -687,9 +699,8 @@ again:
 	 */
 	tree = vdev_queue_class_tree(vq, p);
 	vq->vq_io_search.io_timestamp = 0;
-	vq->vq_io_search.io_offset = vq->vq_last_offset + 1;
-	VERIFY3P(avl_find(tree, &vq->vq_io_search,
-	    &idx), ==, NULL);
+	vq->vq_io_search.io_offset = vq->vq_last_offset - 1;
+	VERIFY3P(avl_find(tree, &vq->vq_io_search, &idx), ==, NULL);
 	zio = avl_nearest(tree, idx, AVL_AFTER);
 	if (zio == NULL)
 		zio = avl_first(tree);
@@ -716,7 +727,7 @@ again:
 	}
 
 	vdev_queue_pending_add(vq, zio);
-	vq->vq_last_offset = zio->io_offset;
+	vq->vq_last_offset = zio->io_offset + zio->io_size;
 
 	return (zio);
 }
@@ -794,7 +805,7 @@ vdev_queue_io_done(zio_t *zio)
 }
 
 /*
- * As these three methods are only used for load calculations we're not
+ * As these two methods are only used for load calculations we're not
  * concerned if we get an incorrect value on 32bit platforms due to lack of
  * vq_lock mutex use here, instead we prefer to keep it lock free for
  * performance.
@@ -806,15 +817,9 @@ vdev_queue_length(vdev_t *vd)
 }
 
 uint64_t
-vdev_queue_lastoffset(vdev_t *vd)
+vdev_queue_last_offset(vdev_t *vd)
 {
-	return (vd->vdev_queue.vq_lastoffset);
-}
-
-void
-vdev_queue_register_lastoffset(vdev_t *vd, zio_t *zio)
-{
-	vd->vdev_queue.vq_lastoffset = zio->io_offset + zio->io_size;
+	return (vd->vdev_queue.vq_last_offset);
 }
 
 #if defined(_KERNEL) && defined(HAVE_SPL)

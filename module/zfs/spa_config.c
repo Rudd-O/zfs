@@ -23,6 +23,7 @@
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2011 Nexenta Systems, Inc. All rights reserved.
  * Copyright (c) 2011, 2015 by Delphix. All rights reserved.
+ * Copyright 2017 Joyent, Inc.
  */
 
 #include <sys/spa.h>
@@ -161,6 +162,11 @@ spa_config_write(spa_config_dirent_t *dp, nvlist_t *nvl)
 	 */
 	if (nvl == NULL) {
 		err = vn_remove(dp->scd_path, UIO_SYSSPACE, RMFILE);
+		/*
+		 * Don't report an error when the cache file is already removed
+		 */
+		if (err == ENOENT)
+			err = 0;
 		return (err);
 	}
 
@@ -304,7 +310,7 @@ spa_config_sync(spa_t *target, boolean_t removing, boolean_t postsysevent)
 		 */
 		if (target->spa_ccw_fail_time == 0) {
 			zfs_ereport_post(FM_EREPORT_ZFS_CONFIG_CACHE_WRITE,
-			    target, NULL, NULL, 0, 0);
+			    target, NULL, NULL, NULL, 0, 0);
 		}
 		target->spa_ccw_fail_time = gethrtime();
 		spa_async_request(target, SPA_ASYNC_CONFIG_UPDATE);
@@ -330,7 +336,7 @@ spa_config_sync(spa_t *target, boolean_t removing, boolean_t postsysevent)
 	spa_config_generation++;
 
 	if (postsysevent)
-		spa_event_notify(target, NULL, ESC_ZFS_CONFIG_SYNC);
+		spa_event_notify(target, NULL, NULL, ESC_ZFS_CONFIG_SYNC);
 }
 
 /*
@@ -435,15 +441,7 @@ spa_config_generate(spa_t *spa, vdev_t *vd, uint64_t txg, int getstats)
 		fnvlist_add_string(config, ZPOOL_CONFIG_COMMENT,
 		    spa->spa_comment);
 
-#ifdef	_KERNEL
-	hostid = zone_get_hostid(NULL);
-#else	/* _KERNEL */
-	/*
-	 * We're emulating the system's hostid in userland, so we can't use
-	 * zone_get_hostid().
-	 */
-	(void) ddi_strtoul(hw_serial, NULL, 10, &hostid);
-#endif	/* _KERNEL */
+	hostid = spa_get_hostid();
 	if (hostid != 0)
 		fnvlist_add_uint64(config, ZPOOL_CONFIG_HOSTID, hostid);
 	fnvlist_add_string(config, ZPOOL_CONFIG_HOSTNAME, utsname()->nodename);

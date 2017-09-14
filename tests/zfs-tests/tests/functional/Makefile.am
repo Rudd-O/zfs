@@ -14,6 +14,7 @@ SUBDIRS = \
 	ctime \
 	delegate \
 	devices \
+	events \
 	exec \
 	fault \
 	features \
@@ -28,6 +29,7 @@ SUBDIRS = \
 	link_count \
 	migration \
 	mmap \
+	mmp \
 	mount \
 	mv_files \
 	nestedfs \

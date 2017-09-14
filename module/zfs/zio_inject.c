@@ -21,6 +21,7 @@
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2012, 2015 by Delphix. All rights reserved.
+ * Copyright (c) 2017, Intel Corporation.
  */
 
 /*
@@ -99,6 +100,26 @@ static kmutex_t inject_delay_mtx;
 static int inject_next_id = 1;
 
 /*
+ * Test if the requested frequency was triggered
+ */
+static boolean_t
+freq_triggered(uint32_t frequency)
+{
+	/*
+	 * zero implies always (100%)
+	 */
+	if (frequency == 0)
+		return (B_TRUE);
+
+	/*
+	 * Note: we still handle legacy (unscaled) frequecy values
+	 */
+	uint32_t maximum = (frequency <= 100) ? 100 : ZI_PERCENTAGE_MAX;
+
+	return (spa_get_random(maximum) < frequency);
+}
+
+/*
  * Returns true if the given record matches the I/O in progress.
  */
 static boolean_t
@@ -113,8 +134,7 @@ zio_match_handler(zbookmark_phys_t *zb, uint64_t type,
 	    record->zi_object == DMU_META_DNODE_OBJECT) {
 		if (record->zi_type == DMU_OT_NONE ||
 		    type == record->zi_type)
-			return (record->zi_freq == 0 ||
-			    spa_get_random(100) < record->zi_freq);
+			return (freq_triggered(record->zi_freq));
 		else
 			return (B_FALSE);
 	}
@@ -128,8 +148,7 @@ zio_match_handler(zbookmark_phys_t *zb, uint64_t type,
 	    zb->zb_blkid >= record->zi_start &&
 	    zb->zb_blkid <= record->zi_end &&
 	    error == record->zi_error)
-		return (record->zi_freq == 0 ||
-		    spa_get_random(100) < record->zi_freq);
+		return (freq_triggered(record->zi_freq));
 
 	return (B_FALSE);
 }
@@ -252,9 +271,24 @@ zio_handle_label_injection(zio_t *zio, int error)
 	return (ret);
 }
 
+/*ARGSUSED*/
+static int
+zio_inject_bitflip_cb(void *data, size_t len, void *private)
+{
+	ASSERTV(zio_t *zio = private);
+	uint8_t *buffer = data;
+	uint_t byte = spa_get_random(len);
 
-int
-zio_handle_device_injection(vdev_t *vd, zio_t *zio, int error)
+	ASSERT(zio->io_type == ZIO_TYPE_READ);
+
+	/* flip a single random bit in an abd data buffer */
+	buffer[byte] ^= 1 << spa_get_random(8);
+
+	return (1);	/* stop after first flip */
+}
+
+static int
+zio_handle_device_injection_impl(vdev_t *vd, zio_t *zio, int err1, int err2)
 {
 	inject_handler_t *handler;
 	int ret = 0;
@@ -292,12 +326,19 @@ zio_handle_device_injection(vdev_t *vd, zio_t *zio, int error)
 			    handler->zi_record.zi_iotype != zio->io_type)
 				continue;
 
-			if (handler->zi_record.zi_error == error) {
+			if (handler->zi_record.zi_error == err1 ||
+			    handler->zi_record.zi_error == err2) {
+				/*
+				 * limit error injection if requested
+				 */
+				if (!freq_triggered(handler->zi_record.zi_freq))
+					continue;
+
 				/*
 				 * For a failed open, pretend like the device
 				 * has gone away.
 				 */
-				if (error == ENXIO)
+				if (err1 == ENXIO)
 					vd->vdev_stat.vs_aux =
 					    VDEV_AUX_OPEN_FAILED;
 
@@ -310,7 +351,21 @@ zio_handle_device_injection(vdev_t *vd, zio_t *zio, int error)
 				    zio != NULL)
 					zio->io_flags |= ZIO_FLAG_IO_RETRY;
 
-				ret = error;
+				/*
+				 * EILSEQ means flip a bit after a read
+				 */
+				if (handler->zi_record.zi_error == EILSEQ) {
+					if (zio == NULL)
+						break;
+
+					/* locate buffer data and flip a bit */
+					(void) abd_iterate_func(zio->io_abd, 0,
+					    zio->io_size, zio_inject_bitflip_cb,
+					    zio);
+					break;
+				}
+
+				ret = handler->zi_record.zi_error;
 				break;
 			}
 			if (handler->zi_record.zi_error == ENXIO) {
@@ -323,6 +378,18 @@ zio_handle_device_injection(vdev_t *vd, zio_t *zio, int error)
 	rw_exit(&inject_lock);
 
 	return (ret);
+}
+
+int
+zio_handle_device_injection(vdev_t *vd, zio_t *zio, int error)
+{
+	return (zio_handle_device_injection_impl(vd, zio, error, INT_MAX));
+}
+
+int
+zio_handle_device_injections(vdev_t *vd, zio_t *zio, int err1, int err2)
+{
+	return (zio_handle_device_injection_impl(vd, zio, err1, err2));
 }
 
 /*
@@ -466,10 +533,8 @@ zio_handle_io_delay(zio_t *zio)
 		if (handler->zi_record.zi_cmd != ZINJECT_DELAY_IO)
 			continue;
 
-		if (handler->zi_record.zi_freq != 0 &&
-		    spa_get_random(100) >= handler->zi_record.zi_freq) {
+		if (!freq_triggered(handler->zi_record.zi_freq))
 			continue;
-		}
 
 		if (vd->vdev_guid != handler->zi_record.zi_guid)
 			continue;

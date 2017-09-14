@@ -4,4 +4,10 @@ dist_pkgdata_SCRIPTS = \
 	default.cfg \
 	libtest.shlib \
 	math.shlib \
-	properties.shlib
+	properties.shlib \
+	zpool_script.shlib
+
+EXTRA_DIST=default.cfg.in
+
+distclean-local::
+	-$(RM) default.cfg

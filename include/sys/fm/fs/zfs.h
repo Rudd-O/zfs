@@ -33,6 +33,7 @@ extern "C" {
 #define	ZFS_ERROR_CLASS				"fs.zfs"
 
 #define	FM_EREPORT_ZFS_CHECKSUM			"checksum"
+#define	FM_EREPORT_ZFS_AUTHENTICATION		"authentication"
 #define	FM_EREPORT_ZFS_IO			"io"
 #define	FM_EREPORT_ZFS_DATA			"data"
 #define	FM_EREPORT_ZFS_DELAY			"delay"
@@ -54,6 +55,7 @@ extern "C" {
 #define	FM_EREPORT_PAYLOAD_ZFS_POOL_FAILMODE	"pool_failmode"
 #define	FM_EREPORT_PAYLOAD_ZFS_POOL_GUID	"pool_guid"
 #define	FM_EREPORT_PAYLOAD_ZFS_POOL_CONTEXT	"pool_context"
+#define	FM_EREPORT_PAYLOAD_ZFS_POOL_STATE	"pool_state"
 #define	FM_EREPORT_PAYLOAD_ZFS_VDEV_GUID	"vdev_guid"
 #define	FM_EREPORT_PAYLOAD_ZFS_VDEV_TYPE	"vdev_type"
 #define	FM_EREPORT_PAYLOAD_ZFS_VDEV_PATH	"vdev_path"

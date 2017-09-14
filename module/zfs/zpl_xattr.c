@@ -495,6 +495,12 @@ zpl_xattr_set_dir(struct inode *ip, const char *name, const void *value,
 		error = wrote;
 
 out:
+
+	if (error == 0) {
+		ip->i_ctime = current_time(ip);
+		zfs_mark_inode_dirty(ip);
+	}
+
 	if (vap)
 		kmem_free(vap, sizeof (vattr_t));
 
@@ -938,7 +944,6 @@ xattr_handler_t zpl_xattr_security_handler = {
 int
 zpl_set_acl(struct inode *ip, struct posix_acl *acl, int type)
 {
-	struct super_block *sb = ITOZSB(ip)->z_sb;
 	char *name, *value = NULL;
 	int error = 0;
 	size_t size = 0;
@@ -964,7 +969,7 @@ zpl_set_acl(struct inode *ip, struct posix_acl *acl, int type)
 				 */
 				if (ip->i_mode != mode) {
 					ip->i_mode = mode;
-					ip->i_ctime = current_fs_time(sb);
+					ip->i_ctime = current_time(ip);
 					zfs_mark_inode_dirty(ip);
 				}
 
@@ -1130,7 +1135,7 @@ zpl_init_acl(struct inode *ip, struct inode *dir)
 
 		if (!acl) {
 			ip->i_mode &= ~current_umask();
-			ip->i_ctime = current_fs_time(ITOZSB(ip)->z_sb);
+			ip->i_ctime = current_time(ip);
 			zfs_mark_inode_dirty(ip);
 			return (0);
 		}

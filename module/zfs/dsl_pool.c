@@ -48,6 +48,7 @@
 #include <sys/zil_impl.h>
 #include <sys/dsl_userhold.h>
 #include <sys/trace_txg.h>
+#include <sys/mmp.h>
 
 /*
  * ZFS Write Throttle
@@ -129,9 +130,6 @@ int zfs_delay_min_dirty_percent = 60;
  */
 unsigned long zfs_delay_scale = 1000 * 1000 * 1000 / 2000;
 
-hrtime_t zfs_throttle_delay = MSEC2NSEC(10);
-hrtime_t zfs_throttle_resolution = MSEC2NSEC(10);
-
 /*
  * This determines the number of threads used by the dp_sync_taskq.
  */
@@ -163,14 +161,15 @@ dsl_pool_open_impl(spa_t *spa, uint64_t txg)
 	dp->dp_meta_rootbp = *bp;
 	rrw_init(&dp->dp_config_rwlock, B_TRUE);
 	txg_init(dp, txg);
+	mmp_init(spa);
 
-	txg_list_create(&dp->dp_dirty_datasets,
+	txg_list_create(&dp->dp_dirty_datasets, spa,
 	    offsetof(dsl_dataset_t, ds_dirty_link));
-	txg_list_create(&dp->dp_dirty_zilogs,
+	txg_list_create(&dp->dp_dirty_zilogs, spa,
 	    offsetof(zilog_t, zl_dirty_link));
-	txg_list_create(&dp->dp_dirty_dirs,
+	txg_list_create(&dp->dp_dirty_dirs, spa,
 	    offsetof(dsl_dir_t, dd_dirty_link));
-	txg_list_create(&dp->dp_sync_tasks,
+	txg_list_create(&dp->dp_sync_tasks, spa,
 	    offsetof(dsl_sync_task_t, dst_node));
 
 	dp->dp_sync_taskq = taskq_create("dp_sync_taskq",
@@ -345,12 +344,14 @@ dsl_pool_close(dsl_pool_t *dp)
 	 */
 	arc_flush(dp->dp_spa, FALSE);
 
+	mmp_fini(dp->dp_spa);
 	txg_fini(dp);
 	dsl_scan_fini(dp);
 	dmu_buf_user_evict_wait();
 
 	rrw_destroy(&dp->dp_config_rwlock);
 	mutex_destroy(&dp->dp_lock);
+	cv_destroy(&dp->dp_spaceavail_cv);
 	taskq_destroy(dp->dp_iput_taskq);
 	if (dp->dp_blkstats)
 		vmem_free(dp->dp_blkstats, sizeof (zfs_all_blkstats_t));
@@ -358,7 +359,8 @@ dsl_pool_close(dsl_pool_t *dp)
 }
 
 dsl_pool_t *
-dsl_pool_create(spa_t *spa, nvlist_t *zplprops, uint64_t txg)
+dsl_pool_create(spa_t *spa, nvlist_t *zplprops, dsl_crypto_params_t *dcp,
+    uint64_t txg)
 {
 	int err;
 	dsl_pool_t *dp = dsl_pool_open_impl(spa, txg);
@@ -372,6 +374,7 @@ dsl_pool_create(spa_t *spa, nvlist_t *zplprops, uint64_t txg)
 	/* create and open the MOS (meta-objset) */
 	dp->dp_meta_objset = dmu_objset_create_impl(spa,
 	    NULL, &dp->dp_meta_rootbp, DMU_OST_META, tx);
+	spa->spa_meta_objset = dp->dp_meta_objset;
 
 	/* create the pool directory */
 	err = zap_create_claim(dp->dp_meta_objset, DMU_POOL_DIRECTORY_OBJECT,
@@ -409,8 +412,19 @@ dsl_pool_create(spa_t *spa, nvlist_t *zplprops, uint64_t txg)
 	if (spa_version(spa) >= SPA_VERSION_DSL_SCRUB)
 		dsl_pool_create_origin(dp, tx);
 
+	/*
+	 * Some features may be needed when creating the root dataset, so we
+	 * create the feature objects here.
+	 */
+	if (spa_version(spa) >= SPA_VERSION_FEATURES)
+		spa_feature_create_zap_objects(spa, tx);
+
+	if (dcp != NULL && dcp->cp_crypt != ZIO_CRYPT_OFF &&
+	    dcp->cp_crypt != ZIO_CRYPT_INHERIT)
+		spa_feature_enable(spa, SPA_FEATURE_ENCRYPTION, tx);
+
 	/* create the root dataset */
-	obj = dsl_dataset_create_sync_dd(dp->dp_root_dir, NULL, 0, tx);
+	obj = dsl_dataset_create_sync_dd(dp->dp_root_dir, NULL, dcp, 0, tx);
 
 	/* create the root objset */
 	VERIFY0(dsl_dataset_hold_obj(dp, obj, FTAG, &ds));
@@ -469,7 +483,7 @@ dsl_pool_dirty_delta(dsl_pool_t *dp, int64_t delta)
 	 * Note: we signal even when increasing dp_dirty_total.
 	 * This ensures forward progress -- each thread wakes the next waiter.
 	 */
-	if (dp->dp_dirty_total <= zfs_dirty_data_max)
+	if (dp->dp_dirty_total < zfs_dirty_data_max)
 		cv_signal(&dp->dp_spaceavail_cv);
 }
 
@@ -864,7 +878,7 @@ dsl_pool_create_origin(dsl_pool_t *dp, dmu_tx_t *tx)
 
 	/* create the origin dir, ds, & snap-ds */
 	dsobj = dsl_dataset_create_sync(dp->dp_root_dir, ORIGIN_DIR_NAME,
-	    NULL, 0, kcred, tx);
+	    NULL, 0, kcred, NULL, tx);
 	VERIFY0(dsl_dataset_hold_obj(dp, dsobj, FTAG, &ds));
 	dsl_dataset_snapshot_sync_impl(ds, ORIGIN_DIR_NAME, tx);
 	VERIFY0(dsl_dataset_hold_obj(dp, dsl_dataset_phys(ds)->ds_prev_snap_obj,

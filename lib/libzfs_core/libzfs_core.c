@@ -22,6 +22,8 @@
 /*
  * Copyright (c) 2012, 2014 by Delphix. All rights reserved.
  * Copyright (c) 2013 Steven Hartland. All rights reserved.
+ * Copyright (c) 2017 Datto Inc.
+ * Copyright 2017 RackTop Systems.
  */
 
 /*
@@ -126,17 +128,20 @@ lzc_ioctl(zfs_ioc_t ioc, const char *name,
 {
 	zfs_cmd_t zc = {"\0"};
 	int error = 0;
-	char *packed;
-	size_t size;
+	char *packed = NULL;
+	size_t size = 0;
 
 	ASSERT3S(g_refcount, >, 0);
 	VERIFY3S(g_fd, !=, -1);
 
-	(void) strlcpy(zc.zc_name, name, sizeof (zc.zc_name));
+	if (name != NULL)
+		(void) strlcpy(zc.zc_name, name, sizeof (zc.zc_name));
 
-	packed = fnvlist_pack(source, &size);
-	zc.zc_nvlist_src = (uint64_t)(uintptr_t)packed;
-	zc.zc_nvlist_src_size = size;
+	if (source != NULL) {
+		packed = fnvlist_pack(source, &size);
+		zc.zc_nvlist_src = (uint64_t)(uintptr_t)packed;
+		zc.zc_nvlist_src_size = size;
+	}
 
 	if (resultp != NULL) {
 		*resultp = NULL;
@@ -170,36 +175,73 @@ lzc_ioctl(zfs_ioc_t ioc, const char *name,
 	}
 
 out:
-	fnvlist_pack_free(packed, size);
+	if (packed != NULL)
+		fnvlist_pack_free(packed, size);
 	free((void *)(uintptr_t)zc.zc_nvlist_dst);
 	return (error);
 }
 
 int
-lzc_create(const char *fsname, enum lzc_dataset_type type, nvlist_t *props)
+lzc_create(const char *fsname, enum lzc_dataset_type type, nvlist_t *props,
+    uint8_t *wkeydata, uint_t wkeylen)
 {
 	int error;
+	nvlist_t *hidden_args = NULL;
 	nvlist_t *args = fnvlist_alloc();
+
 	fnvlist_add_int32(args, "type", (dmu_objset_type_t)type);
 	if (props != NULL)
 		fnvlist_add_nvlist(args, "props", props);
+
+	if (wkeydata != NULL) {
+		hidden_args = fnvlist_alloc();
+		fnvlist_add_uint8_array(hidden_args, "wkeydata", wkeydata,
+		    wkeylen);
+		fnvlist_add_nvlist(args, ZPOOL_HIDDEN_ARGS, hidden_args);
+	}
+
 	error = lzc_ioctl(ZFS_IOC_CREATE, fsname, args, NULL);
+	nvlist_free(hidden_args);
 	nvlist_free(args);
 	return (error);
 }
 
 int
-lzc_clone(const char *fsname, const char *origin,
-    nvlist_t *props)
+lzc_clone(const char *fsname, const char *origin, nvlist_t *props)
 {
 	int error;
+	nvlist_t *hidden_args = NULL;
 	nvlist_t *args = fnvlist_alloc();
+
 	fnvlist_add_string(args, "origin", origin);
 	if (props != NULL)
 		fnvlist_add_nvlist(args, "props", props);
 	error = lzc_ioctl(ZFS_IOC_CLONE, fsname, args, NULL);
+	nvlist_free(hidden_args);
 	nvlist_free(args);
 	return (error);
+}
+
+int
+lzc_promote(const char *fsname, char *snapnamebuf, int snapnamelen)
+{
+	/*
+	 * The promote ioctl is still legacy, so we need to construct our
+	 * own zfs_cmd_t rather than using lzc_ioctl().
+	 */
+	zfs_cmd_t zc = { "\0" };
+
+	ASSERT3S(g_refcount, >, 0);
+	VERIFY3S(g_fd, !=, -1);
+
+	(void) strlcpy(zc.zc_name, fsname, sizeof (zc.zc_name));
+	if (ioctl(g_fd, ZFS_IOC_PROMOTE, &zc) != 0) {
+		int error = errno;
+		if (error == EEXIST && snapnamebuf != NULL)
+			(void) strlcpy(snapnamebuf, zc.zc_string, snapnamelen);
+		return (error);
+	}
+	return (0);
 }
 
 /*
@@ -329,7 +371,7 @@ lzc_exists(const char *dataset)
 {
 	/*
 	 * The objset_stats ioctl is still legacy, so we need to construct our
-	 * own zfs_cmd_t rather than using zfsc_ioctl().
+	 * own zfs_cmd_t rather than using lzc_ioctl().
 	 */
 	zfs_cmd_t zc = {"\0"};
 
@@ -338,6 +380,18 @@ lzc_exists(const char *dataset)
 
 	(void) strlcpy(zc.zc_name, dataset, sizeof (zc.zc_name));
 	return (ioctl(g_fd, ZFS_IOC_OBJSET_STATS, &zc) == 0);
+}
+
+/*
+ * outnvl is unused.
+ * It was added to preserve the function signature in case it is
+ * needed in the future.
+ */
+/*ARGSUSED*/
+int
+lzc_sync(const char *pool_name, nvlist_t *innvl, nvlist_t **outnvl)
+{
+	return (lzc_ioctl(ZFS_IOC_POOL_SYNC, pool_name, innvl, NULL));
 }
 
 /*
@@ -440,11 +494,7 @@ lzc_release(nvlist_t *holds, nvlist_t **errlist)
 int
 lzc_get_holds(const char *snapname, nvlist_t **holdsp)
 {
-	int error;
-	nvlist_t *innvl = fnvlist_alloc();
-	error = lzc_ioctl(ZFS_IOC_GET_HOLDS, snapname, innvl, holdsp);
-	fnvlist_free(innvl);
-	return (error);
+	return (lzc_ioctl(ZFS_IOC_GET_HOLDS, snapname, NULL, holdsp));
 }
 
 /*
@@ -493,10 +543,12 @@ lzc_send_resume(const char *snapname, const char *from, int fd,
 		fnvlist_add_string(args, "fromsnap", from);
 	if (flags & LZC_SEND_FLAG_LARGE_BLOCK)
 		fnvlist_add_boolean(args, "largeblockok");
-	if (flags & LZC_SEND_FLAG_COMPRESS)
-		fnvlist_add_boolean(args, "compressok");
 	if (flags & LZC_SEND_FLAG_EMBED_DATA)
 		fnvlist_add_boolean(args, "embedok");
+	if (flags & LZC_SEND_FLAG_COMPRESS)
+		fnvlist_add_boolean(args, "compressok");
+	if (flags & LZC_SEND_FLAG_RAW)
+		fnvlist_add_boolean(args, "rawok");
 	if (resumeobj != 0 || resumeoff != 0) {
 		fnvlist_add_uint64(args, "resume_object", resumeobj);
 		fnvlist_add_uint64(args, "resume_offset", resumeoff);
@@ -538,6 +590,8 @@ lzc_send_space(const char *snapname, const char *from,
 		fnvlist_add_boolean(args, "embedok");
 	if (flags & LZC_SEND_FLAG_COMPRESS)
 		fnvlist_add_boolean(args, "compressok");
+	if (flags & LZC_SEND_FLAG_RAW)
+		fnvlist_add_boolean(args, "rawok");
 	err = lzc_ioctl(ZFS_IOC_SEND_SPACE, snapname, args, &result);
 	nvlist_free(args);
 	if (err == 0)
@@ -566,17 +620,17 @@ recv_read(int fd, void *buf, int ilen)
 }
 
 /*
- * Linux adds ZFS_IOC_RECV_NEW for resumable streams and preserves the legacy
- * ZFS_IOC_RECV user/kernel interface.  The new interface supports all stream
- * options but is currently only used for resumable streams.  This way updated
- * user space utilities will interoperate with older kernel modules.
+ * Linux adds ZFS_IOC_RECV_NEW for resumable and raw streams and preserves the
+ * legacy ZFS_IOC_RECV user/kernel interface.  The new interface supports all
+ * stream options but is currently only used for resumable streams.  This way
+ * updated user space utilities will interoperate with older kernel modules.
  *
  * Non-Linux OpenZFS platforms have opted to modify the legacy interface.
  */
 static int
-recv_impl(const char *snapname, nvlist_t *props, const char *origin,
-    boolean_t force, boolean_t resumable, int input_fd,
-    const dmu_replay_record_t *begin_record, int cleanup_fd,
+recv_impl(const char *snapname, nvlist_t *recvdprops, nvlist_t *localprops,
+    const char *origin, boolean_t force, boolean_t resumable, boolean_t raw,
+    int input_fd, const dmu_replay_record_t *begin_record, int cleanup_fd,
     uint64_t *read_bytes, uint64_t *errflags, uint64_t *action_handle,
     nvlist_t **errors)
 {
@@ -616,14 +670,17 @@ recv_impl(const char *snapname, nvlist_t *props, const char *origin,
 		drr = *begin_record;
 	}
 
-	if (resumable) {
+	if (resumable || raw) {
 		nvlist_t *outnvl = NULL;
 		nvlist_t *innvl = fnvlist_alloc();
 
 		fnvlist_add_string(innvl, "snapname", snapname);
 
-		if (props != NULL)
-			fnvlist_add_nvlist(innvl, "props", props);
+		if (recvdprops != NULL)
+			fnvlist_add_nvlist(innvl, "props", recvdprops);
+
+		if (localprops != NULL)
+			fnvlist_add_nvlist(innvl, "localprops", localprops);
 
 		if (origin != NULL && strlen(origin))
 			fnvlist_add_string(innvl, "origin", origin);
@@ -679,10 +736,16 @@ recv_impl(const char *snapname, nvlist_t *props, const char *origin,
 		(void) strlcpy(zc.zc_name, fsname, sizeof (zc.zc_value));
 		(void) strlcpy(zc.zc_value, snapname, sizeof (zc.zc_value));
 
-		if (props != NULL) {
-			packed = fnvlist_pack(props, &size);
+		if (recvdprops != NULL) {
+			packed = fnvlist_pack(recvdprops, &size);
 			zc.zc_nvlist_src = (uint64_t)(uintptr_t)packed;
 			zc.zc_nvlist_src_size = size;
+		}
+
+		if (localprops != NULL) {
+			packed = fnvlist_pack(localprops, &size);
+			zc.zc_nvlist_conf = (uint64_t)(uintptr_t)packed;
+			zc.zc_nvlist_conf_size = size;
 		}
 
 		if (origin != NULL)
@@ -748,10 +811,10 @@ recv_impl(const char *snapname, nvlist_t *props, const char *origin,
  */
 int
 lzc_receive(const char *snapname, nvlist_t *props, const char *origin,
-    boolean_t force, int fd)
+    boolean_t force, boolean_t raw, int fd)
 {
-	return (recv_impl(snapname, props, origin, force, B_FALSE, fd,
-	    NULL, -1, NULL, NULL, NULL, NULL));
+	return (recv_impl(snapname, props, NULL, origin, force, B_FALSE, raw,
+	    fd, NULL, -1, NULL, NULL, NULL, NULL));
 }
 
 /*
@@ -762,10 +825,10 @@ lzc_receive(const char *snapname, nvlist_t *props, const char *origin,
  */
 int
 lzc_receive_resumable(const char *snapname, nvlist_t *props, const char *origin,
-    boolean_t force, int fd)
+    boolean_t force, boolean_t raw, int fd)
 {
-	return (recv_impl(snapname, props, origin, force, B_TRUE, fd,
-	    NULL, -1, NULL, NULL, NULL, NULL));
+	return (recv_impl(snapname, props, NULL, origin, force, B_TRUE, raw,
+	    fd, NULL, -1, NULL, NULL, NULL, NULL));
 }
 
 /*
@@ -781,13 +844,14 @@ lzc_receive_resumable(const char *snapname, nvlist_t *props, const char *origin,
  */
 int
 lzc_receive_with_header(const char *snapname, nvlist_t *props,
-    const char *origin, boolean_t force, boolean_t resumable, int fd,
-    const dmu_replay_record_t *begin_record)
+    const char *origin, boolean_t force, boolean_t resumable, boolean_t raw,
+    int fd, const dmu_replay_record_t *begin_record)
 {
 	if (begin_record == NULL)
 		return (EINVAL);
-	return (recv_impl(snapname, props, origin, force, resumable, fd,
-	    begin_record, -1, NULL, NULL, NULL, NULL));
+
+	return (recv_impl(snapname, props, NULL, origin, force, resumable, raw,
+	    fd, begin_record, -1, NULL, NULL, NULL, NULL));
 }
 
 /*
@@ -811,13 +875,33 @@ lzc_receive_with_header(const char *snapname, nvlist_t *props,
  * property.  Callers are responsible for freeing this nvlist.
  */
 int lzc_receive_one(const char *snapname, nvlist_t *props,
-    const char *origin, boolean_t force, boolean_t resumable, int input_fd,
+    const char *origin, boolean_t force, boolean_t resumable, boolean_t raw,
+    int input_fd, const dmu_replay_record_t *begin_record, int cleanup_fd,
+    uint64_t *read_bytes, uint64_t *errflags, uint64_t *action_handle,
+    nvlist_t **errors)
+{
+	return (recv_impl(snapname, props, NULL, origin, force, resumable,
+	    raw, input_fd, begin_record, cleanup_fd, read_bytes, errflags,
+	    action_handle, errors));
+}
+
+/*
+ * Like lzc_receive_one, but allows the caller to pass an additional 'cmdprops'
+ * argument.
+ *
+ * The 'cmdprops' nvlist contains both override ('zfs receive -o') and
+ * exclude ('zfs receive -x') properties. Callers are responsible for freeing
+ * this nvlist
+ */
+int lzc_receive_with_cmdprops(const char *snapname, nvlist_t *props,
+    nvlist_t *cmdprops, const char *origin, boolean_t force,
+    boolean_t resumable, boolean_t raw, int input_fd,
     const dmu_replay_record_t *begin_record, int cleanup_fd,
     uint64_t *read_bytes, uint64_t *errflags, uint64_t *action_handle,
     nvlist_t **errors)
 {
-	return (recv_impl(snapname, props, origin, force, resumable,
-	    input_fd, begin_record, cleanup_fd, read_bytes, errflags,
+	return (recv_impl(snapname, props, cmdprops, origin, force, resumable,
+	    raw, input_fd, begin_record, cleanup_fd, read_bytes, errflags,
 	    action_handle, errors));
 }
 
@@ -825,6 +909,9 @@ int lzc_receive_one(const char *snapname, nvlist_t *props,
  * Roll back this filesystem or volume to its most recent snapshot.
  * If snapnamebuf is not NULL, it will be filled in with the name
  * of the most recent snapshot.
+ * Note that the latest snapshot may change if a new one is concurrently
+ * created or the current one is destroyed.  lzc_rollback_to can be used
+ * to roll back to a specific latest snapshot.
  *
  * Return 0 on success or an errno on failure.
  */
@@ -844,6 +931,27 @@ lzc_rollback(const char *fsname, char *snapnamebuf, int snapnamelen)
 	}
 	nvlist_free(result);
 
+	return (err);
+}
+
+/*
+ * Roll back this filesystem or volume to the specified snapshot,
+ * if possible.
+ *
+ * Return 0 on success or an errno on failure.
+ */
+int
+lzc_rollback_to(const char *fsname, const char *snapname)
+{
+	nvlist_t *args;
+	nvlist_t *result;
+	int err;
+
+	args = fnvlist_alloc();
+	fnvlist_add_string(args, "target", snapname);
+	err = lzc_ioctl(ZFS_IOC_ROLLBACK, fsname, args, &result);
+	nvlist_free(args);
+	nvlist_free(result);
 	return (err);
 }
 
@@ -938,5 +1046,68 @@ lzc_destroy_bookmarks(nvlist_t *bmarks, nvlist_t **errlist)
 
 	error = lzc_ioctl(ZFS_IOC_DESTROY_BOOKMARKS, pool, bmarks, errlist);
 
+	return (error);
+}
+
+/*
+ * Performs key management functions
+ *
+ * crypto_cmd should be a value from zfs_ioc_crypto_cmd_t. If the command
+ * specifies to load or change a wrapping key, the key should be specified in
+ * the hidden_args nvlist so that it is not logged
+ */
+int
+lzc_load_key(const char *fsname, boolean_t noop, uint8_t *wkeydata,
+    uint_t wkeylen)
+{
+	int error;
+	nvlist_t *ioc_args;
+	nvlist_t *hidden_args;
+
+	if (wkeydata == NULL)
+		return (EINVAL);
+
+	ioc_args = fnvlist_alloc();
+	hidden_args = fnvlist_alloc();
+	fnvlist_add_uint8_array(hidden_args, "wkeydata", wkeydata, wkeylen);
+	fnvlist_add_nvlist(ioc_args, ZPOOL_HIDDEN_ARGS, hidden_args);
+	if (noop)
+		fnvlist_add_boolean(ioc_args, "noop");
+	error = lzc_ioctl(ZFS_IOC_LOAD_KEY, fsname, ioc_args, NULL);
+	nvlist_free(hidden_args);
+	nvlist_free(ioc_args);
+
+	return (error);
+}
+
+int
+lzc_unload_key(const char *fsname)
+{
+	return (lzc_ioctl(ZFS_IOC_UNLOAD_KEY, fsname, NULL, NULL));
+}
+
+int
+lzc_change_key(const char *fsname, uint64_t crypt_cmd, nvlist_t *props,
+    uint8_t *wkeydata, uint_t wkeylen)
+{
+	int error;
+	nvlist_t *ioc_args = fnvlist_alloc();
+	nvlist_t *hidden_args = NULL;
+
+	fnvlist_add_uint64(ioc_args, "crypt_cmd", crypt_cmd);
+
+	if (wkeydata != NULL) {
+		hidden_args = fnvlist_alloc();
+		fnvlist_add_uint8_array(hidden_args, "wkeydata", wkeydata,
+		    wkeylen);
+		fnvlist_add_nvlist(ioc_args, ZPOOL_HIDDEN_ARGS, hidden_args);
+	}
+
+	if (props != NULL)
+		fnvlist_add_nvlist(ioc_args, "props", props);
+
+	error = lzc_ioctl(ZFS_IOC_CHANGE_KEY, fsname, ioc_args, NULL);
+	nvlist_free(hidden_args);
+	nvlist_free(ioc_args);
 	return (error);
 }

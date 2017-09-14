@@ -11,7 +11,7 @@
  */
 
 /*
- * Copyright (c) 2016, Intel Corporation.
+ * Copyright (c) 2016, 2017, Intel Corporation.
  */
 
 #ifdef HAVE_LIBUDEV
@@ -161,7 +161,7 @@ zed_udev_monitor(void *arg)
 	struct udev_monitor *mon = arg;
 	char *tmp, *tmp2;
 
-	zed_log_msg(LOG_INFO, "Waiting for new uduev disk events...");
+	zed_log_msg(LOG_INFO, "Waiting for new udev disk events...");
 
 	while (1) {
 		struct udev_device *dev;
@@ -310,6 +310,31 @@ zed_udev_monitor(void *arg)
 				}
 			}
 			free(tmp2);
+		}
+
+		/*
+		 * Special case an EC_DEV_ADD for scsi_debug devices
+		 *
+		 * These devices require a udevadm trigger command after
+		 * creation in order to register the vdev_id scsidebug alias
+		 * rule (adds a persistent path (phys_path) used for fault
+		 * management automated tests in the ZFS test suite.
+		 *
+		 * After udevadm trigger command, event registers as a "change"
+		 * event but needs to instead be handled as another "add" event
+		 * to allow for disk labeling and partitioning to occur.
+		 */
+		if (strcmp(class, EC_DEV_STATUS) == 0 &&
+		    udev_device_get_property_value(dev, "ID_VDEV") &&
+		    udev_device_get_property_value(dev, "ID_MODEL")) {
+			const char *id_model, *id_model_sd = "scsi_debug";
+
+			id_model = udev_device_get_property_value(dev,
+			    "ID_MODEL");
+			if (strcmp(id_model, id_model_sd) == 0) {
+				class = EC_DEV_ADD;
+				subclass = ESC_DISK;
+			}
 		}
 
 		if ((nvl = dev_event_nvlist(dev)) != NULL) {

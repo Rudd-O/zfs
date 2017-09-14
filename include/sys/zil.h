@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2017 by Delphix. All rights reserved.
  */
 
 /* Portions Copyright 2010 Robert Milkowski */
@@ -32,6 +32,7 @@
 #include <sys/spa.h>
 #include <sys/zio.h>
 #include <sys/dmu.h>
+#include <sys/zio_crypt.h>
 
 #ifdef	__cplusplus
 extern "C" {
@@ -93,6 +94,15 @@ typedef struct zil_chain {
 } zil_chain_t;
 
 #define	ZIL_MIN_BLKSZ	4096ULL
+
+/*
+ * ziltest is by and large an ugly hack, but very useful in
+ * checking replay without tedious work.
+ * When running ziltest we want to keep all itx's and so maintain
+ * a single list in the zl_itxg[] that uses a high txg: ZILTEST_TXG
+ * We subtract TXG_CONCURRENT_STATES to allow for common code.
+ */
+#define	ZILTEST_TXG (UINT64_MAX - TXG_CONCURRENT_STATES)
 
 /*
  * The words of a log block checksum.
@@ -385,7 +395,6 @@ typedef struct itx {
 	uint8_t		itx_sync;	/* synchronous transaction */
 	zil_callback_t	itx_callback;   /* Called when the itx is persistent */
 	void		*itx_callback_data; /* User data for the callback */
-	uint64_t	itx_sod;	/* record size on disk */
 	uint64_t	itx_oid;	/* object id */
 	lr_t		itx_lr;		/* common part of log record */
 	/* followed by type-specific part of lr_xx_t and its immediate data */
@@ -458,7 +467,8 @@ typedef int (*const zil_replay_func_t)(void *, char *, boolean_t);
 typedef int zil_get_data_t(void *arg, lr_write_t *lr, char *dbuf, zio_t *zio);
 
 extern int zil_parse(zilog_t *zilog, zil_parse_blk_func_t *parse_blk_func,
-    zil_parse_lr_func_t *parse_lr_func, void *arg, uint64_t txg);
+    zil_parse_lr_func_t *parse_lr_func, void *arg, uint64_t txg,
+    boolean_t decrypt);
 
 extern void	zil_init(void);
 extern void	zil_fini(void);

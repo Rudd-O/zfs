@@ -21,7 +21,7 @@
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
- * Copyright (c) 2012, 2016 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2017 by Delphix. All rights reserved.
  */
 
 #include <sys/dmu.h>
@@ -87,7 +87,7 @@ dmu_tx_create_assigned(struct dsl_pool *dp, uint64_t txg)
 {
 	dmu_tx_t *tx = dmu_tx_create_dd(NULL);
 
-	ASSERT3U(txg, <=, dp->dp_tx.tx_open_txg);
+	txg_verify(dp->dp_spa, txg);
 	tx->tx_pool = dp;
 	tx->tx_txg = txg;
 	tx->tx_anyobj = TRUE;
@@ -888,7 +888,7 @@ dmu_tx_try_assign(dmu_tx_t *tx, txg_how_t txg_how)
 	    dsl_pool_need_dirty_delay(tx->tx_pool)) {
 		tx->tx_wait_dirty = B_TRUE;
 		DMU_TX_STAT_BUMP(dmu_tx_dirty_delay);
-		return (ERESTART);
+		return (SET_ERROR(ERESTART));
 	}
 
 	tx->tx_txg = txg_hold_open(tx->tx_pool, &tx->tx_txgh);
@@ -1242,11 +1242,13 @@ dmu_tx_sa_registration_hold(sa_os_t *sa, dmu_tx_t *tx)
 void
 dmu_tx_hold_spill(dmu_tx_t *tx, uint64_t object)
 {
-	dmu_tx_hold_t *txh = dmu_tx_hold_object_impl(tx,
-	    tx->tx_objset, object, THT_SPILL, 0, 0);
+	dmu_tx_hold_t *txh;
 
-	(void) refcount_add_many(&txh->txh_space_towrite,
-	    SPA_OLD_MAXBLOCKSIZE, FTAG);
+	txh = dmu_tx_hold_object_impl(tx, tx->tx_objset, object,
+	    THT_SPILL, 0, 0);
+	if (txh != NULL)
+		(void) refcount_add_many(&txh->txh_space_towrite,
+		    SPA_OLD_MAXBLOCKSIZE, FTAG);
 }
 
 void

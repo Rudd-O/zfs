@@ -604,7 +604,7 @@ fuidstr_to_sid(zfsvfs_t *zfsvfs, const char *fuidstr,
 	uint64_t fuid;
 	const char *domain;
 
-	fuid = strtonum(fuidstr, NULL);
+	fuid = zfs_strtonum(fuidstr, NULL);
 
 	domain = zfs_fuid_find_by_idx(zfsvfs, FUID_INDEX(fuid));
 	if (domain)
@@ -1048,7 +1048,8 @@ zfsvfs_create(const char *osname, zfsvfs_t **zfvp)
 	 * We claim to always be readonly so we can open snapshots;
 	 * other ZPL code will prevent us from writing to snapshots.
 	 */
-	error = dmu_objset_own(osname, DMU_OST_ZFS, B_TRUE, zfsvfs, &os);
+	error = dmu_objset_own(osname, DMU_OST_ZFS, B_TRUE, B_TRUE,
+	    zfsvfs, &os);
 	if (error) {
 		kmem_free(zfsvfs, sizeof (zfsvfs_t));
 		return (error);
@@ -1080,7 +1081,7 @@ zfsvfs_create(const char *osname, zfsvfs_t **zfvp)
 
 	error = zfsvfs_init(zfsvfs, os);
 	if (error != 0) {
-		dmu_objset_disown(os, zfsvfs);
+		dmu_objset_disown(os, B_TRUE, zfsvfs);
 		*zfvp = NULL;
 		kmem_free(zfsvfs, sizeof (zfsvfs_t));
 		return (error);
@@ -1605,12 +1606,12 @@ zfs_domount(struct super_block *sb, zfs_mnt_t *zm, int silent)
 	sb->s_time_gran = 1;
 	sb->s_blocksize = recordsize;
 	sb->s_blocksize_bits = ilog2(recordsize);
-	zfsvfs->z_bdi.ra_pages = 0;
-	sb->s_bdi = &zfsvfs->z_bdi;
 
-	error = -zpl_bdi_setup_and_register(&zfsvfs->z_bdi, "zfs");
+	error = -zpl_bdi_setup(sb, "zfs");
 	if (error)
 		goto out;
+
+	sb->s_bdi->ra_pages = 0;
 
 	/* Set callback operations for the file system. */
 	sb->s_op = &zpl_super_operations;
@@ -1669,7 +1670,7 @@ zfs_domount(struct super_block *sb, zfs_mnt_t *zm, int silent)
 	zfsvfs->z_arc_prune = arc_add_prune_callback(zpl_prune_sb, sb);
 out:
 	if (error) {
-		dmu_objset_disown(zfsvfs->z_os, zfsvfs);
+		dmu_objset_disown(zfsvfs->z_os, B_TRUE, zfsvfs);
 		zfsvfs_free(zfsvfs);
 		/*
 		 * make sure we don't have dangling sb->s_fs_info which
@@ -1729,10 +1730,11 @@ zfs_umount(struct super_block *sb)
 	zfsvfs_t *zfsvfs = sb->s_fs_info;
 	objset_t *os;
 
-	arc_remove_prune_callback(zfsvfs->z_arc_prune);
+	if (zfsvfs->z_arc_prune != NULL)
+		arc_remove_prune_callback(zfsvfs->z_arc_prune);
 	VERIFY(zfsvfs_teardown(zfsvfs, B_TRUE) == 0);
 	os = zfsvfs->z_os;
-	bdi_destroy(sb->s_bdi);
+	zpl_bdi_destroy(sb);
 
 	/*
 	 * z_os will be NULL if there was an error in
@@ -1749,7 +1751,7 @@ zfs_umount(struct super_block *sb)
 		/*
 		 * Finally release the objset
 		 */
-		dmu_objset_disown(os, zfsvfs);
+		dmu_objset_disown(os, B_TRUE, zfsvfs);
 	}
 
 	zfsvfs_free(zfsvfs);
@@ -1761,7 +1763,14 @@ zfs_remount(struct super_block *sb, int *flags, zfs_mnt_t *zm)
 {
 	zfsvfs_t *zfsvfs = sb->s_fs_info;
 	vfs_t *vfsp;
+	boolean_t issnap = dmu_objset_is_snapshot(zfsvfs->z_os);
 	int error;
+
+	if ((issnap || !spa_writeable(dmu_objset_spa(zfsvfs->z_os))) &&
+	    !(*flags & MS_RDONLY)) {
+		*flags |= MS_RDONLY;
+		return (EROFS);
+	}
 
 	error = zfsvfs_parse_options(zm->mnt_data, &vfsp);
 	if (error)
@@ -1772,7 +1781,8 @@ zfs_remount(struct super_block *sb, int *flags, zfs_mnt_t *zm)
 
 	vfsp->vfs_data = zfsvfs;
 	zfsvfs->z_vfs = vfsp;
-	(void) zfs_register_callbacks(vfsp);
+	if (!issnap)
+		(void) zfs_register_callbacks(vfsp);
 
 	return (error);
 }
@@ -2058,8 +2068,10 @@ zfs_get_zplprop(objset_t *os, zfs_prop_t prop, uint64_t *value)
 	else
 		pname = zfs_prop_to_name(prop);
 
-	if (os != NULL)
+	if (os != NULL) {
+		ASSERT3U(os->os_phys->os_type, ==, DMU_OST_ZFS);
 		error = zap_lookup(os, MASTER_NODE_OBJ, pname, 8, 1, value);
+	}
 
 	if (error == ENOENT) {
 		/* No value set, use the default value */

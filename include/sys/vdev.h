@@ -65,6 +65,7 @@ extern void vdev_dtl_dirty(vdev_t *vd, vdev_dtl_type_t d,
 extern boolean_t vdev_dtl_contains(vdev_t *vd, vdev_dtl_type_t d,
     uint64_t txg, uint64_t size);
 extern boolean_t vdev_dtl_empty(vdev_t *vd, vdev_dtl_type_t d);
+extern boolean_t vdev_dtl_need_resilver(vdev_t *vd, uint64_t off, size_t size);
 extern void vdev_dtl_reassess(vdev_t *vd, uint64_t txg, uint64_t scrub_txg,
     int scrub_done);
 extern boolean_t vdev_dtl_required(vdev_t *vd);
@@ -124,8 +125,7 @@ extern zio_t *vdev_queue_io(zio_t *zio);
 extern void vdev_queue_io_done(zio_t *zio);
 
 extern int vdev_queue_length(vdev_t *vd);
-extern uint64_t vdev_queue_lastoffset(vdev_t *vd);
-extern void vdev_queue_register_lastoffset(vdev_t *vd, zio_t *zio);
+extern uint64_t vdev_queue_last_offset(vdev_t *vd);
 
 extern void vdev_config_dirty(vdev_t *vd);
 extern void vdev_config_clean(vdev_t *vd);
@@ -154,6 +154,8 @@ extern int vdev_label_number(uint64_t psise, uint64_t offset);
 extern nvlist_t *vdev_label_read_config(vdev_t *vd, uint64_t txg);
 extern void vdev_uberblock_load(vdev_t *, struct uberblock *, nvlist_t **);
 extern void vdev_config_generate_stats(vdev_t *vd, nvlist_t *nv);
+extern void vdev_label_write(zio_t *zio, vdev_t *vd, int l, abd_t *buf, uint64_t
+    offset, uint64_t size, zio_done_func_t *done, void *private, int flags);
 
 typedef enum {
 	VDEV_LABEL_CREATE,	/* create/add a new device */

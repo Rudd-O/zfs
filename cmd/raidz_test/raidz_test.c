@@ -702,10 +702,8 @@ run_sweep(void)
 		opts->rto_dsize = size_v[s];
 		opts->rto_v = 0; /* be quiet */
 
-		VERIFY3P(zk_thread_create(NULL, 0,
-		    (thread_func_t)sweep_thread,
-		    (void *) opts, 0, NULL, TS_RUN, 0,
-		    PTHREAD_CREATE_JOINABLE), !=, NULL);
+		VERIFY3P(thread_create(NULL, 0, sweep_thread, (void *) opts,
+		    0, NULL, TS_RUN, defclsyspri), !=, NULL);
 	}
 
 exit:
@@ -728,6 +726,8 @@ exit:
 		LOG(D_ALL, "Sweep test succeeded on %lu raidz maps!\n",
 		    (ulong_t)tried_comb);
 	}
+
+	mutex_destroy(&sem_mtx);
 
 	return (sweep_state == SWEEP_ERROR ? SWEEP_ERROR : 0);
 }

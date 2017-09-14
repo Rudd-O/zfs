@@ -783,10 +783,6 @@ SHA2Update(SHA2_CTX *ctx, const void *inptr, size_t input_len)
 	uint32_t	i, buf_index, buf_len, buf_limit;
 	const uint8_t	*input = inptr;
 	uint32_t	algotype = ctx->algotype;
-#if defined(__amd64)
-	uint32_t	block_count;
-#endif	/* !__amd64 */
-
 
 	/* check for noop */
 	if (input_len == 0)
@@ -854,6 +850,7 @@ SHA2Update(SHA2_CTX *ctx, const void *inptr, size_t input_len)
 		}
 
 #else
+		uint32_t block_count;
 		if (algotype <= SHA256_HMAC_GEN_MECH_INFO_TYPE) {
 			block_count = (input_len - i) >> 6;
 			if (block_count > 0) {
@@ -950,8 +947,6 @@ SHA2Final(void *digest, SHA2_CTX *ctx)
 	/* zeroize sensitive information */
 	bzero(ctx, sizeof (*ctx));
 }
-
-
 
 #ifdef _KERNEL
 EXPORT_SYMBOL(SHA2Init);

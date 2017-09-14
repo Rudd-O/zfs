@@ -72,8 +72,7 @@ __dbuf_stats_hash_table_data(char *buf, size_t size, dmu_buf_impl_t *db)
 	if (db->db_buf)
 		arc_buf_info(db->db_buf, &abi, zfs_dbuf_state_index);
 
-	if (dn)
-		__dmu_object_info_from_dnode(dn, &doi);
+	__dmu_object_info_from_dnode(dn, &doi);
 
 	nwritten = snprintf(buf, size,
 	    "%-16s %-8llu %-8lld %-8lld %-8lld %-8llu %-8llu %-5d %-5d %-5lu | "
@@ -143,7 +142,7 @@ dbuf_stats_hash_table_data(char *buf, size_t size, void *data)
 		 * to be called with a larger scratch buffers.
 		 */
 		if (size < 512) {
-			error = ENOMEM;
+			error = SET_ERROR(ENOMEM);
 			break;
 		}
 

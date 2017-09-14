@@ -30,8 +30,10 @@ AC_DEFUN([ZFS_AC_CONFIG_KERNEL], [
 	ZFS_AC_KERNEL_REQ_OP_FLUSH
 	ZFS_AC_KERNEL_BIO_BI_OPF
 	ZFS_AC_KERNEL_BIO_END_IO_T_ARGS
+	ZFS_AC_KERNEL_BIO_BI_STATUS
 	ZFS_AC_KERNEL_BIO_RW_BARRIER
 	ZFS_AC_KERNEL_BIO_RW_DISCARD
+	ZFS_AC_KERNEL_BLK_QUEUE_BDI
 	ZFS_AC_KERNEL_BLK_QUEUE_FLUSH
 	ZFS_AC_KERNEL_BLK_QUEUE_MAX_HW_SECTORS
 	ZFS_AC_KERNEL_BLK_QUEUE_MAX_SEGMENTS
@@ -100,7 +102,7 @@ AC_DEFUN([ZFS_AC_CONFIG_KERNEL], [
 	ZFS_AC_KERNEL_SHRINK_CONTROL_HAS_NID
 	ZFS_AC_KERNEL_S_INSTANCES_LIST_HEAD
 	ZFS_AC_KERNEL_S_D_OP
-	ZFS_AC_KERNEL_BDI_SETUP_AND_REGISTER
+	ZFS_AC_KERNEL_BDI
 	ZFS_AC_KERNEL_SET_NLINK
 	ZFS_AC_KERNEL_ELEVATOR_CHANGE
 	ZFS_AC_KERNEL_5ARG_SGET
@@ -117,6 +119,8 @@ AC_DEFUN([ZFS_AC_CONFIG_KERNEL], [
 	ZFS_AC_KERNEL_MODULE_PARAM_CALL_CONST
 	ZFS_AC_KERNEL_RENAME_WANTS_FLAGS
 	ZFS_AC_KERNEL_HAVE_GENERIC_SETXATTR
+	ZFS_AC_KERNEL_CURRENT_TIME
+	ZFS_AC_KERNEL_VM_NODE_STAT
 
 	AS_IF([test "$LINUX_OBJ" != "$LINUX"], [
 		KERNELMAKE_PARAMS="$KERNELMAKE_PARAMS O=$LINUX_OBJ"
@@ -200,6 +204,7 @@ AC_DEFUN([ZFS_AC_KERNEL], [
 		AS_IF([test "$kernelsrc" = "NONE"], [
 			kernsrcver=NONE
 		])
+		withlinux=yes
 	])
 
 	AC_MSG_RESULT([$kernelsrc])
@@ -212,7 +217,7 @@ AC_DEFUN([ZFS_AC_KERNEL], [
 
 	AC_MSG_CHECKING([kernel build directory])
 	AS_IF([test -z "$kernelbuild"], [
-		AS_IF([test -e "/lib/modules/$(uname -r)/build"], [
+		AS_IF([test x$withlinux != xyes -a -e "/lib/modules/$(uname -r)/build"], [
 			kernelbuild=`readlink -f /lib/modules/$(uname -r)/build`
 		], [test -d ${kernelsrc}-obj/${target_cpu}/${target_cpu}], [
 			kernelbuild=${kernelsrc}-obj/${target_cpu}/${target_cpu}

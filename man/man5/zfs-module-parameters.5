@@ -136,7 +136,7 @@ Use \fB1\fR for yes and \fB0\fR for no (default).
 \fBl2arc_write_boost\fR (ulong)
 .ad
 .RS 12n
-Cold L2ARC devices will have \fBl2arc_write_nax\fR increased by this amount
+Cold L2ARC devices will have \fBl2arc_write_max\fR increased by this amount
 while they remain cold.
 .sp
 Default value: \fB8,388,608\fR.
@@ -197,7 +197,7 @@ Use \fB1\fR for yes (default) and \fB0\fR for no.
 .ad
 .RS 12n
 When using segment-based metaslab selection, continue allocating
-from the active metaslab until \fBlzfs_metaslab_switch_threshold\fR
+from the active metaslab until \fBzfs_metaslab_switch_threshold\fR
 worth of buckets have been exhausted.
 .sp
 Default value: \fB2\fR.
@@ -412,7 +412,7 @@ Default value: \fB2\fR.
 .RS 12n
 When the number of bytes consumed by dnodes in the ARC exceeds this number of
 bytes, try to unpin some of it in response to demand for non-metadata. This
-value acts as a floor to the amount of dnode metadata, and defaults to 0 which
+value acts as a ceiling to the amount of dnode metadata, and defaults to 0 which
 indicates that a percent which is based on \fBzfs_arc_dnode_limit_percent\fR of
 the ARC meta buffers that may be used for dnodes.
 
@@ -697,6 +697,24 @@ Use \fB1\fR for yes (default) and \fB0\fR to disable.
 log2(fraction of arc to reclaim)
 .sp
 Default value: \fB5\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs_arc_pc_percent\fR (uint)
+.ad
+.RS 12n
+Percent of pagecache to reclaim arc to
+
+This tunable allows ZFS arc to play more nicely with the kernel's LRU
+pagecache. It can guarantee that the arc size won't collapse under scanning
+pressure on the pagecache, yet still allows arc to be reclaimed down to
+zfs_arc_min if necessary. This value is specified as percent of pagecache
+size (as measured by NR_FILE_PAGES) where that percent may exceed 100. This
+only operates during memory pressure/reclaim.
+.sp
+Default value: \fB0\fR (disabled).
 .RE
 
 .sp
@@ -1052,7 +1070,12 @@ Default value: \fB10\fR.
 Minimum asynchronous write I/Os active to each device.
 See the section "ZFS I/O SCHEDULER".
 .sp
-Default value: \fB1\fR.
+Lower values are associated with better latency on rotational media but poorer
+resilver performance. The default value of 2 was chosen as a compromise. A
+value of 3 has been shown to improve resilver performance further at a cost of
+further increasing latency.
+.sp
+Default value: \fB2\fR.
 .RE
 
 .sp
@@ -1146,8 +1169,14 @@ Default value: \fB10\fR.
 \fBzfs_vdev_queue_depth_pct\fR (int)
 .ad
 .RS 12n
-The queue depth percentage for each top-level virtual device.
-Used in conjunction with zfs_vdev_async_max_active.
+Maximum number of queued allocations per top-level vdev expressed as
+a percentage of \fBzfs_vdev_async_write_max_active\fR which allows the
+system to detect devices that are more capable of handling allocations
+and to allocate more blocks to those devices.  It allows for dynamic
+allocation distribution when devices are imbalanced as fuller devices
+will tend to be slower than empty devices.
+
+See also \fBzio_dva_throttle_enabled\fR.
 .sp
 Default value: \fB1000\fR.
 .RE
@@ -1229,6 +1258,12 @@ _
 _
 128	ZFS_DEBUG_HISTOGRAM_VERIFY
 	Enable extra spacemap histogram verifications.
+_
+256	ZFS_DEBUG_METASLAB_VERIFY
+	Verify space accounting on disk matches in-core range_trees.
+_
+512	ZFS_DEBUG_SET_ERROR
+	Enable SET_ERROR and dprintf entries in the debug log.
 .TE
 .sp
 * Requires debug build.
@@ -1371,7 +1406,7 @@ groups have reached the threshold, all groups are allowed to accept
 allocations.  The default value of 0 disables the feature and causes
 all metaslab groups to be eligible for allocations.
 
-This parameter allows to deal with pools having heavily imbalanced
+This parameter allows one to deal with pools having heavily imbalanced
 vdevs such as would be the case when a new vdev has been added.
 Setting the threshold to a non-zero percentage will stop allocations
 from being made to vdevs that aren't filled to the specified percentage
@@ -1379,6 +1414,79 @@ and allow lesser filled vdevs to acquire more allocations than they
 otherwise would under the old \fBzfs_mg_alloc_failures\fR facility.
 .sp
 Default value: \fB0\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs_multihost_history\fR (int)
+.ad
+.RS 12n
+Historical statistics for the last N multihost updates will be available in
+\fB/proc/spl/kstat/zfs/<pool>/multihost\fR
+.sp
+Default value: \fB0\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs_multihost_interval\fR (ulong)
+.ad
+.RS 12n
+Used to control the frequency of multihost writes which are performed when the
+\fBmultihost\fR pool property is on.  This is one factor used to determine
+the length of the activity check during import.
+.sp
+The multihost write period is \fBzfs_multihost_interval / leaf-vdevs\fR milliseconds.
+This means that on average a multihost write will be issued for each leaf vdev every
+\fBzfs_multihost_interval\fR milliseconds.  In practice, the observed period can
+vary with the I/O load and this observed value is the delay which is stored in
+the uberblock.
+.sp
+On import the activity check waits a minimum amount of time determined by
+\fBzfs_multihost_interval * zfs_multihost_import_intervals\fR.  The activity
+check time may be further extended if the value of mmp delay found in the best
+uberblock indicates actual multihost updates happened at longer intervals than
+\fBzfs_multihost_interval\fR.  A minimum value of \fB100ms\fR is enforced.
+.sp
+Default value: \fB1000\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs_multihost_import_intervals\fR (uint)
+.ad
+.RS 12n
+Used to control the duration of the activity test on import.  Smaller values of
+\fBzfs_multihost_import_intervals\fR will reduce the import time but increase
+the risk of failing to detect an active pool.  The total activity check time is
+never allowed to drop below one second.  A value of 0 is ignored and treated as
+if it was set to 1
+.sp
+Default value: \fB10\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs_multihost_fail_intervals\fR (uint)
+.ad
+.RS 12n
+Controls the behavior of the pool when multihost write failures are detected.
+.sp
+When \fBzfs_multihost_fail_intervals = 0\fR then multihost write failures are ignored.
+The failures will still be reported to the ZED which depending on its
+configuration may take action such as suspending the pool or offlining a device.
+.sp
+When \fBzfs_multihost_fail_intervals > 0\fR then sequential multihost write failures
+will cause the pool to be suspended.  This occurs when
+\fBzfs_multihost_fail_intervals * zfs_multihost_interval\fR milliseconds have
+passed since the last successful multihost write.  This guarantees the activity test
+will see multihost writes if the pool is imported.
+.sp
+Default value: \fB5\fR.
 .RE
 
 .sp
@@ -1425,6 +1533,20 @@ Use \fB1\fR for yes and \fB0\fR for no (default).
 Enable NOP writes
 .sp
 Use \fB1\fR for yes (default) and \fB0\fR to disable.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs_dmu_offset_next_sync\fR (int)
+.ad
+.RS 12n
+Enable forcing txg sync to find holes. When enabled forces ZFS to act
+like prior versions when SEEK_HOLE or SEEK_DATA flags are used, which
+when a dnode is dirty causes txg's to be synced so that this data can be
+found.
+.sp
+Use \fB1\fR for yes and \fB0\fR to disable (default).
 .RE
 
 .sp
@@ -1486,8 +1608,8 @@ Default value: \fB1,048,576\fR.
 \fBzfs_read_history\fR (int)
 .ad
 .RS 12n
-Historic statistics for the last N reads will be available in
-\fR/proc/spl/kstat/zfs/POOLNAME/reads\fB
+Historical statistics for the last N reads will be available in
+\fB/proc/spl/kstat/zfs/<pool>/reads\fR
 .sp
 Default value: \fB0\fR (no data is kept).
 .RE
@@ -1641,8 +1763,8 @@ Default value: \fB32\fR.
 \fBzfs_txg_history\fR (int)
 .ad
 .RS 12n
-Historic statistics for the last N txgs will be available in
-\fR/proc/spl/kstat/zfs/POOLNAME/txgs\fB
+Historical statistics for the last N txgs will be available in
+\fB/proc/spl/kstat/zfs/<pool>/txgs\fR
 .sp
 Default value: \fB0\fR.
 .RE
@@ -1892,12 +2014,14 @@ Use \fB1\fR for yes and \fB0\fR for no (default).
 .sp
 .ne 2
 .na
-\fBzil_slog_limit\fR (ulong)
+\fBzil_slog_bulk\fR (ulong)
 .ad
 .RS 12n
-Max commit bytes to separate log device
+Limit SLOG write size per commit executed with synchronous priority.
+Any writes above that will be executed with lower (asynchronous) priority
+to limit potential SLOG device abuse by single active ZIL writer.
 .sp
-Default value: \fB1,048,576\fR.
+Default value: \fB786,432\fR.
 .RE
 
 .sp
@@ -1921,6 +2045,8 @@ Default value: \fB30,000\fR.
 .RS 12n
 Throttle block allocations in the ZIO pipeline. This allows for
 dynamic allocation distribution when devices are imbalanced.
+When enabled, the maximum number of pending allocations per top-level vdev
+is limited by \fBzfs_vdev_queue_depth_pct\fR.
 .sp
 Default value: \fB1\fR.
 .RE
@@ -2002,6 +2128,43 @@ immediately by \fBblkid(8)\fR or by the kernel scanning for a partition
 table.
 .sp
 Default value: \fB131,072\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzvol_request_sync\fR (uint)
+.ad
+.RS 12n
+When processing I/O requests for a zvol submit them synchronously.  This
+effectively limits the queue depth to 1 for each I/O submitter.  When set
+to 0 requests are handled asynchronously by a thread pool.  The number of
+requests which can be handled concurrently is controller by \fBzvol_threads\fR.
+.sp
+Default value: \fB0\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzvol_threads\fR (uint)
+.ad
+.RS 12n
+Max number of threads which can handle zvol I/O requests concurrently.
+.sp
+Default value: \fB32\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzvol_volmode\fR (uint)
+.ad
+.RS 12n
+Defines zvol block devices behaviour when \fBvolmode\fR is set to \fBdefault\fR.
+Valid values are \fB1\fR (full), \fB2\fR (dev) and \fB3\fR (none).
+.sp
+Default value: \fB1\fR.
 .RE
 
 .sp

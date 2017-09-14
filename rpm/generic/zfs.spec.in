@@ -95,6 +95,10 @@ Requires(postun): systemd
 BuildRequires: systemd
 %endif
 
+# The zpool iostat/status -c scripts call some utilities like lsblk and iostat
+Requires:  util-linux
+Requires:  sysstat
+
 %description
 This package contains the ZFS command line utilities.
 
@@ -177,7 +181,9 @@ Requires:       bc
 Requires:       ksh
 Requires:	fio
 Requires:	acl
+Requires:	sudo
 Requires:	sysstat
+Requires:       rng-tools
 
 %description test
 This package contains test infrastructure and support scripts for
@@ -253,7 +259,7 @@ exit 0
 %if 0%{?_systemd}
 %systemd_preun %{systemd_svcs}
 %else
-if [ $1 -eq 0 ] && [ -x /sbin/chkconfig ]; then
+if [ "$1" = "0" ] && [ -x /sbin/chkconfig ]; then
     /sbin/chkconfig --del zfs-import
     /sbin/chkconfig --del zfs-mount
     /sbin/chkconfig --del zfs-share
@@ -286,6 +292,7 @@ exit 0
 %config(noreplace) %{_initconfdir}/zfs
 %endif
 %config(noreplace) %{_sysconfdir}/%{name}
+%attr(440, root, root) %config(noreplace) %{_sysconfdir}/sudoers.d/*
 
 %files -n libzpool2
 %{_libdir}/libzpool.so.*
@@ -325,14 +332,6 @@ exit 0
 %endif
 
 %changelog
-* Fri Sep 11 2015 Brian Behlendorf <behlendorf1@llnl.gov> - 0.6.5-1
-- Released 0.6.5-1, detailed release notes are available at:
-- https://github.com/zfsonlinux/zfs/releases/tag/zfs-0.6.5
-* Wed Apr  8 2015 Brian Behlendorf <behlendorf1@llnl.gov> - 0.6.4-1
-- Released 0.6.4-1
-* Thu Jun 12 2014 Brian Behlendorf <behlendorf1@llnl.gov> - 0.6.3-1
-- Released 0.6.3-1
-* Wed Aug 21 2013 Brian Behlendorf <behlendorf1@llnl.gov> - 0.6.2-1
-- Released 0.6.2-1
-* Fri Mar 22 2013 Brian Behlendorf <behlendorf1@llnl.gov> - 0.6.1-1
-- First official stable release.
+* Wed Jul 26 2017 Brian Behlendorf <behlendorf1@llnl.gov> - 0.7.0-1
+- Released 0.7.0-1, detailed release notes are available at:
+- https://github.com/zfsonlinux/zfs/releases/tag/zfs-0.7.0

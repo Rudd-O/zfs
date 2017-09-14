@@ -136,6 +136,8 @@ Buildbot](http://build.zfsonlinux.org/) builders before
 being accepted. If you are experiencing intermittent TEST
 builder failures, you may be experiencing a [test suite
 issue](https://github.com/zfsonlinux/zfs/issues?q=is%3Aissue+is%3Aopen+label%3A%22Test+Suite%22).
+There are also various [buildbot options](https://github.com/zfsonlinux/zfs/wiki/Buildbot-Options)
+to control how changes are tested.
 * All proposed changes must be approved by a ZFS on Linux organization member.
 
 ### Testing
@@ -165,8 +167,12 @@ first line in the commit message.
 please summarize important information such as why the proposed
 approach was chosen or a brief description of the bug you are resolving.
 Each line of the body must be 72 characters or less.
-* The last line must be a `Signed-off-by:` line with the developer's
-name followed by their email.
+* The last line must be a `Signed-off-by:` tag with the developer's
+name followed by their email. This is the developer's certification
+that they have the right to submit the patch for inclusion into
+the code base and indicates agreement to the [Developer's Certificate
+of Origin](https://www.kernel.org/doc/html/latest/process/submitting-patches.html#sign-your-work-the-developer-s-certificate-of-origin).
+Code without a proper signoff cannot be merged.
 
 Git can append the `Signed-off-by` line to your commit messages. Simply
 provide the `-s` or `--signoff` option when performing a `git commit`.

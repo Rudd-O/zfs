@@ -184,9 +184,9 @@ sas_handler() {
 			return
 		fi
 
-		# Get the raw scsi device name from multipath -l.  Strip off
+		# Get the raw scsi device name from multipath -ll. Strip off
 		# leading pipe symbols to make field numbering consistent.
-		DEV=`multipath -l $DM_NAME |
+		DEV=`multipath -ll $DM_NAME |
 			awk '/running/{gsub("^[|]"," "); print $3 ; exit}'`
 		if [ -z "$DEV" ] ; then
 			return
@@ -237,7 +237,7 @@ sas_handler() {
 
 	PHY=`ls -d $port_dir/phy* 2>/dev/null | head -1 | awk -F: '{print $NF}'`
 	if [ -z "$PHY" ] ; then
-		return
+		PHY=0
 	fi
 	PORT=$(( $PHY / $PHYS_PER_PORT ))
 
@@ -261,6 +261,10 @@ sas_handler() {
 		;;
 	"phy")
 		SLOT=`cat $end_device_dir/phy_identifier 2>/dev/null`
+		;;
+	"port")
+		d=$(eval echo \${$i})
+		SLOT=`echo $d | sed -e 's/^.*://'`
 		;;
 	"id")
 		i=$(($i + 1))

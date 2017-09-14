@@ -279,6 +279,34 @@ an existing space map is upgraded to the new format. Once the feature is
 .sp
 .ne 2
 .na
+\fB\fBmulti_vdev_crash_dump\fR\fR
+.ad
+.RS 4n
+.TS
+l l .
+GUID    com.joyent:multi_vdev_crash_dump
+READ\-ONLY COMPATIBLE   no
+DEPENDENCIES    none
+.TE
+
+This feature allows a dump device to be configured with a pool comprised
+of multiple vdevs.  Those vdevs may be arranged in any mirrored or raidz
+configuration.
+
+When the \fBmulti_vdev_crash_dump\fR feature is set to \fBenabled\fR,
+the administrator can use the \fBdumpadm\fR(1M) command to configure a
+dump device on a pool comprised of multiple vdevs.
+
+Under Linux this feature is registered for compatibility but not used.
+New pools created under Linux will have the feature \fBenabled\fR but
+will never transition to \fB\fBactive\fR.  This functionality is not
+required in order to support crash dumps under Linux.  Existing pools
+where this feature is \fB\fBactive\fR can be imported.
+.RE
+
+.sp
+.ne 2
+.na
 \fB\fBextensible_dataset\fR\fR
 .ad
 .RS 4n
@@ -563,6 +591,8 @@ Booting off of pools using \fBedonr\fR is \fBNOT\fR supported
 -- any attempt to enable \fBedonr\fR on a root pool will fail with an
 error.
 
+.RE
+
 .sp
 .ne 2
 .na
@@ -586,6 +616,27 @@ The upgrade can also be started manually on filesystems by running
 `zfs set version=current <pool/fs>`. The upgrade process runs in the background
 and may take a while to complete for filesystems containing a large number of
 files.
+
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fBencryption\fR\fR
+.ad
+.RS 4n
+.TS
+l l .
+GUID	com.datto:encryption
+READ\-ONLY COMPATIBLE	no
+DEPENDENCIES	extensible_dataset
+.TE
+
+This feature enables the creation and management of natively encrypted datasets.
+
+This feature becomes \fBactive\fR when an encrypted dataset is created and will
+be returned to the \fBenabled\fR state when all datasets that use this feature
+are destroyed.
 
 .RE
 

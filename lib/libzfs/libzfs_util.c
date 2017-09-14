@@ -24,6 +24,7 @@
  * Copyright (c) 2013, Joyent, Inc. All rights reserved.
  * Copyright (c) 2011, 2014 by Delphix. All rights reserved.
  * Copyright 2016 Igor Kozhukhov <ikozhukhov@gmail.com>
+ * Copyright (c) 2017 Datto Inc.
  */
 
 /*
@@ -44,7 +45,7 @@
 #include <sys/mnttab.h>
 #include <sys/mntent.h>
 #include <sys/types.h>
-#include <wait.h>
+#include <sys/wait.h>
 
 #include <libzfs.h>
 #include <libzfs_core.h>
@@ -246,6 +247,9 @@ libzfs_error_description(libzfs_handle_t *hdl)
 	case EZFS_POSTSPLIT_ONLINE:
 		return (dgettext(TEXT_DOMAIN, "disk was split from this pool "
 		    "into a new one"));
+	case EZFS_SCRUB_PAUSED:
+		return (dgettext(TEXT_DOMAIN, "scrub is paused; "
+		    "use 'zpool scrub' to resume"));
 	case EZFS_SCRUBBING:
 		return (dgettext(TEXT_DOMAIN, "currently scrubbing; "
 		    "use 'zpool scrub -s' to cancel current scrub"));
@@ -257,6 +261,11 @@ libzfs_error_description(libzfs_handle_t *hdl)
 		return (dgettext(TEXT_DOMAIN, "invalid diff data"));
 	case EZFS_POOLREADONLY:
 		return (dgettext(TEXT_DOMAIN, "pool is read-only"));
+	case EZFS_ACTIVE_POOL:
+		return (dgettext(TEXT_DOMAIN, "pool is imported on a "
+		    "different host"));
+	case EZFS_CRYPTOFAILED:
+		return (dgettext(TEXT_DOMAIN, "encryption failure"));
 	case EZFS_UNKNOWN:
 		return (dgettext(TEXT_DOMAIN, "unknown error"));
 	default:
@@ -419,6 +428,9 @@ zfs_standard_error_fmt(libzfs_handle_t *hdl, int error, const char *fmt, ...)
 		    "pool I/O is currently suspended"));
 		zfs_verror(hdl, EZFS_POOLUNAVAIL, fmt, ap);
 		break;
+	case EREMOTEIO:
+		zfs_verror(hdl, EZFS_ACTIVE_POOL, fmt, ap);
+		break;
 	default:
 		zfs_error_aux(hdl, strerror(error));
 		zfs_verror(hdl, EZFS_UNKNOWN, fmt, ap);
@@ -506,6 +518,9 @@ zpool_standard_error_fmt(libzfs_handle_t *hdl, int error, const char *fmt, ...)
 		zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
 		    "block size out of range or does not match"));
 		zfs_verror(hdl, EZFS_BADPROP, fmt, ap);
+		break;
+	case EREMOTEIO:
+		zfs_verror(hdl, EZFS_ACTIVE_POOL, fmt, ap);
 		break;
 
 	default:
@@ -606,13 +621,16 @@ zfs_nicenum_format(uint64_t num, char *buf, size_t buflen,
 	const char *u;
 	const char *units[3][7] = {
 	    [ZFS_NICENUM_1024] = {"", "K", "M", "G", "T", "P", "E"},
+	    [ZFS_NICENUM_BYTES] = {"B", "K", "M", "G", "T", "P", "E"},
 	    [ZFS_NICENUM_TIME] = {"ns", "us", "ms", "s", "?", "?", "?"}
 	};
 
 	const int units_len[] = {[ZFS_NICENUM_1024] = 6,
+	    [ZFS_NICENUM_BYTES] = 6,
 	    [ZFS_NICENUM_TIME] = 4};
 
 	const int k_unit[] = {	[ZFS_NICENUM_1024] = 1024,
+	    [ZFS_NICENUM_BYTES] = 1024,
 	    [ZFS_NICENUM_TIME] = 1000};
 
 	double val;
@@ -620,8 +638,13 @@ zfs_nicenum_format(uint64_t num, char *buf, size_t buflen,
 	if (format == ZFS_NICENUM_RAW) {
 		snprintf(buf, buflen, "%llu", (u_longlong_t)num);
 		return;
+	} else if (format == ZFS_NICENUM_RAWTIME && num > 0) {
+		snprintf(buf, buflen, "%llu", (u_longlong_t)num);
+		return;
+	} else if (format == ZFS_NICENUM_RAWTIME && num == 0) {
+		snprintf(buf, buflen, "%s", "-");
+		return;
 	}
-
 
 	while (n >= k_unit[format] && index < units_len[format]) {
 		n /= k_unit[format];
@@ -630,7 +653,7 @@ zfs_nicenum_format(uint64_t num, char *buf, size_t buflen,
 
 	u = units[format][index];
 
-	/* Don't print 0ns times */
+	/* Don't print zero latencies since they're invalid */
 	if ((format == ZFS_NICENUM_TIME) && (num == 0)) {
 		(void) snprintf(buf, buflen, "-");
 	} else if ((index == 0) || ((num %
@@ -706,7 +729,14 @@ zfs_niceraw(uint64_t num, char *buf, size_t buflen)
 	zfs_nicenum_format(num, buf, buflen, ZFS_NICENUM_RAW);
 }
 
-
+/*
+ * Convert a number of bytes to an appropriately human-readable output.
+ */
+void
+zfs_nicebytes(uint64_t num, char *buf, size_t buflen)
+{
+	zfs_nicenum_format(num, buf, buflen, ZFS_NICENUM_BYTES);
+}
 
 void
 libzfs_print_on_error(libzfs_handle_t *hdl, boolean_t printerr)
@@ -726,30 +756,106 @@ libzfs_module_loaded(const char *module)
 	return (access(path, F_OK) == 0);
 }
 
-int
-libzfs_run_process(const char *path, char *argv[], int flags)
+
+/*
+ * Read lines from an open file descriptor and store them in an array of
+ * strings until EOF.  lines[] will be allocated and populated with all the
+ * lines read.  All newlines are replaced with NULL terminators for
+ * convenience.  lines[] must be freed after use with libzfs_free_str_array().
+ *
+ * Returns the number of lines read.
+ */
+static int
+libzfs_read_stdout_from_fd(int fd, char **lines[])
+{
+
+	FILE *fp;
+	int lines_cnt = 0;
+	size_t len = 0;
+	char *line = NULL;
+	char **tmp_lines = NULL, **tmp;
+	char *nl = NULL;
+	int rc;
+
+	fp = fdopen(fd, "r");
+	if (fp == NULL)
+		return (0);
+	while (1) {
+		rc = getline(&line, &len, fp);
+		if (rc == -1)
+			break;
+
+		tmp = realloc(tmp_lines, sizeof (*tmp_lines) * (lines_cnt + 1));
+		if (tmp == NULL) {
+			/* Return the lines we were able to process */
+			break;
+		}
+		tmp_lines = tmp;
+
+		/* Terminate newlines */
+		if ((nl = strchr(line, '\n')) != NULL)
+			*nl = '\0';
+		tmp_lines[lines_cnt] = line;
+		lines_cnt++;
+		line = NULL;
+	}
+	fclose(fp);
+	*lines = tmp_lines;
+	return (lines_cnt);
+}
+
+static int
+libzfs_run_process_impl(const char *path, char *argv[], char *env[], int flags,
+    char **lines[], int *lines_cnt)
 {
 	pid_t pid;
 	int error, devnull_fd;
+	int link[2];
+
+	/*
+	 * Setup a pipe between our child and parent process if we're
+	 * reading stdout.
+	 */
+	if ((lines != NULL) && pipe(link) == -1)
+		return (-ESTRPIPE);
 
 	pid = vfork();
 	if (pid == 0) {
+		/* Child process */
 		devnull_fd = open("/dev/null", O_WRONLY);
 
 		if (devnull_fd < 0)
 			_exit(-1);
 
-		if (!(flags & STDOUT_VERBOSE))
+		if (!(flags & STDOUT_VERBOSE) && (lines == NULL))
 			(void) dup2(devnull_fd, STDOUT_FILENO);
+		else if (lines != NULL) {
+			/* Save the output to lines[] */
+			dup2(link[1], STDOUT_FILENO);
+			close(link[0]);
+			close(link[1]);
+		}
 
 		if (!(flags & STDERR_VERBOSE))
 			(void) dup2(devnull_fd, STDERR_FILENO);
 
 		close(devnull_fd);
 
-		(void) execvp(path, argv);
+		if (flags & NO_DEFAULT_PATH) {
+			if (env == NULL)
+				execv(path, argv);
+			else
+				execve(path, argv, env);
+		} else {
+			if (env == NULL)
+				execvp(path, argv);
+			else
+				execvpe(path, argv, env);
+		}
+
 		_exit(-1);
 	} else if (pid > 0) {
+		/* Parent process */
 		int status;
 
 		while ((error = waitpid(pid, &status, 0)) == -1 &&
@@ -757,10 +863,76 @@ libzfs_run_process(const char *path, char *argv[], int flags)
 		if (error < 0 || !WIFEXITED(status))
 			return (-1);
 
+		if (lines != NULL) {
+			close(link[1]);
+			*lines_cnt = libzfs_read_stdout_from_fd(link[0], lines);
+		}
 		return (WEXITSTATUS(status));
 	}
 
 	return (-1);
+}
+
+int
+libzfs_run_process(const char *path, char *argv[], int flags)
+{
+	return (libzfs_run_process_impl(path, argv, NULL, flags, NULL, NULL));
+}
+
+/*
+ * Run a command and store its stdout lines in an array of strings (lines[]).
+ * lines[] is allocated and populated for you, and the number of lines is set in
+ * lines_cnt.  lines[] must be freed after use with libzfs_free_str_array().
+ * All newlines (\n) in lines[] are terminated for convenience.
+ */
+int
+libzfs_run_process_get_stdout(const char *path, char *argv[], char *env[],
+    char **lines[], int *lines_cnt)
+{
+	return (libzfs_run_process_impl(path, argv, env, 0, lines, lines_cnt));
+}
+
+/*
+ * Same as libzfs_run_process_get_stdout(), but run without $PATH set.  This
+ * means that *path needs to be the full path to the executable.
+ */
+int
+libzfs_run_process_get_stdout_nopath(const char *path, char *argv[],
+    char *env[], char **lines[], int *lines_cnt)
+{
+	return (libzfs_run_process_impl(path, argv, env, NO_DEFAULT_PATH,
+	    lines, lines_cnt));
+}
+
+/*
+ * Free an array of strings.  Free both the strings contained in the array and
+ * the array itself.
+ */
+void
+libzfs_free_str_array(char **strs, int count)
+{
+	while (--count >= 0)
+		free(strs[count]);
+
+	free(strs);
+}
+
+/*
+ * Returns 1 if environment variable is set to "YES", "yes", "ON", "on", or
+ * a non-zero number.
+ *
+ * Returns 0 otherwise.
+ */
+int
+libzfs_envvar_is_set(char *envvar)
+{
+	char *env = getenv(envvar);
+	if (env && (strtoul(env, NULL, 0) > 0 ||
+	    (!strncasecmp(env, "YES", 3) && strnlen(env, 4) == 3) ||
+	    (!strncasecmp(env, "ON", 2) && strnlen(env, 3) == 2)))
+		return (1);
+
+	return (0);
 }
 
 /*
