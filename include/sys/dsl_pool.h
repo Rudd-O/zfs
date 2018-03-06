@@ -80,6 +80,7 @@ typedef struct zfs_blkstat {
 
 typedef struct zfs_all_blkstats {
 	zfs_blkstat_t	zab_type[DN_MAX_LEVELS + 1][DMU_OT_TOTAL + 1];
+	kmutex_t	zab_lock;
 } zfs_all_blkstats_t;
 
 
@@ -127,6 +128,7 @@ typedef struct dsl_pool {
 	txg_list_t dp_dirty_dirs;
 	txg_list_t dp_sync_tasks;
 	taskq_t *dp_sync_taskq;
+	taskq_t *dp_zil_clean_taskq;
 
 	/*
 	 * Protects administrative changes (properties, namespace)

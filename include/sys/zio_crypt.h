@@ -32,18 +32,11 @@ struct zbookmark_phys;
 
 #define	WRAPPING_KEY_LEN	32
 #define	WRAPPING_IV_LEN		ZIO_DATA_IV_LEN
-#define	WRAPPING_MAC_LEN	16
-
-#define	SHA1_DIGEST_LEN		20
-#define	SHA512_DIGEST_LEN	64
+#define	WRAPPING_MAC_LEN	ZIO_DATA_MAC_LEN
+#define	MASTER_KEY_MAX_LEN	32
 #define	SHA512_HMAC_KEYLEN	64
 
-#define	MASTER_KEY_MAX_LEN	32
-#define	L2ARC_DEFAULT_CRYPT ZIO_CRYPT_AES_256_CCM
-
-/* utility macros */
-#define	BITS_TO_BYTES(x) ((x + NBBY - 1) / NBBY)
-#define	BYTES_TO_BITS(x) (x * NBBY)
+#define	ZIO_CRYPT_KEY_CURRENT_VERSION	1ULL
 
 typedef enum zio_crypt_type {
 	ZC_TYPE_NONE = 0,
@@ -72,6 +65,9 @@ extern zio_crypt_info_t zio_crypt_table[ZIO_CRYPT_FUNCTIONS];
 typedef struct zio_crypt_key {
 	/* encryption algorithm */
 	uint64_t zk_crypt;
+
+	/* on-disk format version */
+	uint64_t zk_version;
 
 	/* GUID for uniquely identifying this key. Not encrypted on disk. */
 	uint64_t zk_guid;
@@ -113,9 +109,9 @@ int zio_crypt_key_get_salt(zio_crypt_key_t *key, uint8_t *salt_out);
 
 int zio_crypt_key_wrap(crypto_key_t *cwkey, zio_crypt_key_t *key, uint8_t *iv,
     uint8_t *mac, uint8_t *keydata_out, uint8_t *hmac_keydata_out);
-int zio_crypt_key_unwrap(crypto_key_t *cwkey, uint64_t crypt, uint64_t guid,
-    uint8_t *keydata, uint8_t *hmac_keydata, uint8_t *iv, uint8_t *mac,
-    zio_crypt_key_t *key);
+int zio_crypt_key_unwrap(crypto_key_t *cwkey, uint64_t crypt, uint64_t version,
+    uint64_t guid, uint8_t *keydata, uint8_t *hmac_keydata, uint8_t *iv,
+    uint8_t *mac, zio_crypt_key_t *key);
 int zio_crypt_generate_iv(uint8_t *ivbuf);
 int zio_crypt_generate_iv_salt_dedup(zio_crypt_key_t *key, uint8_t *data,
     uint_t datalen, uint8_t *ivbuf, uint8_t *salt);
@@ -133,7 +129,7 @@ int zio_crypt_do_indirect_mac_checksum(boolean_t generate, void *buf,
 int zio_crypt_do_indirect_mac_checksum_abd(boolean_t generate, abd_t *abd,
     uint_t datalen, boolean_t byteswap, uint8_t *cksum);
 int zio_crypt_do_hmac(zio_crypt_key_t *key, uint8_t *data, uint_t datalen,
-    uint8_t *digestbuf);
+    uint8_t *digestbuf, uint_t digestlen);
 int zio_crypt_do_objset_hmacs(zio_crypt_key_t *key, void *data, uint_t datalen,
     boolean_t byteswap, uint8_t *portable_mac, uint8_t *local_mac);
 int zio_do_crypt_data(boolean_t encrypt, zio_crypt_key_t *key, uint8_t *salt,

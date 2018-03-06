@@ -41,6 +41,8 @@ FILEDIR=${FILEDIR:-/var/tmp}
 DISKS=${DISKS:-""}
 SINGLETEST=()
 SINGLETESTUSER="root"
+TAGS=""
+ITERATIONS=1
 ZFS_DBGMSG="$STF_SUITE/callbacks/zfs_dbgmsg.ksh"
 ZFS_DMESG="$STF_SUITE/callbacks/zfs_dmesg.ksh"
 ZFS_MMP="$STF_SUITE/callbacks/zfs_mmp.ksh"
@@ -265,10 +267,12 @@ OPTIONS:
 	-k          Disable cleanup after test failure
 	-f          Use files only, disables block device tests
 	-c          Only create and populate constrained path
+	-I NUM      Number of iterations
 	-d DIR      Use DIR for files and loopback devices
 	-s SIZE     Use vdevs of SIZE (default: 4G)
 	-r RUNFILE  Run tests in RUNFILE (default: linux.run)
 	-t PATH     Run single test at PATH relative to test suite
+	-T TAGS     Comma separated list of tags (default: 'functional')
 	-u USER     Run single test as USER (default: root)
 
 EXAMPLES:
@@ -285,7 +289,7 @@ $0 -x
 EOF
 }
 
-while getopts 'hvqxkfcd:s:r:?t:u:' OPTION; do
+while getopts 'hvqxkfcd:s:r:?t:T:u:I:' OPTION; do
 	case $OPTION in
 	h)
 		usage
@@ -314,6 +318,12 @@ while getopts 'hvqxkfcd:s:r:?t:u:' OPTION; do
 	d)
 		FILEDIR="$OPTARG"
 		;;
+	I)
+		ITERATIONS="$OPTARG"
+		if [ "$ITERATIONS" -le 0 ]; then
+			fail "Iterations must be greater than 0."
+		fi
+		;;
 	s)
 		FILESIZE="$OPTARG"
 		;;
@@ -325,6 +335,9 @@ while getopts 'hvqxkfcd:s:r:?t:u:' OPTION; do
 			fail "-t can only be provided once."
 		fi
 		SINGLETEST+=("$OPTARG")
+		;;
+	T)
+		TAGS="$OPTARG"
 		;;
 	u)
 		SINGLETESTUSER="$OPTARG"
@@ -342,6 +355,9 @@ FILES=${FILES:-"$FILEDIR/file-vdev0 $FILEDIR/file-vdev1 $FILEDIR/file-vdev2"}
 LOOPBACKS=${LOOPBACKS:-""}
 
 if [ ${#SINGLETEST[@]} -ne 0 ]; then
+	if [ -n "$TAGS" ]; then
+		fail "-t and -T are mutually exclusive."
+	fi
 	RUNFILE_DIR="/var/tmp"
 	RUNFILE="zfs-tests.$$.run"
 	SINGLEQUIET="False"
@@ -382,9 +398,15 @@ EOF
 tests = ['$SINGLETESTFILE']
 pre = $SETUPSCRIPT
 post = $CLEANUPSCRIPT
+tags = ['functional']
 EOF
 	done
 fi
+
+#
+# Use default tag if none was specified
+#
+TAGS=${TAGS:='functional'}
 
 #
 # Attempt to locate the runfile describing the test workload.
@@ -438,15 +460,28 @@ fi
 
 #
 # By default preserve any existing pools
+# NOTE: Since 'zpool list' outputs a newline-delimited list convert $KEEP from
+# space-delimited to newline-delimited.
 #
 if [ -z "${KEEP}" ]; then
-	KEEP=$(sudo "$ZPOOL" list -H -o name)
+	KEEP="$(sudo "$ZPOOL" list -H -o name)"
 	if [ -z "${KEEP}" ]; then
 		KEEP="rpool"
 	fi
+else
+	KEEP="$(echo -e "${KEEP//[[:blank:]]/\n}")"
 fi
 
-__ZFS_POOL_EXCLUDE="$(echo $KEEP | sed ':a;N;s/\n/ /g;ba')"
+#
+# NOTE: The following environment variables are undocumented
+# and should be used for testing purposes only:
+#
+# __ZFS_POOL_EXCLUDE - don't iterate over the pools it lists
+# __ZFS_POOL_RESTRICT - iterate only over the pools it lists
+#
+# See libzfs/libzfs_config.c for more information.
+#
+__ZFS_POOL_EXCLUDE="$(echo "$KEEP" | sed ':a;N;s/\n/ /g;ba')"
 
 . "$STF_SUITE/include/default.cfg"
 
@@ -516,6 +551,8 @@ msg "LOOPBACKS:       $LOOPBACKS"
 msg "DISKS:           $DISKS"
 msg "NUM_DISKS:       $NUM_DISKS"
 msg "FILESIZE:        $FILESIZE"
+msg "ITERATIONS:      $ITERATIONS"
+msg "TAGS:            $TAGS"
 msg "Keep pool(s):    $KEEP"
 msg "Missing util(s): $STF_MISSING_BIN"
 msg ""
@@ -524,13 +561,16 @@ export STF_TOOLS
 export STF_SUITE
 export STF_PATH
 export DISKS
+export FILEDIR
 export KEEP
 export __ZFS_POOL_EXCLUDE
 export TESTFAIL_CALLBACKS
 export PATH=$STF_PATH
 
-msg "${TEST_RUNNER} ${QUIET} -c ${RUNFILE} -i ${STF_SUITE}"
-${TEST_RUNNER} ${QUIET} -c "${RUNFILE}" -i "${STF_SUITE}"
+msg "${TEST_RUNNER} ${QUIET} -c ${RUNFILE} -T ${TAGS} -i ${STF_SUITE}" \
+    "-I ${ITERATIONS}"
+${TEST_RUNNER} ${QUIET} -c "${RUNFILE}" -T "${TAGS}" -i "${STF_SUITE}" \
+    -I "${ITERATIONS}"
 RESULT=$?
 echo
 

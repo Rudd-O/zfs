@@ -219,6 +219,7 @@ def print_values():
             sep
         ))
     sys.stdout.write("\n")
+    sys.stdout.flush()
 
 
 def print_header():
@@ -238,7 +239,7 @@ def get_terminal_lines():
         data = fcntl.ioctl(sys.stdout.fileno(), termios.TIOCGWINSZ, '1234')
         sz = struct.unpack('hh', data)
         return sz[0]
-    except:
+    except Exception:
         pass
 
 
@@ -279,7 +280,7 @@ def init():
                 "outfile",
                 "help",
                 "verbose",
-                "seperator",
+                "separator",
                 "columns"
             ]
         )
@@ -298,7 +299,7 @@ def init():
             hflag = True
         if opt in ('-v', '--verbose'):
             vflag = True
-        if opt in ('-s', '--seperator'):
+        if opt in ('-s', '--separator'):
             sep = arg
             i += 1
         if opt in ('-f', '--columns'):

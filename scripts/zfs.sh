@@ -26,6 +26,7 @@ KMOD_ZAVL=${KMOD_ZAVL:-zavl}
 KMOD_ZNVPAIR=${KMOD_ZNVPAIR:-znvpair}
 KMOD_ZUNICODE=${KMOD_ZUNICODE:-zunicode}
 KMOD_ZCOMMON=${KMOD_ZCOMMON:-zcommon}
+KMOD_ZLUA=${KMOD_ZLUA:-zlua}
 KMOD_ICP=${KMOD_ICP:-icp}
 KMOD_ZFS=${KMOD_ZFS:-zfs}
 
@@ -72,14 +73,14 @@ kill_zed() {
 }
 
 check_modules() {
-	local LOADED_MODULES=""
-	local MISSING_MODULES=""
+	LOADED_MODULES=""
+	MISSING_MODULES=""
 
 	for KMOD in $KMOD_SPL $KMOD_SPLAT $KMOD_ZAVL $KMOD_ZNVPAIR \
-	    $KMOD_ZUNICODE $KMOD_ZCOMMON $KMOD_ICP $KMOD_ZFS; do
+	    $KMOD_ZUNICODE $KMOD_ZCOMMON $KMOD_ZLUA $KMOD_ICP $KMOD_ZFS; do
 		NAME=$(basename "$KMOD" .ko)
 
-		if lsmod | egrep -q "^${NAME}"; then
+		if lsmod | grep -E -q "^${NAME}"; then
 			LOADED_MODULES="$LOADED_MODULES\t$NAME\n"
 		fi
 
@@ -104,7 +105,7 @@ check_modules() {
 }
 
 load_module() {
-	local KMOD=$1
+	KMOD=$1
 
 	FILE=$(modinfo "$KMOD" | awk '/^filename:/ {print $2}')
 	VERSION=$(modinfo "$KMOD" | awk '/^version:/ {print $2}')
@@ -114,6 +115,7 @@ load_module() {
 	fi
 
 	$LDMOD "$KMOD" >/dev/null 2>&1
+	# shellcheck disable=SC2181
 	if [ $? -ne 0 ]; then
 		echo "Failed to load $KMOD"
 		return 1
@@ -134,7 +136,7 @@ load_modules() {
 	fi
 
 	for KMOD in $KMOD_SPL $KMOD_SPLAT $KMOD_ZAVL $KMOD_ZNVPAIR \
-	    $KMOD_ZUNICODE $KMOD_ZCOMMON $KMOD_ICP $KMOD_ZFS; do
+	    $KMOD_ZUNICODE $KMOD_ZCOMMON $KMOD_ZLUA $KMOD_ICP $KMOD_ZFS; do
 		load_module "$KMOD" || return 1
 	done
 
@@ -146,7 +148,7 @@ load_modules() {
 }
 
 unload_module() {
-	local KMOD=$1
+	KMOD=$1
 
 	NAME=$(basename "$KMOD" .ko)
 	FILE=$(modinfo "$KMOD" | awk '/^filename:/ {print $2}')
@@ -162,10 +164,10 @@ unload_module() {
 }
 
 unload_modules() {
-	for KMOD in $KMOD_ZFS $KMOD_ICP $KMOD_ZCOMMON $KMOD_ZUNICODE \
+	for KMOD in $KMOD_ZFS $KMOD_ICP $KMOD_ZLUA $KMOD_ZCOMMON $KMOD_ZUNICODE \
 	    $KMOD_ZNVPAIR  $KMOD_ZAVL $KMOD_SPLAT $KMOD_SPL; do
 		NAME=$(basename "$KMOD" .ko)
-		USE_COUNT=$(lsmod | egrep "^${NAME} " | awk '{print $3}')
+		USE_COUNT=$(lsmod | grep -E "^${NAME} " | awk '{print $3}')
 
 		if [ "$USE_COUNT" = "0" ] ; then
 			unload_module "$KMOD" || return 1
@@ -188,8 +190,8 @@ unload_modules() {
 }
 
 stack_clear() {
-	local STACK_MAX_SIZE=/sys/kernel/debug/tracing/stack_max_size
-	local STACK_TRACER_ENABLED=/proc/sys/kernel/stack_tracer_enabled
+	STACK_MAX_SIZE=/sys/kernel/debug/tracing/stack_max_size
+	STACK_TRACER_ENABLED=/proc/sys/kernel/stack_tracer_enabled
 
 	if [ -e "$STACK_MAX_SIZE" ]; then
 		echo 1 >"$STACK_TRACER_ENABLED"
@@ -198,9 +200,9 @@ stack_clear() {
 }
 
 stack_check() {
-	local STACK_MAX_SIZE=/sys/kernel/debug/tracing/stack_max_size
-	local STACK_TRACE=/sys/kernel/debug/tracing/stack_trace
-	local STACK_LIMIT=7600
+	STACK_MAX_SIZE=/sys/kernel/debug/tracing/stack_max_size
+	STACK_TRACE=/sys/kernel/debug/tracing/stack_trace
+	STACK_LIMIT=7600
 
 	if [ -e "$STACK_MAX_SIZE" ]; then
 		STACK_SIZE=$(cat "$STACK_MAX_SIZE")

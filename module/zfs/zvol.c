@@ -202,7 +202,7 @@ static zvol_state_t *
 zvol_find_by_name_hash(const char *name, uint64_t hash, int mode)
 {
 	zvol_state_t *zv;
-	struct hlist_node *p;
+	struct hlist_node *p = NULL;
 
 	mutex_enter(&zvol_state_lock);
 	hlist_for_each(p, ZVOL_HT_HEAD(hash)) {
@@ -578,8 +578,10 @@ zvol_set_volblocksize(const char *name, uint64_t volblocksize)
  * implement DKIOCFREE/free-long-range.
  */
 static int
-zvol_replay_truncate(zvol_state_t *zv, lr_truncate_t *lr, boolean_t byteswap)
+zvol_replay_truncate(void *arg1, void *arg2, boolean_t byteswap)
 {
+	zvol_state_t *zv = arg1;
+	lr_truncate_t *lr = arg2;
 	uint64_t offset, length;
 
 	if (byteswap)
@@ -596,8 +598,10 @@ zvol_replay_truncate(zvol_state_t *zv, lr_truncate_t *lr, boolean_t byteswap)
  * after a system failure
  */
 static int
-zvol_replay_write(zvol_state_t *zv, lr_write_t *lr, boolean_t byteswap)
+zvol_replay_write(void *arg1, void *arg2, boolean_t byteswap)
 {
+	zvol_state_t *zv = arg1;
+	lr_write_t *lr = arg2;
 	objset_t *os = zv->zv_objset;
 	char *data = (char *)(lr + 1);  /* data follows lr_write_t */
 	uint64_t offset, length;
@@ -633,7 +637,7 @@ zvol_replay_write(zvol_state_t *zv, lr_write_t *lr, boolean_t byteswap)
 }
 
 static int
-zvol_replay_err(zvol_state_t *zv, lr_t *lr, boolean_t byteswap)
+zvol_replay_err(void *arg1, void *arg2, boolean_t byteswap)
 {
 	return (SET_ERROR(ENOTSUP));
 }
@@ -642,20 +646,26 @@ zvol_replay_err(zvol_state_t *zv, lr_t *lr, boolean_t byteswap)
  * Callback vectors for replaying records.
  * Only TX_WRITE and TX_TRUNCATE are needed for zvol.
  */
-zil_replay_func_t zvol_replay_vector[TX_MAX_TYPE] = {
-	(zil_replay_func_t)zvol_replay_err,	/* no such transaction type */
-	(zil_replay_func_t)zvol_replay_err,	/* TX_CREATE */
-	(zil_replay_func_t)zvol_replay_err,	/* TX_MKDIR */
-	(zil_replay_func_t)zvol_replay_err,	/* TX_MKXATTR */
-	(zil_replay_func_t)zvol_replay_err,	/* TX_SYMLINK */
-	(zil_replay_func_t)zvol_replay_err,	/* TX_REMOVE */
-	(zil_replay_func_t)zvol_replay_err,	/* TX_RMDIR */
-	(zil_replay_func_t)zvol_replay_err,	/* TX_LINK */
-	(zil_replay_func_t)zvol_replay_err,	/* TX_RENAME */
-	(zil_replay_func_t)zvol_replay_write,	/* TX_WRITE */
-	(zil_replay_func_t)zvol_replay_truncate, /* TX_TRUNCATE */
-	(zil_replay_func_t)zvol_replay_err,	/* TX_SETATTR */
-	(zil_replay_func_t)zvol_replay_err,	/* TX_ACL */
+zil_replay_func_t *zvol_replay_vector[TX_MAX_TYPE] = {
+	zvol_replay_err,	/* no such transaction type */
+	zvol_replay_err,	/* TX_CREATE */
+	zvol_replay_err,	/* TX_MKDIR */
+	zvol_replay_err,	/* TX_MKXATTR */
+	zvol_replay_err,	/* TX_SYMLINK */
+	zvol_replay_err,	/* TX_REMOVE */
+	zvol_replay_err,	/* TX_RMDIR */
+	zvol_replay_err,	/* TX_LINK */
+	zvol_replay_err,	/* TX_RENAME */
+	zvol_replay_write,	/* TX_WRITE */
+	zvol_replay_truncate,	/* TX_TRUNCATE */
+	zvol_replay_err,	/* TX_SETATTR */
+	zvol_replay_err,	/* TX_ACL */
+	zvol_replay_err,	/* TX_CREATE_ATTR */
+	zvol_replay_err,	/* TX_CREATE_ACL_ATTR */
+	zvol_replay_err,	/* TX_MKDIR_ACL */
+	zvol_replay_err,	/* TX_MKDIR_ATTR */
+	zvol_replay_err,	/* TX_MKDIR_ACL_ATTR */
+	zvol_replay_err,	/* TX_WRITE2 */
 };
 
 /*
@@ -761,7 +771,8 @@ zvol_write(void *arg)
 	ASSERT(zv && zv->zv_open_count > 0);
 
 	start_jif = jiffies;
-	generic_start_io_acct(WRITE, bio_sectors(bio), &zv->zv_disk->part0);
+	blk_generic_start_io_acct(zv->zv_queue, WRITE, bio_sectors(bio),
+	    &zv->zv_disk->part0);
 
 	sync = bio_is_fua(bio) || zv->zv_objset->os_sync == ZFS_SYNC_ALWAYS;
 
@@ -794,7 +805,8 @@ zvol_write(void *arg)
 		zil_commit(zv->zv_zilog, ZVOL_OBJ);
 
 	rw_exit(&zv->zv_suspend_lock);
-	generic_end_io_acct(WRITE, &zv->zv_disk->part0, start_jif);
+	blk_generic_end_io_acct(zv->zv_queue, WRITE, &zv->zv_disk->part0,
+	    start_jif);
 	BIO_END_IO(bio, -error);
 	kmem_free(zvr, sizeof (zv_request_t));
 }
@@ -840,7 +852,8 @@ zvol_discard(void *arg)
 	ASSERT(zv && zv->zv_open_count > 0);
 
 	start_jif = jiffies;
-	generic_start_io_acct(WRITE, bio_sectors(bio), &zv->zv_disk->part0);
+	blk_generic_start_io_acct(zv->zv_queue, WRITE, bio_sectors(bio),
+	    &zv->zv_disk->part0);
 
 	sync = bio_is_fua(bio) || zv->zv_objset->os_sync == ZFS_SYNC_ALWAYS;
 
@@ -881,7 +894,8 @@ unlock:
 		zil_commit(zv->zv_zilog, ZVOL_OBJ);
 
 	rw_exit(&zv->zv_suspend_lock);
-	generic_end_io_acct(WRITE, &zv->zv_disk->part0, start_jif);
+	blk_generic_end_io_acct(zv->zv_queue, WRITE, &zv->zv_disk->part0,
+	    start_jif);
 	BIO_END_IO(bio, -error);
 	kmem_free(zvr, sizeof (zv_request_t));
 }
@@ -902,7 +916,8 @@ zvol_read(void *arg)
 	ASSERT(zv && zv->zv_open_count > 0);
 
 	start_jif = jiffies;
-	generic_start_io_acct(READ, bio_sectors(bio), &zv->zv_disk->part0);
+	blk_generic_start_io_acct(zv->zv_queue, READ, bio_sectors(bio),
+	    &zv->zv_disk->part0);
 
 	while (uio.uio_resid > 0 && uio.uio_loffset < volsize) {
 		uint64_t bytes = MIN(uio.uio_resid, DMU_MAX_ACCESS >> 1);
@@ -922,7 +937,8 @@ zvol_read(void *arg)
 	zfs_range_unlock(zvr->rl);
 
 	rw_exit(&zv->zv_suspend_lock);
-	generic_end_io_acct(READ, &zv->zv_disk->part0, start_jif);
+	blk_generic_end_io_acct(zv->zv_queue, READ, &zv->zv_disk->part0,
+	    start_jif);
 	BIO_END_IO(bio, -error);
 	kmem_free(zvr, sizeof (zv_request_t));
 }
@@ -1036,7 +1052,7 @@ zvol_get_done(zgd_t *zgd, int error)
 	zfs_range_unlock(zgd->zgd_rl);
 
 	if (error == 0 && zgd->zgd_bp)
-		zil_add_block(zgd->zgd_zilog, zgd->zgd_bp);
+		zil_lwb_add_block(zgd->zgd_lwb, zgd->zgd_bp);
 
 	kmem_free(zgd, sizeof (zgd_t));
 }
@@ -1045,7 +1061,7 @@ zvol_get_done(zgd_t *zgd, int error)
  * Get data to generate a TX_WRITE intent log record.
  */
 static int
-zvol_get_data(void *arg, lr_write_t *lr, char *buf, zio_t *zio)
+zvol_get_data(void *arg, lr_write_t *lr, char *buf, struct lwb *lwb, zio_t *zio)
 {
 	zvol_state_t *zv = arg;
 	uint64_t offset = lr->lr_offset;
@@ -1054,11 +1070,12 @@ zvol_get_data(void *arg, lr_write_t *lr, char *buf, zio_t *zio)
 	zgd_t *zgd;
 	int error;
 
-	ASSERT(zio != NULL);
-	ASSERT(size != 0);
+	ASSERT3P(lwb, !=, NULL);
+	ASSERT3P(zio, !=, NULL);
+	ASSERT3U(size, !=, 0);
 
 	zgd = (zgd_t *)kmem_zalloc(sizeof (zgd_t), KM_SLEEP);
-	zgd->zgd_zilog = zv->zv_zilog;
+	zgd->zgd_lwb = lwb;
 
 	/*
 	 * Write records come in two flavors: immediate and indirect.
@@ -1272,10 +1289,11 @@ zvol_resume(zvol_state_t *zv)
 }
 
 static int
-zvol_first_open(zvol_state_t *zv)
+zvol_first_open(zvol_state_t *zv, boolean_t readonly)
 {
 	objset_t *os;
 	int error, locked = 0;
+	boolean_t ro;
 
 	ASSERT(RW_READ_HELD(&zv->zv_suspend_lock));
 	ASSERT(MUTEX_HELD(&zv->zv_state_lock));
@@ -1304,8 +1322,8 @@ zvol_first_open(zvol_state_t *zv)
 			return (-SET_ERROR(ERESTARTSYS));
 	}
 
-	/* lie and say we're read-only */
-	error = dmu_objset_own(zv->zv_name, DMU_OST_ZVOL, 1, 1, zv, &os);
+	ro = (readonly || (strchr(zv->zv_name, '@') != NULL));
+	error = dmu_objset_own(zv->zv_name, DMU_OST_ZVOL, ro, B_TRUE, zv, &os);
 	if (error)
 		goto out_mutex;
 
@@ -1384,7 +1402,7 @@ zvol_open(struct block_device *bdev, fmode_t flag)
 	ASSERT(zv->zv_open_count != 0 || RW_READ_HELD(&zv->zv_suspend_lock));
 
 	if (zv->zv_open_count == 0) {
-		error = zvol_first_open(zv);
+		error = zvol_first_open(zv, !(flag & FMODE_WRITE));
 		if (error)
 			goto out_mutex;
 	}
@@ -1571,7 +1589,7 @@ zvol_probe(dev_t dev, int *part, void *arg)
 	struct kobject *kobj;
 
 	zv = zvol_find_by_dev(dev);
-	kobj = zv ? get_disk(zv->zv_disk) : NULL;
+	kobj = zv ? get_disk_and_module(zv->zv_disk) : NULL;
 	ASSERT(zv == NULL || MUTEX_HELD(&zv->zv_state_lock));
 	if (zv)
 		mutex_exit(&zv->zv_state_lock);

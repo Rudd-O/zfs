@@ -27,6 +27,7 @@
  * Copyright (c) 2016, Intel Corporation.
  * Copyright 2016 Nexenta Systems, Inc.
  * Copyright (c) 2017 Datto Inc.
+ * Copyright (c) 2017 Open-E, Inc. All Rights Reserved.
  */
 
 #ifndef	_LIBZFS_H
@@ -266,7 +267,7 @@ typedef struct splitflags {
 extern int zpool_scan(zpool_handle_t *, pool_scan_func_t, pool_scrub_cmd_t);
 extern int zpool_clear(zpool_handle_t *, const char *, nvlist_t *);
 extern int zpool_reguid(zpool_handle_t *);
-extern int zpool_reopen(zpool_handle_t *);
+extern int zpool_reopen_one(zpool_handle_t *, void *);
 
 extern int zpool_sync_one(zpool_handle_t *, void *);
 
@@ -502,6 +503,7 @@ extern uint64_t zfs_prop_get_int(zfs_handle_t *, zfs_prop_t);
 extern int zfs_prop_inherit(zfs_handle_t *, const char *, boolean_t);
 extern const char *zfs_prop_values(zfs_prop_t);
 extern int zfs_prop_is_string(zfs_prop_t prop);
+extern nvlist_t *zfs_get_all_props(zfs_handle_t *);
 extern nvlist_t *zfs_get_user_props(zfs_handle_t *);
 extern nvlist_t *zfs_get_recvd_props(zfs_handle_t *);
 extern nvlist_t *zfs_get_clones_nvl(zfs_handle_t *);
@@ -671,6 +673,9 @@ typedef struct sendflags {
 
 	/* raw encrypted records are permitted */
 	boolean_t raw;
+
+	/* only send received properties (ie. -b) */
+	boolean_t backup;
 } sendflags_t;
 
 typedef boolean_t (snapfilter_cb_t)(zfs_handle_t *, void *);
@@ -871,17 +876,6 @@ int zfs_smb_acl_rename(libzfs_handle_t *, char *, char *, char *, char *);
  */
 extern int zpool_enable_datasets(zpool_handle_t *, const char *, int);
 extern int zpool_disable_datasets(zpool_handle_t *, boolean_t);
-
-/*
- * Mappings between vdev and FRU.
- */
-extern void libzfs_fru_refresh(libzfs_handle_t *);
-extern const char *libzfs_fru_lookup(libzfs_handle_t *, const char *);
-extern const char *libzfs_fru_devpath(libzfs_handle_t *, const char *);
-extern boolean_t libzfs_fru_compare(libzfs_handle_t *, const char *,
-    const char *);
-extern boolean_t libzfs_fru_notself(libzfs_handle_t *, const char *);
-extern int zpool_fru_set(zpool_handle_t *, uint64_t, const char *);
 
 /*
  * Support for Linux libudev derived persistent device strings

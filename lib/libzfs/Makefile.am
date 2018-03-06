@@ -5,6 +5,9 @@ VPATH = \
 	$(top_srcdir)/module/zcommon \
 	$(top_srcdir)/lib/libzfs
 
+# Suppress unused but set variable warnings often due to ASSERTs
+AM_CFLAGS += $(NO_UNUSED_BUT_SET_VARIABLE)
+
 libzfs_pcdir = $(datarootdir)/pkgconfig
 libzfs_pc_DATA = libzfs.pc libzfs_core.pc
 
@@ -21,7 +24,6 @@ USER_C = \
 	libzfs_crypto.c \
 	libzfs_dataset.c \
 	libzfs_diff.c \
-	libzfs_fru.c \
 	libzfs_import.c \
 	libzfs_iter.c \
 	libzfs_mount.c \
@@ -31,6 +33,7 @@ USER_C = \
 	libzfs_util.c
 
 KERNEL_C = \
+	algs/sha2/sha2.c \
 	zfeature_common.c \
 	zfs_comutil.c \
 	zfs_deleg.c \
@@ -53,15 +56,13 @@ nodist_libzfs_la_SOURCES = \
 
 libzfs_la_LIBADD = \
         $(top_builddir)/lib/libefi/libefi.la \
-	$(top_builddir)/lib/libicp/libicp.la \
 	$(top_builddir)/lib/libnvpair/libnvpair.la \
 	$(top_builddir)/lib/libshare/libshare.la \
 	$(top_builddir)/lib/libtpool/libtpool.la \
 	$(top_builddir)/lib/libuutil/libuutil.la \
-	$(top_builddir)/lib/libzpool/libzpool.la \
 	$(top_builddir)/lib/libzfs_core/libzfs_core.la
 
-libzfs_la_LIBADD += -lm $(LIBBLKID) $(LIBUDEV)
+libzfs_la_LIBADD += -lm $(LIBBLKID) $(LIBUDEV) $(LIBSSL)
 libzfs_la_LDFLAGS = -version-info 2:0:0
 
 EXTRA_DIST = $(libzfs_pc_DATA) $(USER_C)

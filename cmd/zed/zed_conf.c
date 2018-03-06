@@ -155,6 +155,8 @@ _zed_conf_display_help(const char *prog, int got_err)
 	    "Run daemon in the foreground.");
 	fprintf(fp, "%*c%*s %s\n", w1, 0x20, -w2, "-M",
 	    "Lock all pages in memory.");
+	fprintf(fp, "%*c%*s %s\n", w1, 0x20, -w2, "-P",
+	    "$PATH for ZED to use (only used by ZTS).");
 	fprintf(fp, "%*c%*s %s\n", w1, 0x20, -w2, "-Z",
 	    "Zero state file.");
 	fprintf(fp, "\n");
@@ -247,7 +249,7 @@ _zed_conf_parse_path(char **resultp, const char *path)
 void
 zed_conf_parse_opts(struct zed_conf *zcp, int argc, char **argv)
 {
-	const char * const opts = ":hLVc:d:p:s:vfFMZ";
+	const char * const opts = ":hLVc:d:p:P:s:vfFMZ";
 	int opt;
 
 	if (!zcp || !argv || !argv[0])
@@ -274,6 +276,9 @@ zed_conf_parse_opts(struct zed_conf *zcp, int argc, char **argv)
 			break;
 		case 'p':
 			_zed_conf_parse_path(&zcp->pid_file, optarg);
+			break;
+		case 'P':
+			_zed_conf_parse_path(&zcp->path, optarg);
 			break;
 		case 's':
 			_zed_conf_parse_path(&zcp->state_file, optarg);
@@ -394,13 +399,13 @@ zed_conf_scan_dir(struct zed_conf *zcp)
 			    direntp->d_name);
 			continue;
 		}
-		if ((st.st_mode & S_IWGRP) & !zcp->do_force) {
+		if ((st.st_mode & S_IWGRP) && !zcp->do_force) {
 			zed_log_msg(LOG_NOTICE,
 			    "Ignoring \"%s\": writable by group",
 			    direntp->d_name);
 			continue;
 		}
-		if ((st.st_mode & S_IWOTH) & !zcp->do_force) {
+		if ((st.st_mode & S_IWOTH) && !zcp->do_force) {
 			zed_log_msg(LOG_NOTICE,
 			    "Ignoring \"%s\": writable by other",
 			    direntp->d_name);
