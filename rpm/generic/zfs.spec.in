@@ -272,7 +272,7 @@ image which is ZFS aware.
 %endif
 
 %if 0%{?_systemd}
-    %define systemd --enable-systemd --with-systemdunitdir=%{_unitdir} --with-systemdpresetdir=%{_presetdir} --with-systemdgeneratordir=%{_generatordir} --disable-sysvinit
+    %define systemd --enable-systemd --with-systemdunitdir=%{_unitdir} --with-systemdpresetdir=%{_presetdir} --with-systemdgeneratordir=%{_systemdgeneratordir} --disable-sysvinit
     %define systemd_svcs zfs-import-cache.service zfs-import-scan.service zfs-mount.service zfs-share.service zfs-zed.service zfs.target zfs-import.target
 %else
     %define systemd --enable-sysvinit --disable-systemd
@@ -371,7 +371,7 @@ systemctl --system daemon-reload >/dev/null || true
 /usr/lib/modules-load.d/*
 %{_unitdir}/*
 %{_presetdir}/*
-%{_generatordir}/*
+%{_systemdgeneratordir}/*
 %else
 %config(noreplace) %{_sysconfdir}/init.d/*
 %config(noreplace) %{_initconfdir}/zfs
