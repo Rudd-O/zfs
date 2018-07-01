@@ -449,6 +449,10 @@ zio_decrypt(zio_t *zio, abd_t *data, uint64_t size)
 		}
 		abd_copy(data, zio->io_abd, size);
 
+		if (zio_injection_enabled && ot != DMU_OT_DNODE && ret == 0) {
+			ret = zio_handle_decrypt_injection(spa,
+			    &zio->io_bookmark, ot, ECKSUM);
+		}
 		if (ret != 0)
 			goto error;
 
@@ -468,6 +472,10 @@ zio_decrypt(zio_t *zio, abd_t *data, uint64_t size)
 			zio_crypt_decode_mac_bp(bp, mac);
 			ret = spa_do_crypt_mac_abd(B_FALSE, spa, dsobj,
 			    zio->io_abd, size, mac);
+			if (zio_injection_enabled && ret == 0) {
+				ret = zio_handle_decrypt_injection(spa,
+				    &zio->io_bookmark, ot, ECKSUM);
+			}
 		}
 		abd_copy(data, zio->io_abd, size);
 
@@ -487,8 +495,9 @@ zio_decrypt(zio_t *zio, abd_t *data, uint64_t size)
 		zio_crypt_decode_mac_bp(bp, mac);
 	}
 
-	ret = spa_do_crypt_abd(B_FALSE, spa, dsobj, bp, bp->blk_birth,
-	    size, data, zio->io_abd, iv, mac, salt, &no_crypt);
+	ret = spa_do_crypt_abd(B_FALSE, spa, &zio->io_bookmark, BP_GET_TYPE(bp),
+	    BP_GET_DEDUP(bp), BP_SHOULD_BYTESWAP(bp), salt, iv, mac, size, data,
+	    zio->io_abd, &no_crypt);
 	if (no_crypt)
 		abd_copy(data, zio->io_abd, size);
 
@@ -499,15 +508,16 @@ zio_decrypt(zio_t *zio, abd_t *data, uint64_t size)
 
 error:
 	/* assert that the key was found unless this was speculative */
-	ASSERT(ret != ENOENT || (zio->io_flags & ZIO_FLAG_SPECULATIVE));
+	ASSERT(ret != EACCES || (zio->io_flags & ZIO_FLAG_SPECULATIVE));
 
 	/*
 	 * If there was a decryption / authentication error return EIO as
 	 * the io_error. If this was not a speculative zio, create an ereport.
 	 */
 	if (ret == ECKSUM) {
-		ret = SET_ERROR(EIO);
+		zio->io_error = SET_ERROR(EIO);
 		if ((zio->io_flags & ZIO_FLAG_SPECULATIVE) == 0) {
+			spa_log_error(spa, &zio->io_bookmark);
 			zfs_ereport_post(FM_EREPORT_ZFS_AUTHENTICATION,
 			    spa, NULL, &zio->io_bookmark, zio, 0, 0);
 		}
@@ -869,6 +879,13 @@ zfs_blkptr_verify(spa_t *spa, const blkptr_t *bp)
 	}
 
 	/*
+	 * Do not verify individual DVAs if the config is not trusted. This
+	 * will be done once the zio is executed in vdev_mirror_map_alloc.
+	 */
+	if (!spa->spa_trust_config)
+		return;
+
+	/*
 	 * Pool-specific checks.
 	 *
 	 * Note: it would be nice to verify that the blk_birth and
@@ -916,6 +933,36 @@ zfs_blkptr_verify(spa_t *spa, const blkptr_t *bp)
 			    bp, i, (longlong_t)offset);
 		}
 	}
+}
+
+boolean_t
+zfs_dva_valid(spa_t *spa, const dva_t *dva, const blkptr_t *bp)
+{
+	uint64_t vdevid = DVA_GET_VDEV(dva);
+
+	if (vdevid >= spa->spa_root_vdev->vdev_children)
+		return (B_FALSE);
+
+	vdev_t *vd = spa->spa_root_vdev->vdev_child[vdevid];
+	if (vd == NULL)
+		return (B_FALSE);
+
+	if (vd->vdev_ops == &vdev_hole_ops)
+		return (B_FALSE);
+
+	if (vd->vdev_ops == &vdev_missing_ops) {
+		return (B_FALSE);
+	}
+
+	uint64_t offset = DVA_GET_OFFSET(dva);
+	uint64_t asize = DVA_GET_ASIZE(dva);
+
+	if (BP_IS_GANG(bp))
+		asize = vdev_psize_to_asize(vd, SPA_GANGBLOCKSIZE);
+	if (offset + asize > vd->vdev_asize)
+		return (B_FALSE);
+
+	return (B_TRUE);
 }
 
 zio_t *
@@ -1018,6 +1065,8 @@ void
 zio_free(spa_t *spa, uint64_t txg, const blkptr_t *bp)
 {
 
+	zfs_blkptr_verify(spa, bp);
+
 	/*
 	 * The check for EMBEDDED is a performance optimization.  We
 	 * process the free here (by ignoring it) rather than
@@ -1081,7 +1130,7 @@ zio_claim(zio_t *pio, spa_t *spa, uint64_t txg, const blkptr_t *bp,
 {
 	zio_t *zio;
 
-	dprintf_bp(bp, "claiming in txg %llu", txg);
+	zfs_blkptr_verify(spa, bp);
 
 	if (BP_IS_EMBEDDED(bp))
 		return (zio_null(pio, spa, NULL, NULL, NULL, 0));
@@ -1098,8 +1147,9 @@ zio_claim(zio_t *pio, spa_t *spa, uint64_t txg, const blkptr_t *bp,
 	 * starts allocating blocks -- so that nothing is allocated twice.
 	 * If txg == 0 we just verify that the block is claimable.
 	 */
-	ASSERT3U(spa->spa_uberblock.ub_rootbp.blk_birth, <, spa_first_txg(spa));
-	ASSERT(txg == spa_first_txg(spa) || txg == 0);
+	ASSERT3U(spa->spa_uberblock.ub_rootbp.blk_birth, <,
+	    spa_min_claim_txg(spa));
+	ASSERT(txg == spa_min_claim_txg(spa) || txg == 0);
 	ASSERT(!BP_GET_DEDUP(bp) || !spa_writeable(spa));	/* zdb(1M) */
 
 	zio = zio_create(pio, spa, txg, bp, NULL, BP_GET_PSIZE(bp),
@@ -1200,8 +1250,15 @@ zio_vdev_child_io(zio_t *pio, blkptr_t *bp, vdev_t *vd, uint64_t offset,
 	enum zio_stage pipeline = ZIO_VDEV_CHILD_PIPELINE;
 	zio_t *zio;
 
-	ASSERT(vd->vdev_parent ==
-	    (pio->io_vd ? pio->io_vd : pio->io_spa->spa_root_vdev));
+	/*
+	 * vdev child I/Os do not propagate their error to the parent.
+	 * Therefore, for correct operation the caller *must* check for
+	 * and handle the error in the child i/o's done callback.
+	 * The only exceptions are i/os that we don't care about
+	 * (OPTIONAL or REPAIR).
+	 */
+	ASSERT((flags & ZIO_FLAG_OPTIONAL) || (flags & ZIO_FLAG_IO_REPAIR) ||
+	    done != NULL);
 
 	if (type == ZIO_TYPE_READ && bp != NULL) {
 		/*
@@ -1214,10 +1271,12 @@ zio_vdev_child_io(zio_t *pio, blkptr_t *bp, vdev_t *vd, uint64_t offset,
 		pio->io_pipeline &= ~ZIO_STAGE_CHECKSUM_VERIFY;
 	}
 
-	if (vd->vdev_children == 0)
+	if (vd->vdev_ops->vdev_op_leaf) {
+		ASSERT0(vd->vdev_children);
 		offset += VDEV_LABEL_START_SIZE;
+	}
 
-	flags |= ZIO_VDEV_CHILD_FLAGS(pio) | ZIO_FLAG_DONT_PROPAGATE;
+	flags |= ZIO_VDEV_CHILD_FLAGS(pio);
 
 	/*
 	 * If we've decided to do a repair, the write is not speculative --
@@ -1261,7 +1320,7 @@ zio_vdev_child_io(zio_t *pio, blkptr_t *bp, vdev_t *vd, uint64_t offset,
 
 zio_t *
 zio_vdev_delegated_io(vdev_t *vd, uint64_t offset, abd_t *data, uint64_t size,
-    int type, zio_priority_t priority, enum zio_flag flags,
+    zio_type_t type, zio_priority_t priority, enum zio_flag flags,
     zio_done_func_t *done, void *private)
 {
 	zio_t *zio;
@@ -1318,6 +1377,8 @@ zio_read_bp_init(zio_t *zio)
 	uint64_t psize =
 	    BP_IS_EMBEDDED(bp) ? BPE_GET_PSIZE(bp) : BP_GET_PSIZE(bp);
 
+	ASSERT3P(zio->io_bp, ==, &zio->io_bp_copy);
+
 	if (BP_GET_COMPRESS(bp) != ZIO_COMPRESS_OFF &&
 	    zio->io_child_type == ZIO_CHILD_LOGICAL &&
 	    !(zio->io_flags & ZIO_FLAG_RAW_COMPRESS)) {
@@ -1341,6 +1402,7 @@ zio_read_bp_init(zio_t *zio)
 		abd_return_buf_copy(zio->io_abd, data, psize);
 	} else {
 		ASSERT(!BP_IS_EMBEDDED(bp));
+		ASSERT3P(zio->io_bp, ==, &zio->io_bp_copy);
 	}
 
 	if (!DMU_OT_IS_METADATA(BP_GET_TYPE(bp)) && BP_GET_LEVEL(bp) == 0)
@@ -1613,6 +1675,8 @@ zio_free_bp_init(zio_t *zio)
 		if (BP_GET_DEDUP(bp))
 			zio->io_pipeline = ZIO_DDT_FREE_PIPELINE;
 	}
+
+	ASSERT3P(zio->io_bp, ==, &zio->io_bp_copy);
 
 	return (ZIO_PIPELINE_CONTINUE);
 }
@@ -2092,7 +2156,7 @@ zio_reexecute(zio_t *pio)
 }
 
 void
-zio_suspend(spa_t *spa, zio_t *zio)
+zio_suspend(spa_t *spa, zio_t *zio, zio_suspend_reason_t reason)
 {
 	if (spa_get_failmode(spa) == ZIO_FAILURE_MODE_PANIC)
 		fm_panic("Pool '%s' has encountered an uncorrectable I/O "
@@ -2112,7 +2176,7 @@ zio_suspend(spa_t *spa, zio_t *zio)
 		    ZIO_FLAG_CANFAIL | ZIO_FLAG_SPECULATIVE |
 		    ZIO_FLAG_GODFATHER);
 
-	spa->spa_suspended = B_TRUE;
+	spa->spa_suspended = reason;
 
 	if (zio != NULL) {
 		ASSERT(!(zio->io_flags & ZIO_FLAG_GODFATHER));
@@ -2135,7 +2199,7 @@ zio_resume(spa_t *spa)
 	 * Reexecute all previously suspended i/o.
 	 */
 	mutex_enter(&spa->spa_suspend_lock);
-	spa->spa_suspended = B_FALSE;
+	spa->spa_suspended = ZIO_SUSPEND_NONE;
 	cv_broadcast(&spa->spa_suspend_cv);
 	pio = spa->spa_suspend_zio_root;
 	spa->spa_suspend_zio_root = NULL;
@@ -3279,7 +3343,7 @@ zio_dva_allocate(zio_t *zio)
 	    &zio->io_alloc_list, zio);
 
 	if (error != 0) {
-		spa_dbgmsg(spa, "%s: metaslab allocation failure: zio %p, "
+		zfs_dbgmsg("%s: metaslab allocation failure: zio %p, "
 		    "size %llu, error %d", spa_name(spa), zio, zio->io_size,
 		    error);
 		if (error == ENOSPC && zio->io_size > SPA_MINBLOCKSIZE)
@@ -3395,18 +3459,6 @@ zio_alloc_zil(spa_t *spa, objset_t *os, uint64_t txg, blkptr_t *new_bp,
 }
 
 /*
- * Free an intent log block.
- */
-void
-zio_free_zil(spa_t *spa, uint64_t txg, blkptr_t *bp)
-{
-	ASSERT(BP_GET_TYPE(bp) == DMU_OT_INTENT_LOG);
-	ASSERT(!BP_IS_GANG(bp));
-
-	zio_free(spa, txg, bp);
-}
-
-/*
  * ==========================================================================
  * Read and write to physical devices
  * ==========================================================================
@@ -3447,6 +3499,19 @@ zio_vdev_io_start(zio_t *zio)
 	}
 
 	ASSERT3P(zio->io_logical, !=, zio);
+	if (zio->io_type == ZIO_TYPE_WRITE) {
+		ASSERT(spa->spa_trust_config);
+
+		/*
+		 * Note: the code can handle other kinds of writes,
+		 * but we don't expect them.
+		 */
+		if (zio->io_vd->vdev_removing) {
+			ASSERT(zio->io_flags &
+			    (ZIO_FLAG_PHYSICAL | ZIO_FLAG_SELF_HEAL |
+			    ZIO_FLAG_RESILVER | ZIO_FLAG_INDUCE_DAMAGE));
+		}
+	}
 
 	align = 1ULL << vd->vdev_top->vdev_ashift;
 
@@ -3485,18 +3550,37 @@ zio_vdev_io_start(zio_t *zio)
 	 * If this is a repair I/O, and there's no self-healing involved --
 	 * that is, we're just resilvering what we expect to resilver --
 	 * then don't do the I/O unless zio's txg is actually in vd's DTL.
-	 * This prevents spurious resilvering with nested replication.
-	 * For example, given a mirror of mirrors, (A+B)+(C+D), if only
-	 * A is out of date, we'll read from C+D, then use the data to
-	 * resilver A+B -- but we don't actually want to resilver B, just A.
-	 * The top-level mirror has no way to know this, so instead we just
-	 * discard unnecessary repairs as we work our way down the vdev tree.
-	 * The same logic applies to any form of nested replication:
-	 * ditto + mirror, RAID-Z + replacing, etc.  This covers them all.
+	 * This prevents spurious resilvering.
+	 *
+	 * There are a few ways that we can end up creating these spurious
+	 * resilver i/os:
+	 *
+	 * 1. A resilver i/o will be issued if any DVA in the BP has a
+	 * dirty DTL.  The mirror code will issue resilver writes to
+	 * each DVA, including the one(s) that are not on vdevs with dirty
+	 * DTLs.
+	 *
+	 * 2. With nested replication, which happens when we have a
+	 * "replacing" or "spare" vdev that's a child of a mirror or raidz.
+	 * For example, given mirror(replacing(A+B), C), it's likely that
+	 * only A is out of date (it's the new device). In this case, we'll
+	 * read from C, then use the data to resilver A+B -- but we don't
+	 * actually want to resilver B, just A. The top-level mirror has no
+	 * way to know this, so instead we just discard unnecessary repairs
+	 * as we work our way down the vdev tree.
+	 *
+	 * 3. ZTEST also creates mirrors of mirrors, mirrors of raidz, etc.
+	 * The same logic applies to any form of nested replication: ditto
+	 * + mirror, RAID-Z + replacing, etc.
+	 *
+	 * However, indirect vdevs point off to other vdevs which may have
+	 * DTL's, so we never bypass them.  The child i/os on concrete vdevs
+	 * will be properly bypassed instead.
 	 */
 	if ((zio->io_flags & ZIO_FLAG_IO_REPAIR) &&
 	    !(zio->io_flags & ZIO_FLAG_SELF_HEAL) &&
 	    zio->io_txg != 0 &&	/* not a delegated i/o */
+	    vd->vdev_ops != &vdev_indirect_ops &&
 	    !vdev_dtl_contains(vd, DTL_PARTIAL, zio->io_txg, 1)) {
 		ASSERT(zio->io_type == ZIO_TYPE_WRITE);
 		zio_vdev_io_bypass(zio);
@@ -3862,8 +3946,9 @@ zio_encrypt(zio_t *zio)
 	}
 
 	/* Perform the encryption. This should not fail */
-	VERIFY0(spa_do_crypt_abd(B_TRUE, spa, dsobj, bp, zio->io_txg,
-	    psize, zio->io_abd, eabd, iv, mac, salt, &no_crypt));
+	VERIFY0(spa_do_crypt_abd(B_TRUE, spa, &zio->io_bookmark,
+	    BP_GET_TYPE(bp), BP_GET_DEDUP(bp), BP_SHOULD_BYTESWAP(bp),
+	    salt, iv, mac, psize, zio->io_abd, eabd, &no_crypt));
 
 	/* encode encryption metadata into the bp */
 	if (ot == DMU_OT_INTENT_LOG) {
@@ -4390,7 +4475,7 @@ zio_done(zio_t *zio)
 			 * We'd fail again if we reexecuted now, so suspend
 			 * until conditions improve (e.g. device comes online).
 			 */
-			zio_suspend(zio->io_spa, zio);
+			zio_suspend(zio->io_spa, zio, ZIO_SUSPEND_IOERR);
 		} else {
 			/*
 			 * Reexecution is potentially a huge amount of work.
@@ -4616,7 +4701,7 @@ zbookmark_subtree_completed(const dnode_phys_t *dnp,
 	    last_block) <= 0);
 }
 
-#if defined(_KERNEL) && defined(HAVE_SPL)
+#if defined(_KERNEL)
 EXPORT_SYMBOL(zio_type_name);
 EXPORT_SYMBOL(zio_buf_alloc);
 EXPORT_SYMBOL(zio_data_buf_alloc);

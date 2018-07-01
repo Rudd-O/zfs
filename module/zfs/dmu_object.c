@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2013, 2015 by Delphix. All rights reserved.
+ * Copyright (c) 2013, 2017 by Delphix. All rights reserved.
  * Copyright 2014 HybridCluster. All rights reserved.
  */
 
@@ -249,7 +249,7 @@ dmu_object_reclaim(objset_t *os, uint64_t object, dmu_object_type_t ot,
     int blocksize, dmu_object_type_t bonustype, int bonuslen, dmu_tx_t *tx)
 {
 	return (dmu_object_reclaim_dnsize(os, object, ot, blocksize, bonustype,
-	    bonuslen, 0, tx));
+	    bonuslen, DNODE_MIN_SIZE, tx));
 }
 
 int
@@ -260,6 +260,9 @@ dmu_object_reclaim_dnsize(objset_t *os, uint64_t object, dmu_object_type_t ot,
 	dnode_t *dn;
 	int dn_slots = dnodesize >> DNODE_SHIFT;
 	int err;
+
+	if (dn_slots == 0)
+		dn_slots = DNODE_MIN_SLOTS;
 
 	if (object == DMU_META_DNODE_OBJECT)
 		return (SET_ERROR(EBADF));
@@ -381,12 +384,19 @@ dmu_object_zapify(objset_t *mos, uint64_t object, dmu_object_type_t old_type,
 	}
 	ASSERT3U(dn->dn_type, ==, old_type);
 	ASSERT0(dn->dn_maxblkid);
+
+	/*
+	 * We must initialize the ZAP data before changing the type,
+	 * so that concurrent calls to *_is_zapified() can determine if
+	 * the object has been completely zapified by checking the type.
+	 */
+	mzap_create_impl(mos, object, 0, 0, tx);
+
 	dn->dn_next_type[tx->tx_txg & TXG_MASK] = dn->dn_type =
 	    DMU_OTN_ZAP_METADATA;
 	dnode_setdirty(dn, tx);
 	dnode_rele(dn, FTAG);
 
-	mzap_create_impl(mos, object, 0, 0, tx);
 
 	spa_feature_incr(dmu_objset_spa(mos),
 	    SPA_FEATURE_EXTENSIBLE_DATASET, tx);
@@ -411,7 +421,7 @@ dmu_object_free_zapified(objset_t *mos, uint64_t object, dmu_tx_t *tx)
 	VERIFY0(dmu_object_free(mos, object, tx));
 }
 
-#if defined(_KERNEL) && defined(HAVE_SPL)
+#if defined(_KERNEL)
 EXPORT_SYMBOL(dmu_object_alloc);
 EXPORT_SYMBOL(dmu_object_alloc_dnsize);
 EXPORT_SYMBOL(dmu_object_claim);

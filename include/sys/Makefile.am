@@ -2,6 +2,7 @@ SUBDIRS = fm fs crypto lua sysevent
 
 COMMON_H = \
 	$(top_srcdir)/include/sys/abd.h \
+	$(top_srcdir)/include/sys/aggsum.h \
 	$(top_srcdir)/include/sys/arc.h \
 	$(top_srcdir)/include/sys/arc_impl.h \
 	$(top_srcdir)/include/sys/avl.h \
@@ -11,6 +12,8 @@ COMMON_H = \
 	$(top_srcdir)/include/sys/bpobj.h \
 	$(top_srcdir)/include/sys/bptree.h \
 	$(top_srcdir)/include/sys/bqueue.h \
+	$(top_srcdir)/include/sys/cityhash.h \
+	$(top_srcdir)/include/sys/spa_checkpoint.h \
 	$(top_srcdir)/include/sys/dbuf.h \
 	$(top_srcdir)/include/sys/ddt.h \
 	$(top_srcdir)/include/sys/dmu.h \
@@ -42,6 +45,7 @@ COMMON_H = \
 	$(top_srcdir)/include/sys/mmp.h \
 	$(top_srcdir)/include/sys/mntent.h \
 	$(top_srcdir)/include/sys/multilist.h \
+	$(top_srcdir)/include/sys/note.h \
 	$(top_srcdir)/include/sys/nvpair.h \
 	$(top_srcdir)/include/sys/nvpair_impl.h \
 	$(top_srcdir)/include/sys/pathname.h \
@@ -71,6 +75,7 @@ COMMON_H = \
 	$(top_srcdir)/include/sys/trace_dnode.h \
 	$(top_srcdir)/include/sys/trace_multilist.h \
 	$(top_srcdir)/include/sys/trace_txg.h \
+	$(top_srcdir)/include/sys/trace_vdev.h \
 	$(top_srcdir)/include/sys/trace_zil.h \
 	$(top_srcdir)/include/sys/trace_zio.h \
 	$(top_srcdir)/include/sys/trace_zrlock.h \
@@ -87,8 +92,11 @@ COMMON_H = \
 	$(top_srcdir)/include/sys/vdev_file.h \
 	$(top_srcdir)/include/sys/vdev.h \
 	$(top_srcdir)/include/sys/vdev_impl.h \
+	$(top_srcdir)/include/sys/vdev_indirect_births.h \
+	$(top_srcdir)/include/sys/vdev_indirect_mapping.h \
 	$(top_srcdir)/include/sys/vdev_raidz.h \
 	$(top_srcdir)/include/sys/vdev_raidz_impl.h \
+	$(top_srcdir)/include/sys/vdev_removal.h \
 	$(top_srcdir)/include/sys/xvattr.h \
 	$(top_srcdir)/include/sys/zap.h \
 	$(top_srcdir)/include/sys/zap_impl.h \
@@ -121,7 +129,8 @@ COMMON_H = \
 	$(top_srcdir)/include/sys/zio.h \
 	$(top_srcdir)/include/sys/zio_impl.h \
 	$(top_srcdir)/include/sys/zio_priority.h \
-	$(top_srcdir)/include/sys/zrlock.h
+	$(top_srcdir)/include/sys/zrlock.h \
+	$(top_srcdir)/include/sys/zthr.h
 
 KERNEL_H = \
 	$(top_srcdir)/include/sys/zfs_ioctl.h \

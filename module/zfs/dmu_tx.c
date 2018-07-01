@@ -37,7 +37,6 @@
 #include <sys/sa.h>
 #include <sys/sa_impl.h>
 #include <sys/zfs_context.h>
-#include <sys/varargs.h>
 #include <sys/trace_dmu.h>
 
 typedef void (*dmu_tx_hold_func_t)(dmu_tx_t *tx, struct dnode *dn,
@@ -313,6 +312,23 @@ dmu_tx_hold_write(dmu_tx_t *tx, uint64_t object, uint64_t off, int len)
 		dmu_tx_count_write(txh, off, len);
 		dmu_tx_count_dnode(txh);
 	}
+}
+
+void
+dmu_tx_hold_remap_l1indirect(dmu_tx_t *tx, uint64_t object)
+{
+	dmu_tx_hold_t *txh;
+
+	ASSERT(tx->tx_txg == 0);
+	txh = dmu_tx_hold_object_impl(tx, tx->tx_objset,
+	    object, THT_WRITE, 0, 0);
+	if (txh == NULL)
+		return;
+
+	dnode_t *dn = txh->txh_dnode;
+	(void) refcount_add_many(&txh->txh_space_towrite,
+	    1ULL << dn->dn_indblkshift, FTAG);
+	dmu_tx_count_dnode(txh);
 }
 
 void
@@ -1081,10 +1097,11 @@ dmu_tx_wait(dmu_tx_t *tx)
 		tx->tx_needassign_txh = NULL;
 	} else {
 		/*
-		 * A dnode is assigned to the quiescing txg.  Wait for its
-		 * transaction to complete.
+		 * If we have a lot of dirty data just wait until we sync
+		 * out a TXG at which point we'll hopefully have synced
+		 * a portion of the changes.
 		 */
-		txg_wait_open(tx->tx_pool, tx->tx_lasttried_txg + 1);
+		txg_wait_synced(dp, spa_last_synced_txg(spa) + 1);
 	}
 
 	spa_tx_assign_add_nsecs(spa, gethrtime() - before);
@@ -1355,7 +1372,7 @@ dmu_tx_fini(void)
 	}
 }
 
-#if defined(_KERNEL) && defined(HAVE_SPL)
+#if defined(_KERNEL)
 EXPORT_SYMBOL(dmu_tx_create);
 EXPORT_SYMBOL(dmu_tx_hold_write);
 EXPORT_SYMBOL(dmu_tx_hold_write_by_dnode);

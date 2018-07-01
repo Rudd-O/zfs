@@ -32,31 +32,25 @@
 
 #include <sys/note.h>
 #include <sys/types.h>
-#include <sys/t_lock.h>
 #include <sys/atomic.h>
 #include <sys/sysmacros.h>
-#include <sys/bitmap.h>
+#include <sys/vmsystm.h>
+#include <sys/condvar.h>
 #include <sys/cmn_err.h>
 #include <sys/kmem.h>
 #include <sys/kmem_cache.h>
 #include <sys/vmem.h>
 #include <sys/taskq.h>
-#include <sys/buf.h>
 #include <sys/param.h>
-#include <sys/systm.h>
-#include <sys/cpuvar.h>
 #include <sys/kobj.h>
-#include <sys/conf.h>
 #include <sys/disp.h>
 #include <sys/debug.h>
 #include <sys/random.h>
+#include <sys/strings.h>
 #include <sys/byteorder.h>
-#include <sys/systm.h>
 #include <sys/list.h>
 #include <sys/uio_impl.h>
-#include <sys/dirent.h>
 #include <sys/time.h>
-#include <vm/seg_kmem.h>
 #include <sys/zone.h>
 #include <sys/sdt.h>
 #include <sys/kstat.h>
@@ -76,8 +70,6 @@
 #define	_SYS_MUTEX_H
 #define	_SYS_RWLOCK_H
 #define	_SYS_CONDVAR_H
-#define	_SYS_SYSTM_H
-#define	_SYS_T_LOCK_H
 #define	_SYS_VNODE_H
 #define	_SYS_VFS_H
 #define	_SYS_SUNDDI_H
@@ -94,7 +86,6 @@
 #include <strings.h>
 #include <pthread.h>
 #include <setjmp.h>
-#include <synch.h>
 #include <assert.h>
 #include <alloca.h>
 #include <umem.h>
@@ -492,7 +483,7 @@ extern char *vn_dumpdir;
 #define	AV_SCANSTAMP_SZ	32		/* length of anti-virus scanstamp */
 
 typedef struct xoptattr {
-	timestruc_t	xoa_createtime;	/* Create time of file */
+	inode_timespec_t xoa_createtime;	/* Create time of file */
 	uint8_t		xoa_archive;
 	uint8_t		xoa_system;
 	uint8_t		xoa_readonly;
@@ -605,13 +596,6 @@ extern void delay(clock_t ticks);
 #define	USEC_TO_TICK(usec)	((usec) / (MICROSEC / hz))
 #define	NSEC_TO_TICK(usec)	((usec) / (NANOSEC / hz))
 
-#define	gethrestime_sec() time(NULL)
-#define	gethrestime(t) \
-	do {\
-		(t)->tv_sec = gethrestime_sec();\
-		(t)->tv_nsec = 0;\
-	} while (0);
-
 #define	max_ncpus	64
 #define	boot_ncpus	(sysconf(_SC_NPROCESSORS_ONLN))
 
@@ -674,6 +658,7 @@ typedef struct callb_cpr {
 
 #define	zone_dataset_visible(x, y)	(1)
 #define	INGLOBALZONE(z)			(1)
+extern uint32_t zone_get_hostid(void *zonep);
 
 extern char *kmem_vasprintf(const char *fmt, va_list adx);
 extern char *kmem_asprintf(const char *fmt, ...);
@@ -757,6 +742,8 @@ typedef int fstrans_cookie_t;
 extern fstrans_cookie_t spl_fstrans_mark(void);
 extern void spl_fstrans_unmark(fstrans_cookie_t);
 extern int __spl_pf_fstrans_check(void);
+
+#define	____cacheline_aligned
 
 #endif /* _KERNEL */
 #endif	/* _SYS_ZFS_CONTEXT_H */

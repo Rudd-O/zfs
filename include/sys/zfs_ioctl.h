@@ -105,6 +105,7 @@ typedef enum drr_headertype {
 #define	DMU_BACKUP_FEATURE_COMPRESSED		(1 << 22)
 #define	DMU_BACKUP_FEATURE_LARGE_DNODE		(1 << 23)
 #define	DMU_BACKUP_FEATURE_RAW			(1 << 24)
+/* flag #25 is reserved for the ZSTD compression feature */
 
 /*
  * Mask of all supported backup features
@@ -391,6 +392,7 @@ typedef enum zinject_type {
 	ZINJECT_IGNORED_WRITES,
 	ZINJECT_PANIC,
 	ZINJECT_DELAY_IO,
+	ZINJECT_DECRYPT_FAULT,
 } zinject_type_t;
 
 typedef struct zfs_share {

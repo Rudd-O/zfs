@@ -40,12 +40,14 @@ KERNEL_C = \
 	zpool_prop.c \
 	zprop_common.c \
 	abd.c \
+	aggsum.c \
 	arc.c \
 	blkptr.c \
 	bplist.c \
 	bpobj.c \
 	bptree.c \
 	bqueue.c \
+	cityhash.c \
 	dbuf.c \
 	dbuf_stats.c \
 	ddt.c \
@@ -90,6 +92,7 @@ KERNEL_C = \
 	skein_zfs.c \
 	spa.c \
 	spa_boot.c \
+	spa_checkpoint.c \
 	spa_config.c \
 	spa_errlog.c \
 	spa_history.c \
@@ -104,20 +107,24 @@ KERNEL_C = \
 	vdev.c \
 	vdev_cache.c \
 	vdev_file.c \
+	vdev_indirect_births.c \
+	vdev_indirect.c \
+	vdev_indirect_mapping.c \
 	vdev_label.c \
 	vdev_mirror.c \
 	vdev_missing.c \
 	vdev_queue.c \
 	vdev_raidz.c \
+	vdev_raidz_math_aarch64_neon.c \
+	vdev_raidz_math_aarch64_neonx2.c \
+	vdev_raidz_math_avx2.c \
+	vdev_raidz_math_avx512bw.c \
+	vdev_raidz_math_avx512f.c \
 	vdev_raidz_math.c \
 	vdev_raidz_math_scalar.c \
 	vdev_raidz_math_sse2.c \
 	vdev_raidz_math_ssse3.c \
-	vdev_raidz_math_avx2.c \
-	vdev_raidz_math_avx512f.c \
-	vdev_raidz_math_avx512bw.c \
-	vdev_raidz_math_aarch64_neon.c \
-	vdev_raidz_math_aarch64_neonx2.c \
+	vdev_removal.c \
 	vdev_root.c \
 	zap.c \
 	zap_leaf.c \
@@ -143,7 +150,8 @@ KERNEL_C = \
 	zio_crypt.c \
 	zio_inject.c \
 	zle.c \
-	zrlock.c
+	zrlock.c \
+	zthr.c
 
 LUA_C = \
 	lapi.c \

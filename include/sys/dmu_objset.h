@@ -62,7 +62,13 @@ struct dmu_tx;
 #define	OBJSET_FLAG_USEROBJACCOUNTING_COMPLETE	(1ULL << 1)
 #define	OBJSET_FLAG_PROJECTQUOTA_COMPLETE	(1ULL << 2)
 
-/* all flags are currently non-portable */
+/*
+ * This mask defines the set of flags which are "portable", meaning
+ * that they can be preserved when doing a raw encrypted zfs send.
+ * Flags included in this mask will be protected by os_portable_mac
+ * when the block of dnodes is encrypted. No portable flags currently
+ * exist.
+ */
 #define	OBJSET_CRYPT_PORTABLE_FLAGS_MASK	(0)
 
 typedef struct objset_phys {
@@ -133,6 +139,7 @@ struct objset {
 	uint64_t os_flags;
 	uint64_t os_freed_dnodes;
 	boolean_t os_rescan_dnodes;
+	boolean_t os_raw_receive;
 
 	/* os_phys_buf should be written raw next txg */
 	boolean_t os_next_write_raw[TXG_SIZE];
@@ -188,8 +195,8 @@ int dmu_objset_own(const char *name, dmu_objset_type_t type,
 int dmu_objset_own_obj(struct dsl_pool *dp, uint64_t obj,
     dmu_objset_type_t type, boolean_t readonly, boolean_t decrypt,
     void *tag, objset_t **osp);
-void dmu_objset_refresh_ownership(objset_t *os, boolean_t key_needed,
-    void *tag);
+void dmu_objset_refresh_ownership(struct dsl_dataset *ds,
+    struct dsl_dataset **newds, boolean_t decrypt, void *tag);
 void dmu_objset_rele(objset_t *os, void *tag);
 void dmu_objset_rele_flags(objset_t *os, boolean_t decrypt, void *tag);
 void dmu_objset_disown(objset_t *os, boolean_t decrypt, void *tag);
@@ -204,7 +211,7 @@ int dmu_objset_find_dp(struct dsl_pool *dp, uint64_t ddobj,
     int func(struct dsl_pool *, struct dsl_dataset *, void *),
     void *arg, int flags);
 void dmu_objset_evict_dbufs(objset_t *os);
-timestruc_t dmu_objset_snap_cmtime(objset_t *os);
+inode_timespec_t dmu_objset_snap_cmtime(objset_t *os);
 
 /* called from dsl */
 void dmu_objset_sync(objset_t *os, zio_t *zio, dmu_tx_t *tx);

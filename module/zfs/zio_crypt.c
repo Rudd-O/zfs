@@ -26,6 +26,7 @@
 #include <sys/zil.h>
 #include <sys/sha2.h>
 #include <sys/hkdf.h>
+#include "qat.h"
 
 /*
  * This file is responsible for handling all of the details of generating
@@ -80,7 +81,7 @@
  * A secret binary key, generated from an HKDF function used to encrypt and
  * decrypt data.
  *
- * Message Authenication Code (MAC)
+ * Message Authentication Code (MAC)
  * The MAC is an output of authenticated encryption modes such as AES-GCM and
  * AES-CCM. Its purpose is to ensure that an attacker cannot modify encrypted
  * data on disk and return garbage to the application. Effectively, it is a
@@ -120,7 +121,7 @@
  * OBJECT SET AUTHENTICATION:
  * Up to this point, everything we have encrypted and authenticated has been
  * at level 0 (or -2 for the ZIL). If we did not do any further work the
- * on-disk format would be susceptible to attacks that deleted or rearrannged
+ * on-disk format would be susceptible to attacks that deleted or rearranged
  * the order of level 0 blocks. Ideally, the cleanest solution would be to
  * maintain a tree of authentication MACs going up the bp tree. However, this
  * presents a problem for raw sends. Send files do not send information about
@@ -130,11 +131,11 @@
  * for the indirect levels of the bp tree, we use a regular SHA512 of the MACs
  * from the level below. We also include some portable fields from blk_prop such
  * as the lsize and compression algorithm to prevent the data from being
- * misinterpretted.
+ * misinterpreted.
  *
- * At the objset level, we maintain 2 seperate 256 bit MACs in the
+ * At the objset level, we maintain 2 separate 256 bit MACs in the
  * objset_phys_t. The first one is "portable" and is the logical root of the
- * MAC tree maintianed in the metadnode's bps. The second, is "local" and is
+ * MAC tree maintained in the metadnode's bps. The second, is "local" and is
  * used as the root MAC for the user accounting objects, which are also not
  * transferred via "zfs send". The portable MAC is sent in the DRR_BEGIN payload
  * of the send file. The useraccounting code ensures that the useraccounting
@@ -147,13 +148,13 @@
  * need to use the same IV and encryption key, so that they will have the same
  * ciphertext. Normally, one should never reuse an IV with the same encryption
  * key or else AES-GCM and AES-CCM can both actually leak the plaintext of both
- * blocks. In this case, however, since we are using the same plaindata as
+ * blocks. In this case, however, since we are using the same plaintext as
  * well all that we end up with is a duplicate of the original ciphertext we
  * already had. As a result, an attacker with read access to the raw disk will
  * be able to tell which blocks are the same but this information is given away
  * by dedup anyway. In order to get the same IVs and encryption keys for
- * equivalent blocks of data we use an HMAC of the plaindata. We use an HMAC
- * here so that a reproducible checksum of the plaindata is never available to
+ * equivalent blocks of data we use an HMAC of the plaintext. We use an HMAC
+ * here so that a reproducible checksum of the plaintext is never available to
  * the attacker. The HMAC key is kept alongside the master key, encrypted on
  * disk. The first 64 bits of the HMAC are used in place of the random salt, and
  * the next 96 bits are used as the IV. As a result of this mechanism, dedup
@@ -1859,9 +1860,9 @@ error:
  * Primary encryption / decryption entrypoint for zio data.
  */
 int
-zio_do_crypt_data(boolean_t encrypt, zio_crypt_key_t *key, uint8_t *salt,
-    dmu_object_type_t ot, uint8_t *iv, uint8_t *mac, uint_t datalen,
-    boolean_t byteswap, uint8_t *plainbuf, uint8_t *cipherbuf,
+zio_do_crypt_data(boolean_t encrypt, zio_crypt_key_t *key,
+    dmu_object_type_t ot, boolean_t byteswap, uint8_t *salt, uint8_t *iv,
+    uint8_t *mac, uint_t datalen, uint8_t *plainbuf, uint8_t *cipherbuf,
     boolean_t *no_crypt)
 {
 	int ret;
@@ -1874,16 +1875,6 @@ zio_do_crypt_data(boolean_t encrypt, zio_crypt_key_t *key, uint8_t *salt,
 	crypto_key_t tmp_ckey, *ckey = NULL;
 	crypto_ctx_template_t tmpl;
 	uint8_t *authbuf = NULL;
-
-	bzero(&puio, sizeof (uio_t));
-	bzero(&cuio, sizeof (uio_t));
-
-	/* create uios for encryption */
-	ret = zio_crypt_init_uios(encrypt, key->zk_version, ot, plainbuf,
-	    cipherbuf, datalen, byteswap, mac, &puio, &cuio, &enc_len,
-	    &authbuf, &auth_len, no_crypt);
-	if (ret != 0)
-		return (ret);
 
 	/*
 	 * If the needed key is the current one, just use it. Otherwise we
@@ -1914,7 +1905,48 @@ zio_do_crypt_data(boolean_t encrypt, zio_crypt_key_t *key, uint8_t *salt,
 		tmpl = NULL;
 	}
 
-	/* perform the encryption / decryption */
+	/*
+	 * Attempt to use QAT acceleration if we can. We currently don't
+	 * do this for metadnode and ZIL blocks, since they have a much
+	 * more involved buffer layout and the qat_crypt() function only
+	 * works in-place.
+	 */
+	if (qat_crypt_use_accel(datalen) &&
+	    ot != DMU_OT_INTENT_LOG && ot != DMU_OT_DNODE) {
+		uint8_t *srcbuf, *dstbuf;
+
+		if (encrypt) {
+			srcbuf = plainbuf;
+			dstbuf = cipherbuf;
+		} else {
+			srcbuf = cipherbuf;
+			dstbuf = plainbuf;
+		}
+
+		ret = qat_crypt((encrypt) ? QAT_ENCRYPT : QAT_DECRYPT, srcbuf,
+		    dstbuf, NULL, 0, iv, mac, ckey, key->zk_crypt, datalen);
+		if (ret == CPA_STATUS_SUCCESS) {
+			if (locked) {
+				rw_exit(&key->zk_salt_lock);
+				locked = B_FALSE;
+			}
+
+			return (0);
+		}
+		/* If the hardware implementation fails fall back to software */
+	}
+
+	bzero(&puio, sizeof (uio_t));
+	bzero(&cuio, sizeof (uio_t));
+
+	/* create uios for encryption */
+	ret = zio_crypt_init_uios(encrypt, key->zk_version, ot, plainbuf,
+	    cipherbuf, datalen, byteswap, mac, &puio, &cuio, &enc_len,
+	    &authbuf, &auth_len, no_crypt);
+	if (ret != 0)
+		goto error;
+
+	/* perform the encryption / decryption in software */
 	ret = zio_do_crypt_uio(encrypt, key->zk_crypt, ckey, tmpl, iv, enc_len,
 	    &puio, &cuio, authbuf, auth_len);
 	if (ret != 0)
@@ -1952,9 +1984,9 @@ error:
  * linear buffers.
  */
 int
-zio_do_crypt_abd(boolean_t encrypt, zio_crypt_key_t *key, uint8_t *salt,
-    dmu_object_type_t ot, uint8_t *iv, uint8_t *mac, uint_t datalen,
-    boolean_t byteswap, abd_t *pabd, abd_t *cabd, boolean_t *no_crypt)
+zio_do_crypt_abd(boolean_t encrypt, zio_crypt_key_t *key, dmu_object_type_t ot,
+    boolean_t byteswap, uint8_t *salt, uint8_t *iv, uint8_t *mac,
+    uint_t datalen, abd_t *pabd, abd_t *cabd, boolean_t *no_crypt)
 {
 	int ret;
 	void *ptmp, *ctmp;
@@ -1967,8 +1999,8 @@ zio_do_crypt_abd(boolean_t encrypt, zio_crypt_key_t *key, uint8_t *salt,
 		ctmp = abd_borrow_buf_copy(cabd, datalen);
 	}
 
-	ret = zio_do_crypt_data(encrypt, key, salt, ot, iv, mac,
-	    datalen, byteswap, ptmp, ctmp, no_crypt);
+	ret = zio_do_crypt_data(encrypt, key, ot, byteswap, salt, iv, mac,
+	    datalen, ptmp, ctmp, no_crypt);
 	if (ret != 0)
 		goto error;
 
@@ -1994,7 +2026,7 @@ error:
 	return (ret);
 }
 
-#if defined(_KERNEL) && defined(HAVE_SPL)
+#if defined(_KERNEL)
 /* BEGIN CSTYLED */
 module_param(zfs_key_max_salt_uses, ulong, 0644);
 MODULE_PARM_DESC(zfs_key_max_salt_uses, "Max number of times a salt value "

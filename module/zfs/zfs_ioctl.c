@@ -144,12 +144,8 @@
 #include <sys/param.h>
 #include <sys/errno.h>
 #include <sys/uio.h>
-#include <sys/buf.h>
-#include <sys/modctl.h>
-#include <sys/open.h>
 #include <sys/file.h>
 #include <sys/kmem.h>
-#include <sys/conf.h>
 #include <sys/cmn_err.h>
 #include <sys/stat.h>
 #include <sys/zfs_ioctl.h>
@@ -160,7 +156,6 @@
 #include <sys/spa_impl.h>
 #include <sys/vdev.h>
 #include <sys/vdev_impl.h>
-#include <sys/priv_impl.h>
 #include <sys/dmu.h>
 #include <sys/dsl_dir.h>
 #include <sys/dsl_dataset.h>
@@ -169,14 +164,11 @@
 #include <sys/dmu_objset.h>
 #include <sys/dmu_impl.h>
 #include <sys/dmu_tx.h>
-#include <sys/ddi.h>
 #include <sys/sunddi.h>
-#include <sys/sunldi.h>
 #include <sys/policy.h>
 #include <sys/zone.h>
 #include <sys/nvpair.h>
 #include <sys/pathname.h>
-#include <sys/mount.h>
 #include <sys/sdt.h>
 #include <sys/fs/zfs.h>
 #include <sys/zfs_ctldir.h>
@@ -184,7 +176,6 @@
 #include <sys/zfs_onexit.h>
 #include <sys/zvol.h>
 #include <sys/dsl_scan.h>
-#include <sharefs/share.h>
 #include <sys/fm/util.h>
 #include <sys/dsl_crypt.h>
 
@@ -195,6 +186,7 @@
 #include <sys/zfeature.h>
 #include <sys/zcp.h>
 #include <sys/zio_checksum.h>
+#include <sys/vdev_removal.h>
 
 #include <linux/miscdevice.h>
 #include <linux/slab.h>
@@ -1050,6 +1042,14 @@ zfs_secpolicy_bookmark(zfs_cmd_t *zc, nvlist_t *innvl, cred_t *cr)
 
 /* ARGSUSED */
 static int
+zfs_secpolicy_remap(zfs_cmd_t *zc, nvlist_t *innvl, cred_t *cr)
+{
+	return (zfs_secpolicy_write_perms(zc->zc_name,
+	    ZFS_DELEG_PERM_REMAP, cr));
+}
+
+/* ARGSUSED */
+static int
 zfs_secpolicy_destroy_bookmarks(zfs_cmd_t *zc, nvlist_t *innvl, cred_t *cr)
 {
 	nvpair_t *pair, *nextpair;
@@ -1510,6 +1510,7 @@ zfs_ioc_pool_create(zfs_cmd_t *zc)
 	nvlist_t *rootprops = NULL;
 	nvlist_t *zplprops = NULL;
 	dsl_crypto_params_t *dcp = NULL;
+	char *spa_name = zc->zc_name;
 
 	if ((error = get_nvlist(zc->zc_nvlist_conf, zc->zc_nvlist_conf_size,
 	    zc->zc_iflags, &config)))
@@ -1526,6 +1527,7 @@ zfs_ioc_pool_create(zfs_cmd_t *zc)
 		nvlist_t *nvl = NULL;
 		nvlist_t *hidden_args = NULL;
 		uint64_t version = SPA_VERSION;
+		char *tname;
 
 		(void) nvlist_lookup_uint64(props,
 		    zpool_prop_to_name(ZPOOL_PROP_VERSION), &version);
@@ -1560,6 +1562,10 @@ zfs_ioc_pool_create(zfs_cmd_t *zc)
 		    zplprops, NULL);
 		if (error != 0)
 			goto pool_props_bad;
+
+		if (nvlist_lookup_string(props,
+		    zpool_prop_to_name(ZPOOL_PROP_TNAME), &tname) == 0)
+			spa_name = tname;
 	}
 
 	error = spa_create(zc->zc_name, config, props, zplprops, dcp);
@@ -1567,9 +1573,9 @@ zfs_ioc_pool_create(zfs_cmd_t *zc)
 	/*
 	 * Set the remaining root properties
 	 */
-	if (!error && (error = zfs_set_prop_nvlist(zc->zc_name,
+	if (!error && (error = zfs_set_prop_nvlist(spa_name,
 	    ZPROP_SRC_LOCAL, rootprops, NULL)) != 0)
-		(void) spa_destroy(zc->zc_name);
+		(void) spa_destroy(spa_name);
 
 pool_props_bad:
 	nvlist_free(rootprops);
@@ -1732,11 +1738,11 @@ zfs_ioc_pool_scan(zfs_cmd_t *zc)
 	spa_t *spa;
 	int error;
 
-	if ((error = spa_open(zc->zc_name, &spa, FTAG)) != 0)
-		return (error);
-
 	if (zc->zc_flags >= POOL_SCRUB_FLAGS_END)
 		return (SET_ERROR(EINVAL));
+
+	if ((error = spa_open(zc->zc_name, &spa, FTAG)) != 0)
+		return (error);
 
 	if (zc->zc_flags == POOL_SCRUB_PAUSE)
 		error = spa_scrub_pause_resume(spa, POOL_SCRUB_PAUSE);
@@ -1920,8 +1926,8 @@ zfs_ioc_vdev_add(zfs_cmd_t *zc)
 /*
  * inputs:
  * zc_name		name of the pool
- * zc_nvlist_conf	nvlist of devices to remove
- * zc_cookie		to stop the remove?
+ * zc_guid		guid of vdev to remove
+ * zc_cookie		cancel removal
  */
 static int
 zfs_ioc_vdev_remove(zfs_cmd_t *zc)
@@ -1932,7 +1938,11 @@ zfs_ioc_vdev_remove(zfs_cmd_t *zc)
 	error = spa_open(zc->zc_name, &spa, FTAG);
 	if (error != 0)
 		return (error);
-	error = spa_vdev_remove(spa, zc->zc_guid, B_FALSE);
+	if (zc->zc_cookie != 0) {
+		error = spa_vdev_remove_cancel(spa);
+	} else {
+		error = spa_vdev_remove(spa, zc->zc_guid, B_FALSE);
+	}
 	spa_close(spa, FTAG);
 	return (error);
 }
@@ -2920,7 +2930,7 @@ zfs_ioc_pool_set_props(zfs_cmd_t *zc)
 		mutex_enter(&spa_namespace_lock);
 		if ((spa = spa_lookup(zc->zc_name)) != NULL) {
 			spa_configfile_set(spa, props, B_FALSE);
-			spa_config_sync(spa, B_FALSE, B_TRUE);
+			spa_write_cachefile(spa, B_FALSE, B_TRUE);
 		}
 		mutex_exit(&spa_namespace_lock);
 		if (spa != NULL) {
@@ -3395,6 +3405,17 @@ zfs_ioc_clone(const char *fsname, nvlist_t *innvl, nvlist_t *outnvl)
 	return (error);
 }
 
+/* ARGSUSED */
+static int
+zfs_ioc_remap(const char *fsname, nvlist_t *innvl, nvlist_t *outnvl)
+{
+	if (strchr(fsname, '@') ||
+	    strchr(fsname, '%'))
+		return (SET_ERROR(EINVAL));
+
+	return (dmu_objset_remap_indirects(fsname));
+}
+
 /*
  * innvl: {
  *     "snaps" -> { snapshot1, snapshot2 }
@@ -3707,6 +3728,29 @@ zfs_ioc_channel_program(const char *poolname, nvlist_t *innvl,
 
 	return (zcp_eval(poolname, program, sync_flag, instrlimit, memlimit,
 	    nvarg, outnvl));
+}
+
+/*
+ * innvl: unused
+ * outnvl: empty
+ */
+/* ARGSUSED */
+static int
+zfs_ioc_pool_checkpoint(const char *poolname, nvlist_t *innvl, nvlist_t *outnvl)
+{
+	return (spa_checkpoint(poolname));
+}
+
+/*
+ * innvl: unused
+ * outnvl: empty
+ */
+/* ARGSUSED */
+static int
+zfs_ioc_pool_discard_checkpoint(const char *poolname, nvlist_t *innvl,
+    nvlist_t *outnvl)
+{
+	return (spa_checkpoint_discard(poolname));
 }
 
 /*
@@ -5290,14 +5334,14 @@ zfs_ioc_userspace_upgrade(zfs_cmd_t *zc)
 			 * objset needs to be closed & reopened (to grow the
 			 * objset_phys_t).  Suspend/resume the fs will do that.
 			 */
-			dsl_dataset_t *ds;
+			dsl_dataset_t *ds, *newds;
 
 			ds = dmu_objset_ds(zfsvfs->z_os);
 			error = zfs_suspend_fs(zfsvfs);
 			if (error == 0) {
-				dmu_objset_refresh_ownership(zfsvfs->z_os,
+				dmu_objset_refresh_ownership(ds, &newds,
 				    B_TRUE, zfsvfs);
-				error = zfs_resume_fs(zfsvfs, ds);
+				error = zfs_resume_fs(zfsvfs, newds);
 			}
 		}
 		if (error == 0)
@@ -6339,6 +6383,10 @@ zfs_ioctl_init(void)
 	    zfs_ioc_clone, zfs_secpolicy_create_clone, DATASET_NAME,
 	    POOL_CHECK_SUSPENDED | POOL_CHECK_READONLY, B_TRUE, B_TRUE);
 
+	zfs_ioctl_register("remap", ZFS_IOC_REMAP,
+	    zfs_ioc_remap, zfs_secpolicy_remap, DATASET_NAME,
+	    POOL_CHECK_SUSPENDED | POOL_CHECK_READONLY, B_FALSE, B_TRUE);
+
 	zfs_ioctl_register("destroy_snaps", ZFS_IOC_DESTROY_SNAPS,
 	    zfs_ioc_destroy_snaps, zfs_secpolicy_destroy_snaps, POOL_NAME,
 	    POOL_CHECK_SUSPENDED | POOL_CHECK_READONLY, B_TRUE, B_TRUE);
@@ -6396,6 +6444,15 @@ zfs_ioctl_init(void)
 	    zfs_ioc_channel_program, zfs_secpolicy_config,
 	    POOL_NAME, POOL_CHECK_SUSPENDED | POOL_CHECK_READONLY, B_TRUE,
 	    B_TRUE);
+
+	zfs_ioctl_register("zpool_checkpoint", ZFS_IOC_POOL_CHECKPOINT,
+	    zfs_ioc_pool_checkpoint, zfs_secpolicy_config, POOL_NAME,
+	    POOL_CHECK_SUSPENDED | POOL_CHECK_READONLY, B_TRUE, B_TRUE);
+
+	zfs_ioctl_register("zpool_discard_checkpoint",
+	    ZFS_IOC_POOL_DISCARD_CHECKPOINT, zfs_ioc_pool_discard_checkpoint,
+	    zfs_secpolicy_config, POOL_NAME,
+	    POOL_CHECK_SUSPENDED | POOL_CHECK_READONLY, B_TRUE, B_TRUE);
 
 	/* IOCTLS that use the legacy function signature */
 
@@ -6947,10 +7004,13 @@ static const struct file_operations zfsdev_fops = {
 };
 
 static struct miscdevice zfs_misc = {
-	.minor		= MISC_DYNAMIC_MINOR,
+	.minor		= ZFS_MINOR,
 	.name		= ZFS_DRIVER,
 	.fops		= &zfsdev_fops,
 };
+
+MODULE_ALIAS_MISCDEV(ZFS_MINOR);
+MODULE_ALIAS("devname:zfs");
 
 static int
 zfs_attach(void)
@@ -6962,12 +7022,24 @@ zfs_attach(void)
 	zfsdev_state_list->zs_minor = -1;
 
 	error = misc_register(&zfs_misc);
-	if (error != 0) {
-		printk(KERN_INFO "ZFS: misc_register() failed %d\n", error);
-		return (error);
+	if (error == -EBUSY) {
+		/*
+		 * Fallback to dynamic minor allocation in the event of a
+		 * collision with a reserved minor in linux/miscdevice.h.
+		 * In this case the kernel modules must be manually loaded.
+		 */
+		printk(KERN_INFO "ZFS: misc_register() with static minor %d "
+		    "failed %d, retrying with MISC_DYNAMIC_MINOR\n",
+		    ZFS_MINOR, error);
+
+		zfs_misc.minor = MISC_DYNAMIC_MINOR;
+		error = misc_register(&zfs_misc);
 	}
 
-	return (0);
+	if (error)
+		printk(KERN_INFO "ZFS: misc_register() failed %d\n", error);
+
+	return (error);
 }
 
 static void
@@ -7066,7 +7138,7 @@ _fini(void)
 	    ZFS_META_VERSION, ZFS_META_RELEASE, ZFS_DEBUG_STR);
 }
 
-#ifdef HAVE_SPL
+#if defined(_KERNEL)
 module_init(_init);
 module_exit(_fini);
 
@@ -7074,4 +7146,4 @@ MODULE_DESCRIPTION("ZFS");
 MODULE_AUTHOR(ZFS_META_AUTHOR);
 MODULE_LICENSE(ZFS_META_LICENSE);
 MODULE_VERSION(ZFS_META_VERSION "-" ZFS_META_RELEASE);
-#endif /* HAVE_SPL */
+#endif

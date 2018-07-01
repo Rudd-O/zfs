@@ -28,7 +28,6 @@
 #include <sys/zfs_context.h>
 #include <sys/types.h>
 #include <sys/param.h>
-#include <sys/systm.h>
 #include <sys/sysmacros.h>
 #include <sys/dmu.h>
 #include <sys/dmu_impl.h>
@@ -699,7 +698,7 @@ sa_build_layouts(sa_handle_t *hdl, sa_bulk_attr_t *attr_desc, int attr_count,
 		boolean_t dummy;
 
 		if (hdl->sa_spill == NULL) {
-			VERIFY(dmu_spill_hold_by_bonus(hdl->sa_bonus, NULL,
+			VERIFY(dmu_spill_hold_by_bonus(hdl->sa_bonus, 0, NULL,
 			    &hdl->sa_spill) == 0);
 		}
 		dmu_buf_will_dirty(hdl->sa_spill, tx);
@@ -1285,7 +1284,13 @@ sa_build_index(sa_handle_t *hdl, sa_buf_type_t buftype)
 	/* only check if not old znode */
 	if (IS_SA_BONUSTYPE(bonustype) && sa_hdr_phys->sa_magic != SA_MAGIC &&
 	    sa_hdr_phys->sa_magic != 0) {
-		VERIFY(BSWAP_32(sa_hdr_phys->sa_magic) == SA_MAGIC);
+		if (BSWAP_32(sa_hdr_phys->sa_magic) != SA_MAGIC) {
+			mutex_exit(&sa->sa_lock);
+			zfs_dbgmsg("Buffer Header: %x != SA_MAGIC:%x "
+			    "object=%#llx\n", sa_hdr_phys->sa_magic, SA_MAGIC,
+			    db->db.db_object);
+			return (SET_ERROR(EIO));
+		}
 		sa_byteswap(hdl, buftype);
 	}
 

@@ -38,6 +38,16 @@
 %bcond_with    asan
 %bcond_with    systemd
 
+# Python permits the !/usr/bin/python shebang for scripts that are cross
+# compatible between python2 and python3, but Fedora 28 does not.  Fedora
+# wants us to choose python3 for cross-compatible scripts.  Since we want
+# to support python2 and python3 users, exclude our scripts from Fedora 28's
+# RPM build check, so that we don't get a bunch of build warnings.
+#
+# Details: https://github.com/zfsonlinux/zfs/issues/7360
+#
+%global __brp_mangle_shebangs_exclude_from arc_summary.py|arcstat.py|dbufstat.py|test-runner.py
+
 # Generic enable switch for systemd
 %if %{with systemd}
 %define _systemd 1
@@ -70,13 +80,13 @@ License:        @ZFS_META_LICENSE@
 URL:            http://zfsonlinux.org/
 Source0:        %{name}-%{version}.tar.gz
 BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
-Requires:       spl = %{version}
 Requires:       libzpool2 = %{version}
 Requires:       libnvpair1 = %{version}
 Requires:       libuutil1 = %{version}
 Requires:       libzfs2 = %{version}
 Requires:       %{name}-kmod = %{version}
 Provides:       %{name}-kmod-common = %{version}
+Obsoletes:      spl
 
 # zfs-fuse provides the same commands and man pages that ZoL does. Renaming
 # those on either side would conflict with all available documentation.
@@ -89,6 +99,9 @@ BuildRequires:  libblkid-devel
 BuildRequires:  libudev-devel
 BuildRequires:  libattr-devel
 BuildRequires:  openssl-devel
+%if 0%{?fedora} >= 28
+BuildRequires:  libtirpc-devel
+%endif
 Requires:       openssl
 %if 0%{?_systemd}
 BuildRequires: systemd
@@ -189,6 +202,7 @@ Requires:       fio
 Requires:       acl
 Requires:       sudo
 Requires:       sysstat
+Requires:	libaio
 AutoReqProv:    no
 
 %description test
@@ -204,6 +218,26 @@ Requires:       dracut
 %description dracut
 This package contains a dracut module used to construct an initramfs
 image which is ZFS aware.
+
+%if 0%{?_pyzfs}
+%package -n pyzfs
+Summary:        Python wrapper for libzfs_core
+Group:          Development/Languages/Python
+License:        Apache-2.0
+BuildArch:      noarch
+Requires:       libzfs2 = %{version}
+Requires:       libnvpair1 = %{version}
+Requires:       libffi
+Requires:       python >= 2.7
+Requires:       python-cffi
+%if 0%{?rhel}%{?fedora}%{?suse_version}
+BuildRequires:  python-devel
+BuildRequires:  libffi-devel
+%endif
+
+%description -n pyzfs
+This package provides a python wrapper for the libzfs_core C library.
+%endif
 
 %if 0%{?_initramfs}
 %package initramfs
@@ -284,6 +318,15 @@ fi
 %endif
 exit 0
 
+# On RHEL/CentOS 7 the static nodes aren't refreshed by default after
+# installing a package.  This is the default behavior for Fedora.
+%posttrans
+%if 0%{?rhel} == 7 || 0%{?centos} == 7
+systemctl restart kmod-static-nodes
+systemctl restart systemd-tmpfiles-setup-dev
+udevadm trigger
+%endif
+
 %preun
 %if 0%{?_systemd}
 %if 0%{?systemd_preun:1}
@@ -328,6 +371,7 @@ systemctl --system daemon-reload >/dev/null || true
 /usr/lib/modules-load.d/*
 %{_unitdir}/*
 %{_presetdir}/*
+%{_generatordir}/*
 %else
 %config(noreplace) %{_sysconfdir}/init.d/*
 %config(noreplace) %{_initconfdir}/zfs
@@ -352,8 +396,7 @@ systemctl --system daemon-reload >/dev/null || true
 %{_datadir}/pkgconfig/libzfs_core.pc
 %{_libdir}/*.so
 %{_includedir}/*
-%doc AUTHORS COPYRIGHT DISCLAIMER
-%doc OPENSOLARIS.LICENSE README.markdown
+%doc AUTHORS COPYRIGHT LICENSE NOTICE README.md
 
 %files test
 %{_datadir}/%{name}
@@ -361,6 +404,15 @@ systemctl --system daemon-reload >/dev/null || true
 %files dracut
 %doc contrib/dracut/README.dracut.markdown
 %{_dracutdir}/modules.d/*
+
+%if 0%{?_pyzfs}
+%files -n pyzfs
+%doc contrib/pyzfs/README
+%doc contrib/pyzfs/LICENSE
+%defattr(-,root,root,-)
+%{python_sitelib}/libzfs_core/*
+%{python_sitelib}/pyzfs*
+%endif
 
 %if 0%{?_initramfs}
 %files initramfs

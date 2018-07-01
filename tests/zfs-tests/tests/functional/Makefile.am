@@ -13,6 +13,7 @@ SUBDIRS = \
 	cli_root \
 	cli_user \
 	compression \
+	cp_files \
 	ctime \
 	deadman \
 	delegate \
@@ -21,15 +22,16 @@ SUBDIRS = \
 	exec \
 	fault \
 	features \
-	grow_pool \
-	grow_replicas \
+	grow \
 	history \
 	hkdf \
 	inheritance \
 	inuse \
+	kstat \
 	large_files \
 	largest_pool \
 	libzfs \
+	pyzfs \
 	link_count \
 	migration \
 	mmap \
@@ -40,6 +42,7 @@ SUBDIRS = \
 	no_space \
 	nopwrite \
 	online_offline \
+	pool_checkpoint \
 	pool_names \
 	poolversion \
 	privilege \
@@ -49,6 +52,7 @@ SUBDIRS = \
 	redundancy \
 	refquota \
 	refreserv \
+	removal \
 	rename_dirs \
 	replacement \
 	reservation \
@@ -63,6 +67,7 @@ SUBDIRS = \
 	tmpfile \
 	truncate \
 	upgrade \
+	user_namespace \
 	userquota \
 	vdev_zaps \
 	write_dirs \

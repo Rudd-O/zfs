@@ -17,10 +17,12 @@ endif
 ccflags-y += $(NO_UNUSED_BUT_SET_VARIABLE)
 
 $(MODULE)-objs += abd.o
+$(MODULE)-objs += aggsum.o
 $(MODULE)-objs += arc.o
 $(MODULE)-objs += blkptr.o
 $(MODULE)-objs += bplist.o
 $(MODULE)-objs += bpobj.o
+$(MODULE)-objs += cityhash.o
 $(MODULE)-objs += dbuf.o
 $(MODULE)-objs += dbuf_stats.o
 $(MODULE)-objs += bptree.o
@@ -66,6 +68,7 @@ $(MODULE)-objs += sha256.o
 $(MODULE)-objs += skein_zfs.o
 $(MODULE)-objs += spa.o
 $(MODULE)-objs += spa_boot.o
+$(MODULE)-objs += spa_checkpoint.o
 $(MODULE)-objs += spa_config.o
 $(MODULE)-objs += spa_errlog.o
 $(MODULE)-objs += spa_history.o
@@ -81,6 +84,9 @@ $(MODULE)-objs += vdev.o
 $(MODULE)-objs += vdev_cache.o
 $(MODULE)-objs += vdev_disk.o
 $(MODULE)-objs += vdev_file.o
+$(MODULE)-objs += vdev_indirect.o
+$(MODULE)-objs += vdev_indirect_births.o
+$(MODULE)-objs += vdev_indirect_mapping.o
 $(MODULE)-objs += vdev_label.o
 $(MODULE)-objs += vdev_mirror.o
 $(MODULE)-objs += vdev_missing.o
@@ -88,6 +94,7 @@ $(MODULE)-objs += vdev_queue.o
 $(MODULE)-objs += vdev_raidz.o
 $(MODULE)-objs += vdev_raidz_math.o
 $(MODULE)-objs += vdev_raidz_math_scalar.o
+$(MODULE)-objs += vdev_removal.o
 $(MODULE)-objs += vdev_root.o
 $(MODULE)-objs += zap.o
 $(MODULE)-objs += zap_leaf.o
@@ -129,10 +136,13 @@ $(MODULE)-objs += zpl_inode.o
 $(MODULE)-objs += zpl_super.o
 $(MODULE)-objs += zpl_xattr.o
 $(MODULE)-objs += zrlock.o
+$(MODULE)-objs += zthr.o
 $(MODULE)-objs += zvol.o
 $(MODULE)-objs += dsl_destroy.o
 $(MODULE)-objs += dsl_userhold.o
+$(MODULE)-objs += qat.o
 $(MODULE)-objs += qat_compress.o
+$(MODULE)-objs += qat_crypt.o
 
 # Suppress incorrect warnings from versions of objtool which are not
 # aware of x86 EVEX prefix instructions used for AVX512.

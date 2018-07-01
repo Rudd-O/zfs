@@ -297,6 +297,16 @@ rw_tryenter(krwlock_t *rwlp, krw_t rw)
 	return (0);
 }
 
+/* ARGSUSED */
+uint32_t
+zone_get_hostid(void *zonep)
+{
+	/*
+	 * We're emulating the system's hostid in userland.
+	 */
+	return (strtoul(hw_serial, NULL, 10));
+}
+
 int
 rw_tryupgrade(krwlock_t *rwlp)
 {
@@ -334,7 +344,7 @@ cv_timedwait(kcondvar_t *cv, kmutex_t *mp, clock_t abstime)
 {
 	int error;
 	struct timeval tv;
-	timestruc_t ts;
+	struct timespec ts;
 	clock_t delta;
 
 	delta = abstime - ddi_get_lbolt();
@@ -369,7 +379,7 @@ cv_timedwait_hires(kcondvar_t *cv, kmutex_t *mp, hrtime_t tim, hrtime_t res,
 {
 	int error;
 	struct timeval tv;
-	timestruc_t ts;
+	struct timespec ts;
 	hrtime_t delta;
 
 	ASSERT(flag == 0 || flag == CALLOUT_FLAG_ABSOLUTE);
@@ -487,8 +497,6 @@ vn_open(char *path, int x1, int flags, int mode, vnode_t **vpp, int x2, int x3)
 #ifdef __linux__
 		flags |= O_DIRECT;
 #endif
-		/* We shouldn't be writing to block devices in userspace */
-		VERIFY(!(flags & FWRITE));
 	}
 
 	if (flags & FCREAT)

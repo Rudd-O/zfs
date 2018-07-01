@@ -4,7 +4,8 @@ DEFAULT_INCLUDES += \
 	-I$(top_srcdir)/include \
 	-I$(top_srcdir)/lib/libspl/include
 
-EXTRA_DIST = zed.d/README
+EXTRA_DIST = zed.d/README \
+	zed.d/history_event-zfs-list-cacher.sh.in
 
 sbin_PROGRAMS = zed
 
@@ -53,7 +54,7 @@ dist_zedconf_DATA = \
 	zed.d/zed-functions.sh \
 	zed.d/zed.rc
 
-zedexecdir = $(libexecdir)/zfs/zed.d
+zedexecdir = $(zfsexecdir)/zed.d
 
 dist_zedexec_SCRIPTS = \
 	zed.d/all-debug.sh \
@@ -68,6 +69,15 @@ dist_zedexec_SCRIPTS = \
 	zed.d/vdev_attach-led.sh \
 	zed.d/pool_import-led.sh \
 	zed.d/resilver_finish-start-scrub.sh
+
+nodist_zedexec_SCRIPTS = zed.d/history_event-zfs-list-cacher.sh
+
+$(nodist_zedexec_SCRIPTS): %: %.in
+	-$(SED) -e 's,@bindir\@,$(bindir),g' \
+		-e 's,@runstatedir\@,$(runstatedir),g' \
+		-e 's,@sbindir\@,$(sbindir),g' \
+		-e 's,@sysconfdir\@,$(sysconfdir),g' \
+		$< >'$@'
 
 zedconfdefaults = \
 	all-syslog.sh \

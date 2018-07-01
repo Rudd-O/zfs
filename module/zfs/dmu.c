@@ -73,6 +73,13 @@ unsigned long zfs_per_txg_dirty_frees_percent = 30;
  */
 int zfs_dmu_offset_next_sync = 0;
 
+/*
+ * This can be used for testing, to ensure that certain actions happen
+ * while in the middle of a remap (which might otherwise complete too
+ * quickly).
+ */
+int zfs_object_remap_one_indirect_delay_ticks = 0;
+
 const dmu_object_type_info_t dmu_ot[DMU_OT_NUMTYPES] = {
 	{ DMU_BSWAP_UINT8,	TRUE,	FALSE,	"unallocated"		},
 	{ DMU_BSWAP_ZAP,	TRUE,	FALSE,	"object directory"	},
@@ -452,15 +459,20 @@ dmu_spill_hold_existing(dmu_buf_t *bonus, void *tag, dmu_buf_t **dbp)
 }
 
 int
-dmu_spill_hold_by_bonus(dmu_buf_t *bonus, void *tag, dmu_buf_t **dbp)
+dmu_spill_hold_by_bonus(dmu_buf_t *bonus, uint32_t flags, void *tag,
+    dmu_buf_t **dbp)
 {
 	dmu_buf_impl_t *db = (dmu_buf_impl_t *)bonus;
 	dnode_t *dn;
 	int err;
+	uint32_t db_flags = DB_RF_CANFAIL;
+
+	if (flags & DMU_READ_NO_DECRYPT)
+		db_flags |= DB_RF_NO_DECRYPT;
 
 	DB_DNODE_ENTER(db);
 	dn = DB_DNODE(db);
-	err = dmu_spill_hold_by_dnode(dn, DB_RF_CANFAIL, tag, dbp);
+	err = dmu_spill_hold_by_dnode(dn, db_flags, tag, dbp);
 	DB_DNODE_EXIT(db);
 
 	return (err);
@@ -758,7 +770,7 @@ dmu_objset_zfs_unmounting(objset_t *os)
 
 static int
 dmu_free_long_range_impl(objset_t *os, dnode_t *dn, uint64_t offset,
-    uint64_t length, boolean_t raw)
+    uint64_t length)
 {
 	uint64_t object_size;
 	int err;
@@ -841,19 +853,6 @@ dmu_free_long_range_impl(objset_t *os, dnode_t *dn, uint64_t offset,
 		    uint64_t, dmu_tx_get_txg(tx));
 		dnode_free_range(dn, chunk_begin, chunk_len, tx);
 
-		/* if this is a raw free, mark the dirty record as such */
-		if (raw) {
-			dbuf_dirty_record_t *dr = dn->dn_dbuf->db_last_dirty;
-
-			while (dr != NULL && dr->dr_txg > tx->tx_txg)
-				dr = dr->dr_next;
-			if (dr != NULL && dr->dr_txg == tx->tx_txg) {
-				dr->dt.dl.dr_raw = B_TRUE;
-				dn->dn_objset->os_next_write_raw
-				    [tx->tx_txg & TXG_MASK] = B_TRUE;
-			}
-		}
-
 		dmu_tx_commit(tx);
 
 		length -= chunk_len;
@@ -871,7 +870,7 @@ dmu_free_long_range(objset_t *os, uint64_t object,
 	err = dnode_hold(os, object, FTAG, &dn);
 	if (err != 0)
 		return (err);
-	err = dmu_free_long_range_impl(os, dn, offset, length, B_FALSE);
+	err = dmu_free_long_range_impl(os, dn, offset, length);
 
 	/*
 	 * It is important to zero out the maxblkid when freeing the entire
@@ -886,37 +885,8 @@ dmu_free_long_range(objset_t *os, uint64_t object,
 	return (err);
 }
 
-/*
- * This function is equivalent to dmu_free_long_range(), but also
- * marks the new dirty record as a raw write.
- */
 int
-dmu_free_long_range_raw(objset_t *os, uint64_t object,
-    uint64_t offset, uint64_t length)
-{
-	dnode_t *dn;
-	int err;
-
-	err = dnode_hold(os, object, FTAG, &dn);
-	if (err != 0)
-		return (err);
-	err = dmu_free_long_range_impl(os, dn, offset, length, B_TRUE);
-
-	/*
-	 * It is important to zero out the maxblkid when freeing the entire
-	 * file, so that (a) subsequent calls to dmu_free_long_range_impl()
-	 * will take the fast path, and (b) dnode_reallocate() can verify
-	 * that the entire file has been freed.
-	 */
-	if (err == 0 && offset == 0 && length == DMU_OBJECT_END)
-		dn->dn_maxblkid = 0;
-
-	dnode_rele(dn, FTAG);
-	return (err);
-}
-
-static int
-dmu_free_long_object_impl(objset_t *os, uint64_t object, boolean_t raw)
+dmu_free_long_object(objset_t *os, uint64_t object)
 {
 	dmu_tx_t *tx;
 	int err;
@@ -931,8 +901,6 @@ dmu_free_long_object_impl(objset_t *os, uint64_t object, boolean_t raw)
 	dmu_tx_mark_netfree(tx);
 	err = dmu_tx_assign(tx, TXG_WAIT);
 	if (err == 0) {
-		if (raw)
-			err = dmu_object_dirty_raw(os, object, tx);
 		if (err == 0)
 			err = dmu_object_free(os, object, tx);
 
@@ -943,19 +911,6 @@ dmu_free_long_object_impl(objset_t *os, uint64_t object, boolean_t raw)
 
 	return (err);
 }
-
-int
-dmu_free_long_object(objset_t *os, uint64_t object)
-{
-	return (dmu_free_long_object_impl(os, object, B_FALSE));
-}
-
-int
-dmu_free_long_object_raw(objset_t *os, uint64_t object)
-{
-	return (dmu_free_long_object_impl(os, object, B_TRUE));
-}
-
 
 int
 dmu_free_range(objset_t *os, uint64_t object, uint64_t offset,
@@ -1112,6 +1067,123 @@ dmu_write_by_dnode(dnode_t *dn, uint64_t offset, uint64_t size,
 	    FALSE, FTAG, &numbufs, &dbp, DMU_READ_PREFETCH));
 	dmu_write_impl(dbp, numbufs, offset, size, buf, tx);
 	dmu_buf_rele_array(dbp, numbufs, FTAG);
+}
+
+static int
+dmu_object_remap_one_indirect(objset_t *os, dnode_t *dn,
+    uint64_t last_removal_txg, uint64_t offset)
+{
+	uint64_t l1blkid = dbuf_whichblock(dn, 1, offset);
+	int err = 0;
+
+	rw_enter(&dn->dn_struct_rwlock, RW_READER);
+	dmu_buf_impl_t *dbuf = dbuf_hold_level(dn, 1, l1blkid, FTAG);
+	ASSERT3P(dbuf, !=, NULL);
+
+	/*
+	 * If the block hasn't been written yet, this default will ensure
+	 * we don't try to remap it.
+	 */
+	uint64_t birth = UINT64_MAX;
+	ASSERT3U(last_removal_txg, !=, UINT64_MAX);
+	if (dbuf->db_blkptr != NULL)
+		birth = dbuf->db_blkptr->blk_birth;
+	rw_exit(&dn->dn_struct_rwlock);
+
+	/*
+	 * If this L1 was already written after the last removal, then we've
+	 * already tried to remap it.
+	 */
+	if (birth <= last_removal_txg &&
+	    dbuf_read(dbuf, NULL, DB_RF_MUST_SUCCEED) == 0 &&
+	    dbuf_can_remap(dbuf)) {
+		dmu_tx_t *tx = dmu_tx_create(os);
+		dmu_tx_hold_remap_l1indirect(tx, dn->dn_object);
+		err = dmu_tx_assign(tx, TXG_WAIT);
+		if (err == 0) {
+			(void) dbuf_dirty(dbuf, tx);
+			dmu_tx_commit(tx);
+		} else {
+			dmu_tx_abort(tx);
+		}
+	}
+
+	dbuf_rele(dbuf, FTAG);
+
+	delay(zfs_object_remap_one_indirect_delay_ticks);
+
+	return (err);
+}
+
+/*
+ * Remap all blockpointers in the object, if possible, so that they reference
+ * only concrete vdevs.
+ *
+ * To do this, iterate over the L0 blockpointers and remap any that reference
+ * an indirect vdev. Note that we only examine L0 blockpointers; since we
+ * cannot guarantee that we can remap all blockpointer anyways (due to split
+ * blocks), we do not want to make the code unnecessarily complicated to
+ * catch the unlikely case that there is an L1 block on an indirect vdev that
+ * contains no indirect blockpointers.
+ */
+int
+dmu_object_remap_indirects(objset_t *os, uint64_t object,
+    uint64_t last_removal_txg)
+{
+	uint64_t offset, l1span;
+	int err;
+	dnode_t *dn;
+
+	err = dnode_hold(os, object, FTAG, &dn);
+	if (err != 0) {
+		return (err);
+	}
+
+	if (dn->dn_nlevels <= 1) {
+		if (issig(JUSTLOOKING) && issig(FORREAL)) {
+			err = SET_ERROR(EINTR);
+		}
+
+		/*
+		 * If the dnode has no indirect blocks, we cannot dirty them.
+		 * We still want to remap the blkptr(s) in the dnode if
+		 * appropriate, so mark it as dirty.
+		 */
+		if (err == 0 && dnode_needs_remap(dn)) {
+			dmu_tx_t *tx = dmu_tx_create(os);
+			dmu_tx_hold_bonus(tx, dn->dn_object);
+			if ((err = dmu_tx_assign(tx, TXG_WAIT)) == 0) {
+				dnode_setdirty(dn, tx);
+				dmu_tx_commit(tx);
+			} else {
+				dmu_tx_abort(tx);
+			}
+		}
+
+		dnode_rele(dn, FTAG);
+		return (err);
+	}
+
+	offset = 0;
+	l1span = 1ULL << (dn->dn_indblkshift - SPA_BLKPTRSHIFT +
+	    dn->dn_datablkshift);
+	/*
+	 * Find the next L1 indirect that is not a hole.
+	 */
+	while (dnode_next_offset(dn, 0, &offset, 2, 1, 0) == 0) {
+		if (issig(JUSTLOOKING) && issig(FORREAL)) {
+			err = SET_ERROR(EINTR);
+			break;
+		}
+		if ((err = dmu_object_remap_one_indirect(os, dn,
+		    last_removal_txg, offset)) != 0) {
+			break;
+		}
+		offset += l1span;
+	}
+
+	dnode_rele(dn, FTAG);
+	return (err);
 }
 
 void
@@ -1540,41 +1612,6 @@ dmu_return_arcbuf(arc_buf_t *buf)
 {
 	arc_return_buf(buf, FTAG);
 	arc_buf_destroy(buf, FTAG);
-}
-
-int
-dmu_convert_mdn_block_to_raw(objset_t *os, uint64_t firstobj,
-    boolean_t byteorder, const uint8_t *salt, const uint8_t *iv,
-    const uint8_t *mac, dmu_tx_t *tx)
-{
-	int ret;
-	dmu_buf_t *handle = NULL;
-	dmu_buf_impl_t *db = NULL;
-	uint64_t offset = firstobj * DNODE_MIN_SIZE;
-	uint64_t dsobj = dmu_objset_id(os);
-
-	ret = dmu_buf_hold_by_dnode(DMU_META_DNODE(os), offset, FTAG, &handle,
-	    DMU_READ_PREFETCH | DMU_READ_NO_DECRYPT);
-	if (ret != 0)
-		return (ret);
-
-	dmu_buf_will_change_crypt_params(handle, tx);
-
-	db = (dmu_buf_impl_t *)handle;
-	ASSERT3P(db->db_buf, !=, NULL);
-	ASSERT3U(dsobj, !=, 0);
-
-	/*
-	 * This technically violates the assumption the dmu code makes
-	 * that dnode blocks are only released in syncing context.
-	 */
-	(void) arc_release(db->db_buf, db);
-	arc_convert_to_raw(db->db_buf, dsobj, byteorder, DMU_OT_DNODE,
-	    salt, iv, mac);
-
-	dmu_buf_rele(handle, FTAG);
-
-	return (0);
 }
 
 void
@@ -2099,25 +2136,6 @@ dmu_object_set_compress(objset_t *os, uint64_t object, uint8_t compress,
 }
 
 /*
- * Dirty an object and set the dirty record's raw flag. This is used
- * when writing raw data to an object that will not effect the
- * encryption parameters, specifically during raw receives.
- */
-int
-dmu_object_dirty_raw(objset_t *os, uint64_t object, dmu_tx_t *tx)
-{
-	dnode_t *dn;
-	int err;
-
-	err = dnode_hold(os, object, FTAG, &dn);
-	if (err)
-		return (err);
-	dmu_buf_will_change_crypt_params((dmu_buf_t *)dn->dn_dbuf, tx);
-	dnode_rele(dn, FTAG);
-	return (err);
-}
-
-/*
  * When the "redundant_metadata" property is set to "most", only indirect
  * blocks of this level and higher will have an additional ditto block.
  */
@@ -2284,7 +2302,7 @@ dmu_offset_next(objset_t *os, uint64_t object, boolean_t hole, uint64_t *off)
 	 * Check if dnode is dirty
 	 */
 	for (i = 0; i < TXG_SIZE; i++) {
-		if (list_link_active(&dn->dn_dirty_link[i])) {
+		if (multilist_link_active(&dn->dn_dirty_link[i])) {
 			clean = B_FALSE;
 			break;
 		}
@@ -2492,16 +2510,14 @@ dmu_fini(void)
 	abd_fini();
 }
 
-#if defined(_KERNEL) && defined(HAVE_SPL)
+#if defined(_KERNEL)
 EXPORT_SYMBOL(dmu_bonus_hold);
 EXPORT_SYMBOL(dmu_buf_hold_array_by_bonus);
 EXPORT_SYMBOL(dmu_buf_rele_array);
 EXPORT_SYMBOL(dmu_prefetch);
 EXPORT_SYMBOL(dmu_free_range);
 EXPORT_SYMBOL(dmu_free_long_range);
-EXPORT_SYMBOL(dmu_free_long_range_raw);
 EXPORT_SYMBOL(dmu_free_long_object);
-EXPORT_SYMBOL(dmu_free_long_object_raw);
 EXPORT_SYMBOL(dmu_read);
 EXPORT_SYMBOL(dmu_read_by_dnode);
 EXPORT_SYMBOL(dmu_write);

@@ -21,12 +21,13 @@
 
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2011, 2017 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2018 by Delphix. All rights reserved.
  * Copyright 2012 Milan Jurik. All rights reserved.
  * Copyright (c) 2012, Joyent, Inc. All rights reserved.
  * Copyright (c) 2013 Steven Hartland.  All rights reserved.
  * Copyright 2016 Igor Kozhukhov <ikozhukhov@gmail.com>.
  * Copyright 2016 Nexenta Systems, Inc.
+ * Copyright (c) 2018 Datto Inc.
  */
 
 #include <assert.h>
@@ -110,6 +111,7 @@ static int zfs_do_release(int argc, char **argv);
 static int zfs_do_diff(int argc, char **argv);
 static int zfs_do_bookmark(int argc, char **argv);
 static int zfs_do_channel_program(int argc, char **argv);
+static int zfs_do_remap(int argc, char **argv);
 static int zfs_do_load_key(int argc, char **argv);
 static int zfs_do_unload_key(int argc, char **argv);
 static int zfs_do_change_key(int argc, char **argv);
@@ -162,6 +164,7 @@ typedef enum {
 	HELP_HOLDS,
 	HELP_RELEASE,
 	HELP_DIFF,
+	HELP_REMAP,
 	HELP_BOOKMARK,
 	HELP_CHANNEL_PROGRAM,
 	HELP_LOAD_KEY,
@@ -225,6 +228,7 @@ static zfs_command_t command_table[] = {
 	{ "holds",	zfs_do_holds,		HELP_HOLDS		},
 	{ "release",	zfs_do_release,		HELP_RELEASE		},
 	{ "diff",	zfs_do_diff,		HELP_DIFF		},
+	{ "remap",	zfs_do_remap,		HELP_REMAP		},
 	{ "load-key",	zfs_do_load_key,	HELP_LOAD_KEY		},
 	{ "unload-key",	zfs_do_unload_key,	HELP_UNLOAD_KEY		},
 	{ "change-key",	zfs_do_change_key,	HELP_CHANGE_KEY		},
@@ -355,10 +359,12 @@ get_usage(zfs_help_t idx)
 	case HELP_DIFF:
 		return (gettext("\tdiff [-FHt] <snapshot> "
 		    "[snapshot|filesystem]\n"));
+	case HELP_REMAP:
+		return (gettext("\tremap <filesystem | volume>\n"));
 	case HELP_BOOKMARK:
 		return (gettext("\tbookmark <snapshot> <bookmark>\n"));
 	case HELP_CHANNEL_PROGRAM:
-		return (gettext("\tprogram [-n] [-t <instruction limit>] "
+		return (gettext("\tprogram [-jn] [-t <instruction limit>] "
 		    "[-m <memory limit (b)>] <pool> <program file> "
 		    "[lua args...]\n"));
 	case HELP_LOAD_KEY:
@@ -1060,6 +1066,7 @@ typedef struct destroy_cbdata {
 	int64_t		cb_snapused;
 	char		*cb_snapspec;
 	char		*cb_bookmark;
+	uint64_t	cb_snap_count;
 } destroy_cbdata_t;
 
 /*
@@ -1123,10 +1130,21 @@ out:
 }
 
 static int
+destroy_batched(destroy_cbdata_t *cb)
+{
+	int error = zfs_destroy_snaps_nvl(g_zfs,
+	    cb->cb_batchedsnaps, B_FALSE);
+	fnvlist_free(cb->cb_batchedsnaps);
+	cb->cb_batchedsnaps = fnvlist_alloc();
+	return (error);
+}
+
+static int
 destroy_callback(zfs_handle_t *zhp, void *data)
 {
 	destroy_cbdata_t *cb = data;
 	const char *name = zfs_get_name(zhp);
+	int error;
 
 	if (cb->cb_verbose) {
 		if (cb->cb_parsable) {
@@ -1161,17 +1179,25 @@ destroy_callback(zfs_handle_t *zhp, void *data)
 	 * because we must delete a clone before its origin.
 	 */
 	if (zfs_get_type(zhp) == ZFS_TYPE_SNAPSHOT) {
+		cb->cb_snap_count++;
 		fnvlist_add_boolean(cb->cb_batchedsnaps, name);
+		if (cb->cb_snap_count % 10 == 0 && cb->cb_defer_destroy)
+			error = destroy_batched(cb);
 	} else {
-		int error = zfs_destroy_snaps_nvl(g_zfs,
-		    cb->cb_batchedsnaps, B_FALSE);
-		fnvlist_free(cb->cb_batchedsnaps);
-		cb->cb_batchedsnaps = fnvlist_alloc();
-
+		error = destroy_batched(cb);
 		if (error != 0 ||
 		    zfs_unmount(zhp, NULL, cb->cb_force ? MS_FORCE : 0) != 0 ||
 		    zfs_destroy(zhp, cb->cb_defer_destroy) != 0) {
 			zfs_close(zhp);
+			/*
+			 * When performing a recursive destroy we ignore errors
+			 * so that the recursive destroy could continue
+			 * destroying past problem datasets
+			 */
+			if (cb->cb_recurse) {
+				cb->cb_error = B_TRUE;
+				return (0);
+			}
 			return (-1);
 		}
 	}
@@ -1524,7 +1550,6 @@ zfs_do_destroy(int argc, char **argv)
 			rv = 1;
 			goto out;
 		}
-
 		cb.cb_batchedsnaps = fnvlist_alloc();
 		if (zfs_iter_dependents(zhp, B_FALSE, destroy_callback,
 		    &cb) != 0) {
@@ -1542,7 +1567,7 @@ zfs_do_destroy(int argc, char **argv)
 			err = zfs_destroy_snaps_nvl(g_zfs,
 			    cb.cb_batchedsnaps, cb.cb_defer_destroy);
 		}
-		if (err != 0)
+		if (err != 0 || cb.cb_error == B_TRUE)
 			rv = 1;
 	}
 
@@ -4352,6 +4377,7 @@ zfs_do_receive(int argc, char **argv)
 #define	ZFS_DELEG_PERM_RELEASE		"release"
 #define	ZFS_DELEG_PERM_DIFF		"diff"
 #define	ZFS_DELEG_PERM_BOOKMARK		"bookmark"
+#define	ZFS_DELEG_PERM_REMAP		"remap"
 #define	ZFS_DELEG_PERM_LOAD_KEY		"load-key"
 #define	ZFS_DELEG_PERM_CHANGE_KEY	"change-key"
 
@@ -4379,6 +4405,7 @@ static zfs_deleg_perm_tab_t zfs_deleg_perm_tbl[] = {
 	{ ZFS_DELEG_PERM_SHARE, ZFS_DELEG_NOTE_SHARE },
 	{ ZFS_DELEG_PERM_SNAPSHOT, ZFS_DELEG_NOTE_SNAPSHOT },
 	{ ZFS_DELEG_PERM_BOOKMARK, ZFS_DELEG_NOTE_BOOKMARK },
+	{ ZFS_DELEG_PERM_REMAP, ZFS_DELEG_NOTE_REMAP },
 	{ ZFS_DELEG_PERM_LOAD_KEY, ZFS_DELEG_NOTE_LOAD_KEY },
 	{ ZFS_DELEG_PERM_CHANGE_KEY, ZFS_DELEG_NOTE_CHANGE_KEY },
 
@@ -6218,6 +6245,22 @@ share_mount_one(zfs_handle_t *zhp, int op, int flags, char *protocol,
 	}
 
 	/*
+	 * If this filesystem is encrypted and does not have
+	 * a loaded key, we can not mount it.
+	 */
+	if ((flags & MS_CRYPT) == 0 &&
+	    zfs_prop_get_int(zhp, ZFS_PROP_ENCRYPTION) != ZIO_CRYPT_OFF &&
+	    zfs_prop_get_int(zhp, ZFS_PROP_KEYSTATUS) ==
+	    ZFS_KEYSTATUS_UNAVAILABLE) {
+		if (!explicit)
+			return (0);
+
+		(void) fprintf(stderr, gettext("cannot %s '%s': "
+		    "encryption key not loaded\n"), cmdname, zfs_get_name(zhp));
+		return (1);
+	}
+
+	/*
 	 * If this filesystem is inconsistent and has a receive resume
 	 * token, we can not mount it.
 	 */
@@ -7032,7 +7075,7 @@ zfs_do_diff(int argc, char **argv)
 
 	if (argc < 1) {
 		(void) fprintf(stderr,
-		gettext("must provide at least one snapshot name\n"));
+		    gettext("must provide at least one snapshot name\n"));
 		usage(B_FALSE);
 	}
 
@@ -7072,6 +7115,40 @@ zfs_do_diff(int argc, char **argv)
 	zfs_close(zhp);
 
 	return (err != 0);
+}
+
+
+/*
+ * zfs remap <filesystem | volume>
+ *
+ * Remap the indirect blocks in the given fileystem or volume.
+ */
+static int
+zfs_do_remap(int argc, char **argv)
+{
+	const char *fsname;
+	int err = 0;
+	int c;
+
+	/* check options */
+	while ((c = getopt(argc, argv, "")) != -1) {
+		switch (c) {
+		case '?':
+			(void) fprintf(stderr,
+			    gettext("invalid option '%c'\n"), optopt);
+			usage(B_FALSE);
+		}
+	}
+
+	if (argc != 2) {
+		(void) fprintf(stderr, gettext("wrong number of arguments\n"));
+		usage(B_FALSE);
+	}
+
+	fsname = argv[1];
+	err = zfs_remap_indirects(g_zfs, fsname);
+
+	return (err);
 }
 
 /*
@@ -7210,11 +7287,11 @@ zfs_do_channel_program(int argc, char **argv)
 	nvlist_t *outnvl;
 	uint64_t instrlimit = ZCP_DEFAULT_INSTRLIMIT;
 	uint64_t memlimit = ZCP_DEFAULT_MEMLIMIT;
-	boolean_t sync_flag = B_TRUE;
+	boolean_t sync_flag = B_TRUE, json_output = B_FALSE;
 	zpool_handle_t *zhp;
 
 	/* check options */
-	while ((c = getopt(argc, argv, "nt:m:")) != -1) {
+	while ((c = getopt(argc, argv, "nt:m:j")) != -1) {
 		switch (c) {
 		case 't':
 		case 'm': {
@@ -7231,29 +7308,19 @@ zfs_do_channel_program(int argc, char **argv)
 			}
 
 			if (c == 't') {
-				if (arg > ZCP_MAX_INSTRLIMIT || arg == 0) {
-					(void) fprintf(stderr, gettext(
-					    "Invalid instruction limit: "
-					    "%s\n"), optarg);
-					return (1);
-				} else {
-					instrlimit = arg;
-				}
+				instrlimit = arg;
 			} else {
 				ASSERT3U(c, ==, 'm');
-				if (arg > ZCP_MAX_MEMLIMIT || arg == 0) {
-					(void) fprintf(stderr, gettext(
-					    "Invalid memory limit: "
-					    "%s\n"), optarg);
-					return (1);
-				} else {
-					memlimit = arg;
-				}
+				memlimit = arg;
 			}
 			break;
 		}
 		case 'n': {
 			sync_flag = B_FALSE;
+			break;
+		}
+		case 'j': {
+			json_output = B_TRUE;
 			break;
 		}
 		case '?':
@@ -7381,14 +7448,18 @@ zfs_do_channel_program(int argc, char **argv)
 		    gettext("Channel program execution failed:\n%s\n"),
 		    errstring);
 		if (ret == ETIME && instructions != 0)
-			(void) fprintf(stderr, "%llu Lua instructions\n",
+			(void) fprintf(stderr,
+			    gettext("%llu Lua instructions\n"),
 			    (u_longlong_t)instructions);
 	} else {
-		(void) printf("Channel program fully executed ");
-		if (nvlist_empty(outnvl)) {
-			(void) printf("with no return value.\n");
+		if (json_output) {
+			(void) nvlist_print_json(stdout, outnvl);
+		} else if (nvlist_empty(outnvl)) {
+			(void) fprintf(stdout, gettext("Channel program fully "
+			    "executed and did not produce output.\n"));
 		} else {
-			(void) printf("with return value:\n");
+			(void) fprintf(stdout, gettext("Channel program fully "
+			    "executed and produced output:\n"));
 			dump_nvlist(outnvl, 4);
 		}
 	}

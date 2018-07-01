@@ -71,11 +71,9 @@
 #include <sys/types.h>
 #include <sys/param.h>
 #include <sys/time.h>
-#include <sys/systm.h>
 #include <sys/sysmacros.h>
 #include <sys/pathname.h>
 #include <sys/vfs.h>
-#include <sys/vfs_opreg.h>
 #include <sys/zfs_ctldir.h>
 #include <sys/zfs_ioctl.h>
 #include <sys/zfs_vfsops.h>
@@ -85,7 +83,6 @@
 #include <sys/dmu_objset.h>
 #include <sys/dsl_destroy.h>
 #include <sys/dsl_deleg.h>
-#include <sys/mount.h>
 #include <sys/zpl.h>
 #include "zfs_namecheck.h"
 
@@ -451,7 +448,7 @@ static struct inode *
 zfsctl_inode_alloc(zfsvfs_t *zfsvfs, uint64_t id,
     const struct file_operations *fops, const struct inode_operations *ops)
 {
-	struct timespec now;
+	inode_timespec_t now;
 	struct inode *ip;
 	znode_t *zp;
 

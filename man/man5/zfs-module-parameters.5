@@ -1,6 +1,7 @@
 '\" te
 .\" Copyright (c) 2013 by Turbo Fredriksson <turbo@bayour.com>. All rights reserved.
 .\" Copyright (c) 2017 Datto Inc.
+.\" Copyright (c) 2018 by Delphix. All rights reserved.
 .\" The contents of this file are subject to the terms of the Common Development
 .\" and Distribution License (the "License").  You may not use this file except
 .\" in compliance with the License. You can obtain a copy of the license at
@@ -24,6 +25,57 @@ Description of the different parameters to the ZFS module.
 .SS "Module parameters"
 .sp
 .LP
+
+.sp
+.ne 2
+.na
+\fBdbuf_cache_max_bytes\fR (ulong)
+.ad
+.RS 12n
+Maximum size in bytes of the dbuf cache.  When \fB0\fR this value will default
+to \fB1/2^dbuf_cache_shift\fR (1/32) of the target ARC size, otherwise the
+provided value in bytes will be used.  The behavior of the dbuf cache and its
+associated settings can be observed via the \fB/proc/spl/kstat/zfs/dbufstats\fR
+kstat.
+.sp
+Default value: \fB0\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBdbuf_cache_hiwater_pct\fR (uint)
+.ad
+.RS 12n
+The percentage over \fBdbuf_cache_max_bytes\fR when dbufs must be evicted
+directly.
+.sp
+Default value: \fB10\fR%.
+.RE
+
+.sp
+.ne 2
+.na
+\fBdbuf_cache_lowater_pct\fR (uint)
+.ad
+.RS 12n
+The percentage below \fBdbuf_cache_max_bytes\fR when the evict thread stops
+evicting dbufs.
+.sp
+Default value: \fB10\fR%.
+.RE
+
+.sp
+.ne 2
+.na
+\fBdbuf_cache_shift\fR (int)
+.ad
+.RS 12n
+Set the size of the dbuf cache, \fBdbuf_cache_max_bytes\fR, to a log2 fraction
+of the target arc size.
+.sp
+Default value: \fB5\fR.
+.RE
 
 .sp
 .ne 2
@@ -172,6 +224,18 @@ Use \fB1\fR for yes (default) and \fB0\fR for no.
 .sp
 .ne 2
 .na
+\fBmetaslab_force_ganging\fR (ulong)
+.ad
+.RS 12n
+Make some blocks above a certain size be gang blocks.  This option is used
+by the test suite to facilitate testing.
+.sp
+Default value: \fB16,777,217\fR.
+.RE
+
+.sp
+.ne 2
+.na
 \fBzfs_metaslab_segment_weight_enabled\fR (int)
 .ad
 .RS 12n
@@ -229,12 +293,23 @@ Use \fB1\fR for yes (default) and \fB0\fR for no.
 .sp
 .ne 2
 .na
-\fBmetaslabs_per_vdev\fR (int)
+\fBvdev_max_ms_count\fR (int)
 .ad
 .RS 12n
 When a vdev is added, it will be divided into approximately (but no more than) this number of metaslabs.
 .sp
 Default value: \fB200\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBvdev_min_ms_count\fR (int)
+.ad
+.RS 12n
+Minimum number of metaslabs to create in a top-level vdev.
+.sp
+Default value: \fB16\fR.
 .RE
 
 .sp
@@ -286,6 +361,18 @@ may wish to specify a more realistic inflation factor, particularly if
 they operate close to quota or capacity limits.
 .sp
 Default value: \fB24\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBspa_load_print_vdev_tree\fR (int)
+.ad
+.RS 12n
+Whether to print the vdev tree in the debugging message buffer during pool import.
+Use 0 to disable and 1 to enable.
+.sp
+Default value: \fB0\fR.
 .RE
 
 .sp
@@ -348,6 +435,24 @@ less than this amount of free space, most ZPL operations (e.g. write,
 create) will return ENOSPC.
 .sp
 Default value: \fB5\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBvdev_removal_max_span\fR (int)
+.ad
+.RS 12n
+During top-level vdev removal, chunks of data are copied from the vdev
+which may include free space in order to trade bandwidth for IOPS.
+This parameter determines the maximum span of free space (in bytes)
+which will be included as "unnecessary" data in a chunk of copied data.
+
+The default value here was chosen to align with
+\fBzfs_vdev_read_gap_limit\fR, which is a similar concept when doing
+regular reads (but there's no reason it has to be the same).
+.sp
+Default value: \fB32,768\fR.
 .RE
 
 .sp
@@ -641,6 +746,18 @@ Default value: \fB0\fR.
 .sp
 .ne 2
 .na
+\fBzfs_max_missing_tvds\fR (int)
+.ad
+.RS 12n
+Number of missing top-level vdevs which will be allowed during
+pool import (only in read-only mode).
+.sp
+Default value: \fB0\fR
+.RE
+
+.sp
+.ne 2
+.na
 \fBzfs_multilist_num_sublists\fR (int)
 .ad
 .RS 12n
@@ -779,6 +896,47 @@ latency to avoid significantly impacting the latency of each individual
 transaction record (itx).
 .sp
 Default value: \fB5\fR%.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs_condense_indirect_vdevs_enable\fR (int)
+.ad
+.RS 12n
+Enable condensing indirect vdev mappings.  When set to a non-zero value,
+attempt to condense indirect vdev mappings if the mapping uses more than
+\fBzfs_condense_min_mapping_bytes\fR bytes of memory and if the obsolete
+space map object uses more than \fBzfs_condense_max_obsolete_bytes\fR
+bytes on-disk.  The condensing process is an attempt to save memory by
+removing obsolete mappings.
+.sp
+Default value: \fB1\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs_condense_max_obsolete_bytes\fR (ulong)
+.ad
+.RS 12n
+Only attempt to condense indirect vdev mappings if the on-disk size
+of the obsolete space map object is greater than this number of bytes
+(see \fBfBzfs_condense_indirect_vdevs_enable\fR).
+.sp
+Default value: \fB1,073,741,824\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs_condense_min_mapping_bytes\fR (ulong)
+.ad
+.RS 12n
+Minimum size vdev mapping to attempt to condense (see
+\fBzfs_condense_indirect_vdevs_enable\fR).
+.sp
+Default value: \fB131,072\fR.
 .RE
 
 .sp
@@ -1072,12 +1230,23 @@ Default value: \fB1\fR.
 .sp
 .ne 2
 .na
-\fBzfs_free_max_blocks\fR (ulong)
+\fBzfs_async_block_max_blocks\fR (ulong)
 .ad
 .RS 12n
 Maximum number of blocks freed in a single txg.
 .sp
 Default value: \fB100,000\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs_override_estimate_recordsize\fR (ulong)
+.ad
+.RS 12n
+Record size calculation override for zfs send estimates.
+.sp
+Default value: \fB0\fR.
 .RE
 
 .sp
@@ -1324,9 +1493,6 @@ _
 16	ZFS_DEBUG_MODIFY
 	Check for illegally modified ARC buffers.
 _
-32	ZFS_DEBUG_SPA
-	Enable spa_dbgmsg entries in the debug log.
-_
 64	ZFS_DEBUG_ZIO_FREE
 	Enable verification of block frees.
 _
@@ -1404,6 +1570,30 @@ Largest data block to write to zil. Larger blocks will be treated as if the
 dataset being written to had the property setting \fBlogbias=throughput\fR.
 .sp
 Default value: \fB32,768\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs_lua_max_instrlimit\fR (ulong)
+.ad
+.RS 12n
+The maximum execution time limit that can be set for a ZFS channel program,
+specified as a number of Lua instructions.
+.sp
+Default value: \fB100,000,000\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs_lua_max_memlimit\fR (ulong)
+.ad
+.RS 12n
+The maximum memory limit that can be set for a ZFS channel program, specified
+in bytes.
+.sp
+Default value: \fB104,857,600\fR.
 .RE
 
 .sp
@@ -1691,6 +1881,23 @@ Use \fB1\fR for yes and \fB0\fR for no (default).
 .sp
 .ne 2
 .na
+\fBzfs_reconstruct_indirect_combinations_max\fR (int)
+.ad
+.RS 12na
+If an indirect split block contains more than this many possible unique
+combinations when being reconstructed, consider it too computationally
+expensive to check them all. Instead, try at most
+\fBzfs_reconstruct_indirect_combinations_max\fR randomly-selected
+combinations each time the block is accessed.  This allows all segment
+copies to participate fairly in the reconstruction when all combinations
+cannot be checked and prevents repeated use of one bad copy.
+.sp
+Default value: \fB100\fR.
+.RE
+
+.sp
+.ne 2
+.na
 \fBzfs_recover\fR (int)
 .ad
 .RS 12n
@@ -1715,6 +1922,20 @@ Default value: \fB3,000\fR.
 .sp
 .ne 2
 .na
+\fBzfs_scan_ignore_errors\fR (int)
+.ad
+.RS 12n
+If set to a nonzero value, remove the DTL (dirty time list) upon
+completion of a pool scan (scrub) even if there were unrepairable
+errors.  It is intended to be used during pool repair or recovery to
+stop resilvering when the pool is next imported.
+.sp
+Default value: \fB0\fR.
+.RE
+
+.sp
+.ne 2
+.na
 \fBzfs_scrub_min_time_ms\fR (int)
 .ad
 .RS 12n
@@ -1733,7 +1954,7 @@ Default value: \fB1,000\fR.
 To preserve progress across reboots the sequential scan algorithm periodically
 needs to stop metadata scanning and issue all the verifications I/Os to disk.
 The frequency of this flushing is determined by the
-\fBfBzfs_scan_checkpoint_intval\fR tunable.
+\fBzfs_scan_checkpoint_intval\fR tunable.
 .sp
 Default value: \fB7200\fR seconds (every 2 hours).
 .RE
@@ -1857,12 +2078,49 @@ Use \fB1\fR for yes and \fB0\fR for no (default).
 .sp
 .ne 2
 .na
+\fBzfs_send_queue_length\fR (int)
+.ad
+.RS 12n
+The maximum number of bytes allowed in the \fBzfs send\fR queue. This value
+must be at least twice the maximum block size in use.
+.sp
+Default value: \fB16,777,216\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs_recv_queue_length\fR (int)
+.ad
+.RS 12n
+.sp
+The maximum number of bytes allowed in the \fBzfs receive\fR queue. This value
+must be at least twice the maximum block size in use.
+.sp
+Default value: \fB16,777,216\fR.
+.RE
+
+.sp
+.ne 2
+.na
 \fBzfs_sync_pass_deferred_free\fR (int)
 .ad
 .RS 12n
 Flushing of data to disk is done in passes. Defer frees starting in this pass
 .sp
 Default value: \fB2\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs_spa_discard_memory_limit\fR (int)
+.ad
+.RS 12n
+Maximum memory used for prefetching a checkpoint's space map on each
+vdev while discarding the checkpoint.
+.sp
+Default value: \fB16,777,216\fR.
 .RE
 
 .sp
@@ -2352,9 +2610,9 @@ Default value: \fB1\fR.
 \fBzfs_qat_disable\fR (int)
 .ad
 .RS 12n
-This tunable disables qat hardware acceleration for gzip compression.
-It is available only if qat acceleration is compiled in and qat driver
-is present.
+This tunable disables qat hardware acceleration for gzip compression and.
+AES-GCM encryption. It is available only if qat acceleration is compiled in
+and the qat driver is present.
 .sp
 Use \fB1\fR for yes and \fB0\fR for no (default).
 .RE

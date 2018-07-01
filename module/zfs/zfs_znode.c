@@ -29,24 +29,17 @@
 #include <sys/types.h>
 #include <sys/param.h>
 #include <sys/time.h>
-#include <sys/systm.h>
 #include <sys/sysmacros.h>
-#include <sys/resource.h>
 #include <sys/mntent.h>
-#include <sys/mkdev.h>
 #include <sys/u8_textprep.h>
 #include <sys/dsl_dataset.h>
 #include <sys/vfs.h>
-#include <sys/vfs_opreg.h>
 #include <sys/vnode.h>
 #include <sys/file.h>
 #include <sys/kmem.h>
 #include <sys/errno.h>
-#include <sys/unistd.h>
 #include <sys/mode.h>
 #include <sys/atomic.h>
-#include <vm/pvn.h>
-#include "fs/fs_subr.h"
 #include <sys/zfs_dir.h>
 #include <sys/zfs_acl.h>
 #include <sys/zfs_ioctl.h>
@@ -56,7 +49,6 @@
 #include <sys/zfs_ctldir.h>
 #include <sys/dnode.h>
 #include <sys/fs/zfs.h>
-#include <sys/kidmap.h>
 #include <sys/zpl.h>
 #endif /* _KERNEL */
 
@@ -706,7 +698,7 @@ zfs_mknode(znode_t *dzp, vattr_t *vap, dmu_tx_t *tx, cred_t *cr,
 	uint64_t	rdev = 0;
 	zfsvfs_t	*zfsvfs = ZTOZSB(dzp);
 	dmu_buf_t	*db;
-	timestruc_t	now;
+	inode_timespec_t now;
 	uint64_t	gen, obj;
 	int		bonuslen;
 	int		dnodesize;
@@ -1411,7 +1403,7 @@ void
 zfs_tstamp_update_setup(znode_t *zp, uint_t flag, uint64_t mtime[2],
     uint64_t ctime[2])
 {
-	timestruc_t	now;
+	inode_timespec_t now;
 
 	gethrestime(&now);
 
@@ -2120,6 +2112,17 @@ zfs_obj_to_path_impl(objset_t *osp, uint64_t obj, sa_handle_t *hdl,
 	*path = '\0';
 	sa_hdl = hdl;
 
+	uint64_t deleteq_obj;
+	VERIFY0(zap_lookup(osp, MASTER_NODE_OBJ,
+	    ZFS_UNLINKED_SET, sizeof (uint64_t), 1, &deleteq_obj));
+	error = zap_lookup_int(osp, deleteq_obj, obj);
+	if (error == 0) {
+		return (ESTALE);
+	} else if (error != ENOENT) {
+		return (error);
+	}
+	error = 0;
+
 	for (;;) {
 		uint64_t pobj = 0;
 		char component[MAXNAMELEN + 2];
@@ -2232,7 +2235,7 @@ zfs_obj_to_stats(objset_t *osp, uint64_t obj, zfs_stat_t *sb,
 	return (error);
 }
 
-#if defined(_KERNEL) && defined(HAVE_SPL)
+#if defined(_KERNEL)
 EXPORT_SYMBOL(zfs_create_fs);
 EXPORT_SYMBOL(zfs_obj_to_path);
 

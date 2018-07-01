@@ -33,11 +33,8 @@
 #include <sys/types.h>
 #include <sys/param.h>
 #include <sys/time.h>
-#include <sys/systm.h>
 #include <sys/sysmacros.h>
-#include <sys/resource.h>
 #include <sys/vfs.h>
-#include <sys/vfs_opreg.h>
 #include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/kmem.h>
@@ -45,11 +42,9 @@
 #include <sys/uio.h>
 #include <sys/vmsystm.h>
 #include <sys/atomic.h>
-#include <vm/pvn.h>
 #include <sys/pathname.h>
 #include <sys/cmn_err.h>
 #include <sys/errno.h>
-#include <sys/unistd.h>
 #include <sys/zfs_dir.h>
 #include <sys/zfs_acl.h>
 #include <sys/zfs_ioctl.h>
@@ -61,22 +56,16 @@
 #include <sys/dbuf.h>
 #include <sys/zap.h>
 #include <sys/sa.h>
-#include <sys/dirent.h>
 #include <sys/policy.h>
 #include <sys/sunddi.h>
 #include <sys/sid.h>
 #include <sys/mode.h>
-#include "fs/fs_subr.h"
 #include <sys/zfs_ctldir.h>
 #include <sys/zfs_fuid.h>
 #include <sys/zfs_sa.h>
 #include <sys/zfs_vnops.h>
-#include <sys/dnlc.h>
 #include <sys/zfs_rlock.h>
-#include <sys/extdirent.h>
-#include <sys/kidmap.h>
 #include <sys/cred.h>
-#include <sys/attr.h>
 #include <sys/zpl.h>
 #include <sys/zil.h>
 #include <sys/sa_impl.h>
@@ -400,6 +389,7 @@ mappedread(struct inode *ip, int nbytes, uio_t *uio)
 		pp = find_lock_page(mp, start >> PAGE_SHIFT);
 		if (pp) {
 			ASSERT(PageUptodate(pp));
+			unlock_page(pp);
 
 			pb = kmap(pp);
 			error = uiomove(pb + off, bytes, UIO_READ, uio);
@@ -409,7 +399,6 @@ mappedread(struct inode *ip, int nbytes, uio_t *uio)
 				flush_dcache_page(pp);
 
 			mark_page_accessed(pp);
-			unlock_page(pp);
 			put_page(pp);
 		} else {
 			error = dmu_read_uio_dbuf(sa_get_db(zp->z_sa_hdl),
@@ -1111,6 +1100,18 @@ zfs_get_data(void *arg, lr_write_t *lr, char *buf, struct lwb *lwb, zio_t *zio)
 
 			if (error == EALREADY) {
 				lr->lr_common.lrc_txtype = TX_WRITE2;
+				/*
+				 * TX_WRITE2 relies on the data previously
+				 * written by the TX_WRITE that caused
+				 * EALREADY.  We zero out the BP because
+				 * it is the old, currently-on-disk BP,
+				 * so there's no need to zio_flush() its
+				 * vdevs (flushing would needlesly hurt
+				 * performance, and doesn't work on
+				 * indirect vdevs).
+				 */
+				zgd->zgd_bp = NULL;
+				BP_ZERO(bp);
 				error = 0;
 			}
 		}
@@ -2261,7 +2262,7 @@ out:
  */
 /* ARGSUSED */
 int
-zfs_readdir(struct inode *ip, struct dir_context *ctx, cred_t *cr)
+zfs_readdir(struct inode *ip, zpl_dir_context_t *ctx, cred_t *cr)
 {
 	znode_t		*zp = ITOZ(ip);
 	zfsvfs_t	*zfsvfs = ITOZSB(ip);
@@ -2366,7 +2367,7 @@ zfs_readdir(struct inode *ip, struct dir_context *ctx, cred_t *cr)
 			type = ZFS_DIRENT_TYPE(zap.za_first_integer);
 		}
 
-		done = !dir_emit(ctx, zap.za_name, strlen(zap.za_name),
+		done = !zpl_dir_emit(ctx, zap.za_name, strlen(zap.za_name),
 		    objnum, type);
 		if (done)
 			break;
@@ -3407,7 +3408,7 @@ top:
 
 	if (mask & (ATTR_MTIME | ATTR_SIZE)) {
 		ZFS_TIME_ENCODE(&vap->va_mtime, mtime);
-		ZTOI(zp)->i_mtime = timespec_trunc(vap->va_mtime,
+		ZTOI(zp)->i_mtime = zpl_inode_timespec_trunc(vap->va_mtime,
 		    ZTOI(zp)->i_sb->s_time_gran);
 
 		SA_ADD_BULK_ATTR(bulk, count, SA_ZPL_MTIME(zfsvfs), NULL,
@@ -3416,7 +3417,7 @@ top:
 
 	if (mask & (ATTR_CTIME | ATTR_SIZE)) {
 		ZFS_TIME_ENCODE(&vap->va_ctime, ctime);
-		ZTOI(zp)->i_ctime = timespec_trunc(vap->va_ctime,
+		ZTOI(zp)->i_ctime = zpl_inode_timespec_trunc(vap->va_ctime,
 		    ZTOI(zp)->i_sb->s_time_gran);
 		SA_ADD_BULK_ATTR(bulk, count, SA_ZPL_CTIME(zfsvfs), NULL,
 		    ctime, sizeof (ctime));
@@ -5222,7 +5223,7 @@ zfs_retzcbuf(struct inode *ip, xuio_t *xuio, cred_t *cr)
 }
 #endif /* HAVE_UIO_ZEROCOPY */
 
-#if defined(_KERNEL) && defined(HAVE_SPL)
+#if defined(_KERNEL)
 EXPORT_SYMBOL(zfs_open);
 EXPORT_SYMBOL(zfs_close);
 EXPORT_SYMBOL(zfs_read);

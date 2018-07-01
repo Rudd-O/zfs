@@ -3758,7 +3758,7 @@ zfs_receive_one(libzfs_handle_t *hdl, int infd, const char *tosnap,
 	 * Determine the name of the origin snapshot.
 	 */
 	if (originsnap) {
-		(void) strncpy(origin, originsnap, sizeof (origin));
+		(void) strlcpy(origin, originsnap, sizeof (origin));
 		if (flags->verbose)
 			(void) printf("using provided clone origin %s\n",
 			    origin);
@@ -4041,7 +4041,7 @@ zfs_receive_one(libzfs_handle_t *hdl, int infd, const char *tosnap,
 		goto out;
 	}
 
-	if (top_zfs && *top_zfs == NULL)
+	if (top_zfs && (*top_zfs == NULL || strcmp(*top_zfs, name) == 0))
 		toplevel = B_TRUE;
 	if (drrb->drr_type == DMU_OST_ZVOL) {
 		type = ZFS_TYPE_VOLUME;

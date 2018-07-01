@@ -760,14 +760,14 @@ ddt_lookup(ddt_t *ddt, const blkptr_t *bp, boolean_t add)
 	for (type = 0; type < DDT_TYPES; type++) {
 		for (class = 0; class < DDT_CLASSES; class++) {
 			error = ddt_object_lookup(ddt, type, class, dde);
-			if (error != ENOENT)
+			if (error != ENOENT) {
+				ASSERT0(error);
 				break;
+			}
 		}
 		if (error != ENOENT)
 			break;
 	}
-
-	ASSERT(error == 0 || error == ENOENT);
 
 	ddt_enter(ddt);
 
@@ -1181,7 +1181,7 @@ ddt_sync(spa_t *spa, uint64_t txg)
 	tx = dmu_tx_create_assigned(spa->spa_dsl_pool, txg);
 
 	rio = zio_root(spa, NULL, NULL,
-	    ZIO_FLAG_CANFAIL | ZIO_FLAG_SPECULATIVE);
+	    ZIO_FLAG_CANFAIL | ZIO_FLAG_SPECULATIVE | ZIO_FLAG_SELF_HEAL);
 
 	/*
 	 * This function may cause an immediate scan of ddt blocks (see
@@ -1236,7 +1236,7 @@ ddt_walk(spa_t *spa, ddt_bookmark_t *ddb, ddt_entry_t *dde)
 	return (SET_ERROR(ENOENT));
 }
 
-#if defined(_KERNEL) && defined(HAVE_SPL)
+#if defined(_KERNEL)
 module_param(zfs_dedup_prefetch, int, 0644);
 MODULE_PARM_DESC(zfs_dedup_prefetch, "Enable prefetching dedup-ed blks");
 #endif

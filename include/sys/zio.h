@@ -167,6 +167,12 @@ enum zio_encrypt {
 #define	ZIO_FAILURE_MODE_CONTINUE	1
 #define	ZIO_FAILURE_MODE_PANIC		2
 
+typedef enum zio_suspend_reason {
+	ZIO_SUSPEND_NONE = 0,
+	ZIO_SUSPEND_IOERR,
+	ZIO_SUSPEND_MMP,
+} zio_suspend_reason_t;
+
 enum zio_flag {
 	/*
 	 * Flags inherited by gang, ddt, and vdev children,
@@ -238,7 +244,7 @@ enum zio_flag {
 
 #define	ZIO_VDEV_CHILD_FLAGS(zio)				\
 	(((zio)->io_flags & ZIO_FLAG_VDEV_INHERIT) |		\
-	ZIO_FLAG_CANFAIL)
+	ZIO_FLAG_DONT_PROPAGATE | ZIO_FLAG_CANFAIL)
 
 #define	ZIO_CHILD_BIT(x)		(1 << (x))
 #define	ZIO_CHILD_BIT_IS_SET(val, x)	((val) & (1 << (x)))
@@ -271,6 +277,9 @@ enum zio_wait_type {
  */
 #define	ECKSUM	EBADE
 #define	EFRAGS	EBADR
+
+/* Similar for ENOACTIVE */
+#define	ENOTACTIVE	ENOANO
 
 typedef void zio_done_func_t(zio_t *zio);
 
@@ -557,7 +566,6 @@ extern zio_t *zio_free_sync(zio_t *pio, spa_t *spa, uint64_t txg,
 
 extern int zio_alloc_zil(spa_t *spa, objset_t *os, uint64_t txg,
     blkptr_t *new_bp, uint64_t size, boolean_t *slog);
-extern void zio_free_zil(spa_t *spa, uint64_t txg, blkptr_t *bp);
 extern void zio_flush(zio_t *zio, vdev_t *vd);
 extern void zio_shrink(zio_t *zio, uint64_t size);
 
@@ -591,7 +599,7 @@ extern zio_t *zio_vdev_child_io(zio_t *zio, blkptr_t *bp, vdev_t *vd,
     zio_done_func_t *done, void *private);
 
 extern zio_t *zio_vdev_delegated_io(vdev_t *vd, uint64_t offset,
-    struct abd *data, uint64_t size, int type, zio_priority_t priority,
+    struct abd *data, uint64_t size, zio_type_t type, zio_priority_t priority,
     enum zio_flag flags, zio_done_func_t *done, void *private);
 
 extern void zio_vdev_io_bypass(zio_t *zio);
@@ -610,7 +618,7 @@ extern enum zio_checksum zio_checksum_dedup_select(spa_t *spa,
 extern enum zio_compress zio_compress_select(spa_t *spa,
     enum zio_compress child, enum zio_compress parent);
 
-extern void zio_suspend(spa_t *spa, zio_t *zio);
+extern void zio_suspend(spa_t *spa, zio_t *zio, zio_suspend_reason_t);
 extern int zio_resume(spa_t *spa);
 extern void zio_resume_wait(spa_t *spa);
 
@@ -631,6 +639,8 @@ extern int zio_inject_list_next(int *id, char *name, size_t buflen,
     struct zinject_record *record);
 extern int zio_clear_fault(int id);
 extern void zio_handle_panic_injection(spa_t *spa, char *tag, uint64_t type);
+extern int zio_handle_decrypt_injection(spa_t *spa, const zbookmark_phys_t *zb,
+    uint64_t type, int error);
 extern int zio_handle_fault_injection(zio_t *zio, int error);
 extern int zio_handle_device_injection(vdev_t *vd, zio_t *zio, int error);
 extern int zio_handle_device_injections(vdev_t *vd, zio_t *zio, int err1,
@@ -643,8 +653,8 @@ extern hrtime_t zio_handle_io_delay(zio_t *zio);
  * Checksum ereport functions
  */
 extern void zfs_ereport_start_checksum(spa_t *spa, vdev_t *vd,
-    zbookmark_phys_t *zb, struct zio *zio, uint64_t offset, uint64_t length,
-    void *arg, struct zio_bad_cksum *info);
+    const zbookmark_phys_t *zb, struct zio *zio, uint64_t offset,
+    uint64_t length, void *arg, struct zio_bad_cksum *info);
 extern void zfs_ereport_finish_checksum(zio_cksum_report_t *report,
     const abd_t *good_data, const abd_t *bad_data, boolean_t drop_if_identical);
 
@@ -652,8 +662,9 @@ extern void zfs_ereport_free_checksum(zio_cksum_report_t *report);
 
 /* If we have the good data in hand, this function can be used */
 extern void zfs_ereport_post_checksum(spa_t *spa, vdev_t *vd,
-    zbookmark_phys_t *zb, struct zio *zio, uint64_t offset, uint64_t length,
-    const abd_t *good_data, const abd_t *bad_data, struct zio_bad_cksum *info);
+    const zbookmark_phys_t *zb, struct zio *zio, uint64_t offset,
+    uint64_t length, const abd_t *good_data, const abd_t *bad_data,
+    struct zio_bad_cksum *info);
 
 /* Called from spa_sync(), but primarily an injection handler */
 extern void spa_handle_ignored_writes(spa_t *spa);

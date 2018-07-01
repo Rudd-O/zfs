@@ -1,5 +1,5 @@
 pkgdatadir = $(datadir)/@PACKAGE@/zfs-tests/tests/functional/cli_root
-dist_pkgdata_SCRIPTS = \
+dist_pkgdata_DATA = \
 	cli_common.kshlib
 
 SUBDIRS = \
@@ -16,9 +16,11 @@ SUBDIRS = \
 	zfs_inherit \
 	zfs_load-key \
 	zfs_mount \
+	zfs_program \
 	zfs_promote \
 	zfs_property \
 	zfs_receive \
+	zfs_remap \
 	zfs_rename \
 	zfs_reservation \
 	zfs_rollback \
@@ -51,6 +53,7 @@ SUBDIRS = \
 	zpool_replace \
 	zpool_scrub \
 	zpool_set \
+	zpool_split \
 	zpool_status \
 	zpool_sync \
 	zpool_upgrade

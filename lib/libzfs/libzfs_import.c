@@ -21,7 +21,7 @@
 /*
  * Copyright 2015 Nexenta Systems, Inc. All rights reserved.
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012, 2016 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2018 by Delphix. All rights reserved.
  * Copyright 2015 RackTop Systems.
  * Copyright (c) 2016, Intel Corporation.
  */
@@ -144,7 +144,18 @@ zfs_device_get_devid(struct udev_device *dev, char *bufptr, size_t buflen)
 			(void) snprintf(bufptr, buflen, "dm-uuid-%s", dm_uuid);
 			return (0);
 		}
-		return (ENODATA);
+
+		/*
+		 * NVME 'by-id' symlinks are similar to bus case
+		 */
+		struct udev_device *parent;
+
+		parent = udev_device_get_parent_with_subsystem_devtype(dev,
+		    "nvme", NULL);
+		if (parent != NULL)
+			bus = "nvme";	/* continue with bus symlink search */
+		else
+			return (ENODATA);
 	}
 
 	/*
@@ -886,7 +897,8 @@ vdev_is_hole(uint64_t *hole_array, uint_t holes, uint_t id)
  * return to the user.
  */
 static nvlist_t *
-get_configs(libzfs_handle_t *hdl, pool_list_t *pl, boolean_t active_ok)
+get_configs(libzfs_handle_t *hdl, pool_list_t *pl, boolean_t active_ok,
+    nvlist_t *policy)
 {
 	pool_entry_t *pe;
 	vdev_entry_t *ve;
@@ -1217,6 +1229,12 @@ get_configs(libzfs_handle_t *hdl, pool_list_t *pl, boolean_t active_ok)
 			nvlist_free(config);
 			config = NULL;
 			continue;
+		}
+
+		if (policy != NULL) {
+			if (nvlist_add_nvlist(config, ZPOOL_LOAD_POLICY,
+			    policy) != 0)
+				goto nomem;
 		}
 
 		if ((nvl = refresh_config(hdl, config)) == NULL) {
@@ -1662,7 +1680,7 @@ zpool_clear_label(int fd)
 		return (0);
 	size = P2ALIGN_TYPED(statbuf.st_size, sizeof (vdev_label_t), uint64_t);
 
-	if ((label = calloc(sizeof (vdev_label_t), 1)) == NULL)
+	if ((label = calloc(1, sizeof (vdev_label_t))) == NULL)
 		return (-1);
 
 	for (l = 0; l < VDEV_LABELS; l++) {
@@ -2069,7 +2087,7 @@ zpool_find_import_impl(libzfs_handle_t *hdl, importargs_t *iarg)
 	free(cache);
 	pthread_mutex_destroy(&lock);
 
-	ret = get_configs(hdl, &pools, iarg->can_be_active);
+	ret = get_configs(hdl, &pools, iarg->can_be_active, iarg->policy);
 
 	for (pe = pools.pools; pe != NULL; pe = penext) {
 		penext = pe->pe_next;
@@ -2197,6 +2215,14 @@ zpool_find_import_cached(libzfs_handle_t *hdl, const char *cachefile,
 
 		if (active)
 			continue;
+
+		if (nvlist_add_string(src, ZPOOL_CONFIG_CACHEFILE,
+		    cachefile) != 0) {
+			(void) no_memory(hdl);
+			nvlist_free(raw);
+			nvlist_free(pools);
+			return (NULL);
+		}
 
 		if ((dst = refresh_config(hdl, src)) == NULL) {
 			nvlist_free(raw);
