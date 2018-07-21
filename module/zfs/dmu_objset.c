@@ -60,6 +60,7 @@
 #include <sys/spa_impl.h>
 #include <sys/dmu_send.h>
 #include <sys/zfs_project.h>
+#include "zfs_namecheck.h"
 
 /*
  * Needed to close a window in dnode_move() that allows the objset to be freed
@@ -470,6 +471,14 @@ dmu_objset_open_impl(spa_t *spa, dsl_dataset_t *ds, blkptr_t *bp,
 		os->os_phys = os->os_phys_buf->b_data;
 		bzero(os->os_phys, size);
 	}
+	/*
+	 * These properties will be filled in by the logic in zfs_get_zplprop()
+	 * when they are queried for the first time.
+	 */
+	os->os_version = OBJSET_PROP_UNINITIALIZED;
+	os->os_normalization = OBJSET_PROP_UNINITIALIZED;
+	os->os_utf8only = OBJSET_PROP_UNINITIALIZED;
+	os->os_casesensitivity = OBJSET_PROP_UNINITIALIZED;
 
 	/*
 	 * Note: the changed_cb will be called once before the register
@@ -1096,6 +1105,9 @@ dmu_objset_create_check(void *arg, dmu_tx_t *tx)
 		return (SET_ERROR(EINVAL));
 
 	if (strlen(doca->doca_name) >= ZFS_MAX_DATASET_NAME_LEN)
+		return (SET_ERROR(ENAMETOOLONG));
+
+	if (dataset_nestcheck(doca->doca_name) != 0)
 		return (SET_ERROR(ENAMETOOLONG));
 
 	error = dsl_dir_hold(dp, doca->doca_name, FTAG, &pdd, &tail);
