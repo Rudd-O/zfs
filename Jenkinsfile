@@ -118,7 +118,7 @@ pipeline {
         stage('Collect') {
             steps {
                 script {
-                    for r in parms.RELEASE.split(' ') {
+                    for (r in parms.RELEASE.split(' ')) {
                         unstash "dist-${r}"
                     }
                 }
