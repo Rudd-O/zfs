@@ -120,6 +120,7 @@ pipeline {
             }
         }
         stage('Collect') {
+            agent { label 'master' }
             steps {
                 script {
                     for (r in params.RELEASE.split(' ')) {
