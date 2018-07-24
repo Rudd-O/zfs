@@ -56,7 +56,7 @@ pipeline {
                                     unstash 'mocklock'
                                     unstash 'shell_lib'
                                     sh "rm -rf build dist"
-                                    sh "./mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic --no-clean --no-cleanup-after --install kernel-devel zlib-devel libuuid-devel libblkid-devel libattr-devel openssl-devel"
+                                    sh "./mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic -v --install kernel-devel zlib-devel libuuid-devel libblkid-devel libattr-devel openssl-devel"
                                     sh """
                                         # make sure none of these unpleasant things are installed in the chroot prior to building
                                         output=\$(/usr/local/bin/mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic --shell 'rpm -q libuutil1 libzpool2 libzfs2-devel zfs libzfs2' | grep -v '^package ' || true)
