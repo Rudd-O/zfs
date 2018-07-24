@@ -33,7 +33,7 @@ pipeline {
                     stash includes: 'shell_lib.sh', name: 'shell_lib'
                     stash includes: 'src/**', name: 'src'
                     script {
-                    env.GIT_HASH = sh(
+                    env.GIT_COMMIT = sh(
                         script: '''cd src/zfs && git rev-parse --short HEAD''',
                         returnStdout: true
                     ).trim()
@@ -84,7 +84,7 @@ pipeline {
                                                 (
                                                     cd /builddir/zfs/zfs
                                                     ./autogen.sh
-                                                    sed "s/_META_RELEASE=.*/_META_RELEASE=0.${env.BUILD_NUMBER}.${env.GIT_HASH}/" -i configure
+                                                    sed "s/_META_RELEASE=.*/_META_RELEASE=0.${env.BUILD_NUMBER}.${env.GIT_COMMIT}/" -i configure
                                                     ./configure --with-config=user
                                                     make srpm-dkms srpm-utils
                                                     mv *.rpm ../zfs-builtrpms
