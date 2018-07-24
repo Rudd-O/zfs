@@ -124,7 +124,7 @@ pipeline {
                 }
                 archiveArtifacts 'dist/**'
                 fingerprint 'dist/**'
-                funcs.uploadDeliverables 'dist/*.rpm'
+                funcs.uploadDeliverables('dist/*.rpm')
             }
         }
     }
