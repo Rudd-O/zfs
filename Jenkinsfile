@@ -105,14 +105,26 @@ pipeline {
                                         mockfedorarpms "${myRelease}" dist build/*.src.rpm
                                     """
                                 }
-                                stage("Archive ${it.join(' ')}") {
-                                    archiveArtifacts 'dist/**'
+                                stage("Stash ${it.join(' ')}") {
+                                    stash includes: 'dist/**', name: "dist-${myRelease}"
                                 }
                             }
                         }
                     }
                     parallel funcs.combo(task, axisList)
                 }
+            }
+        }
+        stage('Collect') {
+            steps {
+                script {
+                    for r in parms.RELEASE.split(' ') {
+                        unstash "dist-${r}"
+                    }
+                }
+                archiveArtifacts 'dist/**'
+                fingerprint 'dist/**'
+                funcs.uploadDeliverables 'dist/*.rpm'
             }
         }
     }
