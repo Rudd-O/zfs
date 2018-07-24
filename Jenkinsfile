@@ -39,9 +39,9 @@ pipeline {
             agent { label 'master' }
             steps {
                 script {
-					def axisList = [
-						params.RELEASE.split(' '),
-					]
+                    def axisList = [
+                        params.RELEASE.split(' '),
+                    ]
                     def task = {
                         def myRelease = it[0]
                         return {
