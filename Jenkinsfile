@@ -2,19 +2,19 @@
 @Library('shared-jenkins-libraries@master') _
 pipeline {
 
-	agent none
+    agent none
 
-	options {
-		checkoutToSubdirectory 'src/zfs'
-	}
+    options {
+        checkoutToSubdirectory 'src/zfs'
+    }
 
-	triggers {
-		pollSCM('H * * * *')
-	}
+    triggers {
+        pollSCM('H * * * *')
+    }
 
-	parameters {
-		string defaultValue: '23 25 26 27', description: '', name: 'RELEASE', trim: true
-	}
+    parameters {
+        string defaultValue: '23 25 26 27', description: '', name: 'RELEASE', trim: true
+    }
 
     stages {
         stage('Preparation') {
@@ -111,18 +111,18 @@ pipeline {
                             }
                         }
                     }
-					parallel funcs.combo(task, axisList)
+                    parallel funcs.combo(task, axisList)
                 }
             }
         }
     }
-	post {
-		always {
-			node('master') {
-				script {
-					funcs.announceEnd(currentBuild.currentResult)
-				}
-			}
-		}
-	}
+    post {
+        always {
+            node('master') {
+                script {
+                    funcs.announceEnd(currentBuild.currentResult)
+                }
+            }
+        }
+    }
 }
