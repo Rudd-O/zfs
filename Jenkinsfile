@@ -24,7 +24,10 @@ pipeline {
                     funcs.announceBeginning()
                 }
                 script {
-                    env.GIT_COMMIT = funcs.shortCommitId()
+                    env.GIT_COMMIT = sh (
+                        script: "cd ${path} && git rev-parse --short HEAD",
+                        returnStdout: true
+                    ).trim()
                 }
                 sh '''
                     cp -a "$JENKINS_HOME"/userContent/mocklock .
