@@ -106,7 +106,7 @@ pipeline {
                                 stage("Build RPMs ${it.join(' ')}") {
                                     sh """
                                         . ./shell_lib.sh
-                                        mockfedorarpms "${myRelease}" dist build/*.src.rpm
+                                        mockfedorarpms "${myRelease}" "dist/RELEASE=${myRelease}" build/*.src.rpm
                                     """
                                 }
                                 stage("Stash ${it.join(' ')}") {
@@ -130,7 +130,9 @@ pipeline {
                 archiveArtifacts 'dist/**'
                 fingerprint 'dist/**'
                 script {
-                    funcs.uploadDeliverables('dist/*.rpm')
+                    if (env.BRANCH_NAME == "master") {
+                        funcs.uploadDeliverables('dist/*/*.rpm')
+                    }
                 }
             }
         }
