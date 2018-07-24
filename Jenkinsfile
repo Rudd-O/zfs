@@ -34,6 +34,7 @@ pipeline {
                     cp -a "$JENKINS_HOME"/userContent/mocklock .
                     cp -a "$JENKINS_HOME"/shell_lib.sh .
                 '''
+                sh "rm -rf build dist"
                 stash includes: 'mocklock', name: 'mocklock'
                 stash includes: 'shell_lib.sh', name: 'shell_lib'
                 stash includes: 'src/**', name: 'src'
