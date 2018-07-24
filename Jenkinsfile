@@ -53,67 +53,79 @@ pipeline {
                         return {
                             node('zfs') {
                                 stage("Setup ${it.join(' ')}") {
-                                    unstash 'mocklock'
-                                    unstash 'shell_lib'
-                                    sh "rm -rf build dist"
-                                    sh "./mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic -v --install kernel-devel zlib-devel libuuid-devel libblkid-devel libattr-devel openssl-devel"
-                                    sh """
-                                        # make sure none of these unpleasant things are installed in the chroot prior to building
-                                        output=\$(/usr/local/bin/mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic --shell 'rpm -q libuutil1 libzpool2 libzfs2-devel zfs libzfs2' | grep -v '^package ' || true)
-                                        if [ "\$output" != "" ] ; then
-                                            ./mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic --remove libuutil1 libzpool2 libzfs2-devel zfs libzfs2
-                                        fi
-                                    """
-                                    sh "./mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic --unpriv --shell 'mkdir -p /builddir/zfs && rm -rf /builddir/zfs/zfs /builddir/zfs/zfs-builtrpms'"
+                                    timeout(time: 15, unit: 'MINUTES') {
+                                        unstash 'mocklock'
+                                        unstash 'shell_lib'
+                                        sh "rm -rf build dist"
+                                        sh "./mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic -v --install kernel-devel zlib-devel libuuid-devel libblkid-devel libattr-devel openssl-devel"
+                                        sh """
+                                            # make sure none of these unpleasant things are installed in the chroot prior to building
+                                            output=\$(/usr/local/bin/mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic --shell 'rpm -q libuutil1 libzpool2 libzfs2-devel zfs libzfs2' | grep -v '^package ' || true)
+                                            if [ "\$output" != "" ] ; then
+                                                ./mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic --remove libuutil1 libzpool2 libzfs2-devel zfs libzfs2
+                                            fi
+                                        """
+                                        sh "./mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic --unpriv --shell 'mkdir -p /builddir/zfs && rm -rf /builddir/zfs/zfs /builddir/zfs/zfs-builtrpms'"
+                                    }
                                 }
                                 stage("Copy source ${it.join(' ')}") {
-                                    unstash 'src'
-                                    sh """
-                                        find src/zfs -xtype l -print0 | xargs -0 -n 1 -i bash -c 'test -f "\$1" || { rm -f "\$1" && touch "\$1" ; }' -- {}
-                                        # Copy ZFS source.
-                                        ./mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic --copyin src/zfs/ /builddir/zfs/zfs/
-                                        # Ensure that copied files are owned by mockbuild, not by root.
-                                        ./mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic --shell 'cd /builddir/zfs && chown mockbuild -R zfs'
-                                    """
+                                    timeout(time: 5, unit: 'MINUTES') {
+                                        unstash 'src'
+                                        sh """
+                                            find src/zfs -xtype l -print0 | xargs -0 -n 1 -i bash -c 'test -f "\$1" || { rm -f "\$1" && touch "\$1" ; }' -- {}
+                                            # Copy ZFS source.
+                                            ./mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic --copyin src/zfs/ /builddir/zfs/zfs/
+                                            # Ensure that copied files are owned by mockbuild, not by root.
+                                            ./mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic --shell 'cd /builddir/zfs && chown mockbuild -R zfs'
+                                        """
+                                    }
                                 }
                                 stage("Build SRPMs ${it.join(' ')}") {
-                                    script {
-                                        def program = """
-                                            ./mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic --unpriv --shell '
-                                                set -e -x -o pipefail
-                                                mkdir -p /builddir/zfs/zfs-builtrpms
-                                                (
-                                                    cd /builddir/zfs/zfs
-                                                    ./autogen.sh
-                                                    sed "s/_META_RELEASE=.*/_META_RELEASE=0.${env.BUILD_NUMBER}.${env.GIT_HASH}/" -i configure
-                                                    ./configure --with-config=user
-                                                    make srpm-dkms srpm-utils
-                                                    mv *.rpm ../zfs-builtrpms
-                                                ) 2>&1 | sed -u "s/^/zfs: /" &
-                                                zfspid=\$!
-                                                wait \$zfspid || retval=\$?
-                                                exit \$retval
-                                            '
-                                        """
-                                        println "Program to be run:"
-                                        println program
-                                        sh program
+                                    timeout(time: 15, unit: 'MINUTES') {
+                                        script {
+                                            def program = """
+                                                ./mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic --unpriv --shell '
+                                                    set -e -x -o pipefail
+                                                    mkdir -p /builddir/zfs/zfs-builtrpms
+                                                    (
+                                                        cd /builddir/zfs/zfs
+                                                        ./autogen.sh
+                                                        sed "s/_META_RELEASE=.*/_META_RELEASE=0.${env.BUILD_NUMBER}.${env.GIT_HASH}/" -i configure
+                                                        ./configure --with-config=user
+                                                        make srpm-dkms srpm-utils
+                                                        mv *.rpm ../zfs-builtrpms
+                                                    ) 2>&1 | sed -u "s/^/zfs: /" &
+                                                    zfspid=\$!
+                                                    wait \$zfspid || retval=\$?
+                                                    exit \$retval
+                                                '
+                                            """
+                                            println "Program to be run:"
+                                            println program
+                                            sh program
+                                        }
                                     }
                                 }
                                 stage("Copy SRPMs out ${it.join(' ')}") {
-                                    sh """
-                                        ./mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic --copyout /builddir/zfs/zfs-builtrpms/ build/
-                                    """
+                                    timeout(time: 5, unit: 'MINUTES') {
+                                        sh """
+                                            ./mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic --copyout /builddir/zfs/zfs-builtrpms/ build/
+                                        """
+                                    }
                                 }
                                 stage("Build RPMs ${it.join(' ')}") {
-                                    sh """
-                                        . ./shell_lib.sh
-                                        mockfedorarpms "${myRelease}" "dist/RELEASE=${myRelease}" build/*.src.rpm
-                                    """
+                                    timeout(time: 20, unit: 'MINUTES') {
+                                        sh """
+                                            . ./shell_lib.sh
+                                            mockfedorarpms "${myRelease}" "dist/RELEASE=${myRelease}" build/*.src.rpm
+                                        """
+                                    }
                                 }
                                 stage("Stash ${it.join(' ')}") {
-                                    sh "find dist/ | sort"
-                                    stash includes: "dist/RELEASE={$myRelease}/**", name: "dist-${myRelease}"
+                                    timeout(time: 5, unit: 'MINUTES') {
+                                        sh "find dist/ | sort"
+                                        stash includes: "dist/RELEASE={$myRelease}/**", name: "dist-${myRelease}"
+                                    }
                                 }
                             }
                         }
