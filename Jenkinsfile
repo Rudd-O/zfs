@@ -25,7 +25,7 @@ pipeline {
                 }
                 script {
                     env.GIT_COMMIT = sh (
-                        script: "cd ${path} && git rev-parse --short HEAD",
+                        script: "cd src/zfs && git rev-parse --short HEAD",
                         returnStdout: true
                     ).trim()
                 }
