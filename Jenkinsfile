@@ -111,7 +111,7 @@ pipeline {
                                     """
                                 }
                                 stage("Stash ${it.join(' ')}") {
-                                    stash includes: 'dist/**', name: "dist-${myRelease}"
+                                    stash includes: "dist/RELEASE={$myRelease}/**", name: "dist-${myRelease}"
                                 }
                             }
                         }
