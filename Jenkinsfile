@@ -20,24 +20,23 @@ pipeline {
         stage('Preparation') {
             agent { label 'master' }
             steps {
-                    sh """
-                        test -x /usr/local/bin/announce-build-result || exit
-                        /usr/local/bin/announce-build-result has begun
-                    """
-                    sh '''
-                        cp -a "$JENKINS_HOME"/userContent/mocklock .
-                        cp -a "$JENKINS_HOME"/shell_lib.sh .
-                    '''
-
-                    stash includes: 'mocklock', name: 'mocklock'
-                    stash includes: 'shell_lib.sh', name: 'shell_lib'
-                    stash includes: 'src/**', name: 'src'
-                    script {
+                sh """
+                    test -x /usr/local/bin/announce-build-result || exit
+                    /usr/local/bin/announce-build-result has begun
+                """
+                script {
                     env.GIT_COMMIT = sh(
                         script: '''cd src/zfs && git rev-parse --short HEAD''',
                         returnStdout: true
                     ).trim()
                 }
+                sh '''
+                    cp -a "$JENKINS_HOME"/userContent/mocklock .
+                    cp -a "$JENKINS_HOME"/shell_lib.sh .
+                '''
+                stash includes: 'mocklock', name: 'mocklock'
+                stash includes: 'shell_lib.sh', name: 'shell_lib'
+                stash includes: 'src/**', name: 'src'
             }
         }
         stage('Parallelize') {
