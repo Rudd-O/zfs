@@ -24,10 +24,11 @@ pipeline {
                     funcs.announceBeginning()
                 }
                 script {
-                    env.GIT_COMMIT = sh (
+                    env.GIT_HASH = sh (
                         script: "cd src/zfs && git rev-parse --short HEAD",
                         returnStdout: true
                     ).trim()
+                    println "Git hash is reported as ${env.GIT_HASH}"
                 }
                 sh '''
                     cp -a "$JENKINS_HOME"/userContent/mocklock .
@@ -82,7 +83,7 @@ pipeline {
                                                 (
                                                     cd /builddir/zfs/zfs
                                                     ./autogen.sh
-                                                    sed "s/_META_RELEASE=.*/_META_RELEASE=0.${env.BUILD_NUMBER}.${env.GIT_COMMIT}/" -i configure
+                                                    sed "s/_META_RELEASE=.*/_META_RELEASE=0.${env.BUILD_NUMBER}.${env.GIT_HASH}/" -i configure
                                                     ./configure --with-config=user
                                                     make srpm-dkms srpm-utils
                                                     mv *.rpm ../zfs-builtrpms
