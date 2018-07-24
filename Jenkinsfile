@@ -128,7 +128,7 @@ pipeline {
                         unstash "dist-${r}"
                     }
                 }
-                sh "find dist/"
+                sh "find dist/ | sort"
                 archiveArtifacts 'dist/**'
                 fingerprint 'dist/**'
                 script {
