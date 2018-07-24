@@ -124,7 +124,7 @@ pipeline {
                                 stage("Stash ${it.join(' ')}") {
                                     timeout(time: 5, unit: 'MINUTES') {
                                         sh "find dist/ | sort"
-                                        stash includes: "dist/RELEASE={$myRelease}/**", name: "dist-${myRelease}"
+                                        stash includes: "dist/**", name: "dist-${myRelease}"
                                     }
                                 }
                             }
