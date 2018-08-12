@@ -22,7 +22,7 @@
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2011 Nexenta Systems, Inc. All rights reserved.
- * Copyright (c) 2012, 2017 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2018 by Delphix. All rights reserved.
  * Copyright (c) 2013 by Saso Kiselkov. All rights reserved.
  * Copyright (c) 2013, Joyent, Inc. All rights reserved.
  * Copyright 2016 Toomas Soome <tsoome@me.com>
@@ -262,7 +262,7 @@ enum zio_child {
 #define	ZIO_CHILD_DDT_BIT		ZIO_CHILD_BIT(ZIO_CHILD_DDT)
 #define	ZIO_CHILD_LOGICAL_BIT		ZIO_CHILD_BIT(ZIO_CHILD_LOGICAL)
 #define	ZIO_CHILD_ALL_BITS					\
-	(ZIO_CHILD_VDEV_BIT | ZIO_CHILD_GANG_BIT | 		\
+	(ZIO_CHILD_VDEV_BIT | ZIO_CHILD_GANG_BIT |		\
 	ZIO_CHILD_DDT_BIT | ZIO_CHILD_LOGICAL_BIT)
 
 enum zio_wait_type {
@@ -408,7 +408,7 @@ typedef struct zio_transform {
 	struct zio_transform	*zt_next;
 } zio_transform_t;
 
-typedef int zio_pipe_stage_t(zio_t *zio);
+typedef zio_t *zio_pipe_stage_t(zio_t *zio);
 
 /*
  * The io_reexecute flags are distinct from io_flags because the child must
@@ -507,6 +507,7 @@ struct zio {
 	void		*io_waiter;
 	kmutex_t	io_lock;
 	kcondvar_t	io_cv;
+	int		io_allocator;
 
 	/* FMA state */
 	zio_cksum_report_t *io_cksum_report;

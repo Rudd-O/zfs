@@ -392,6 +392,16 @@ int zfs_arc_shrink_shift = 0;
 int zfs_arc_p_min_shift = 0;
 int zfs_arc_average_blocksize = 8 * 1024; /* 8KB */
 
+/*
+ * ARC dirty data constraints for arc_tempreserve_space() throttle.
+ */
+unsigned long zfs_arc_dirty_limit_percent = 50;	/* total dirty data limit */
+unsigned long zfs_arc_anon_limit_percent = 25;	/* anon block dirty limit */
+unsigned long zfs_arc_pool_dirty_percent = 20;	/* each pool's anon allowance */
+
+/*
+ * Enable or disable compressed arc buffers.
+ */
 int zfs_compressed_arc_enabled = B_TRUE;
 
 /*
@@ -3512,22 +3522,47 @@ arc_hdr_realloc_crypt(arc_buf_hdr_t *hdr, boolean_t need_crypt)
 	arc_buf_hdr_t *nhdr;
 	arc_buf_t *buf;
 	kmem_cache_t *ncache, *ocache;
+	unsigned nsize, osize;
 
+	/*
+	 * This function requires that hdr is in the arc_anon state.
+	 * Therefore it won't have any L2ARC data for us to worry
+	 * about copying.
+	 */
 	ASSERT(HDR_HAS_L1HDR(hdr));
+	ASSERT(!HDR_HAS_L2HDR(hdr));
 	ASSERT3U(!!HDR_PROTECTED(hdr), !=, need_crypt);
 	ASSERT3P(hdr->b_l1hdr.b_state, ==, arc_anon);
 	ASSERT(!multilist_link_active(&hdr->b_l1hdr.b_arc_node));
+	ASSERT(!list_link_active(&hdr->b_l2hdr.b_l2node));
+	ASSERT3P(hdr->b_hash_next, ==, NULL);
 
 	if (need_crypt) {
 		ncache = hdr_full_crypt_cache;
+		nsize = sizeof (hdr->b_crypt_hdr);
 		ocache = hdr_full_cache;
+		osize = HDR_FULL_SIZE;
 	} else {
 		ncache = hdr_full_cache;
+		nsize = HDR_FULL_SIZE;
 		ocache = hdr_full_crypt_cache;
+		osize = sizeof (hdr->b_crypt_hdr);
 	}
 
 	nhdr = kmem_cache_alloc(ncache, KM_PUSHPAGE);
-	bcopy(hdr, nhdr, HDR_L2ONLY_SIZE);
+
+	/*
+	 * Copy all members that aren't locks or condvars to the new header.
+	 * No lists are pointing to us (as we asserted above), so we don't
+	 * need to worry about the list nodes.
+	 */
+	nhdr->b_dva = hdr->b_dva;
+	nhdr->b_birth = hdr->b_birth;
+	nhdr->b_type = hdr->b_type;
+	nhdr->b_flags = hdr->b_flags;
+	nhdr->b_psize = hdr->b_psize;
+	nhdr->b_lsize = hdr->b_lsize;
+	nhdr->b_spa = hdr->b_spa;
 	nhdr->b_l1hdr.b_freeze_cksum = hdr->b_l1hdr.b_freeze_cksum;
 	nhdr->b_l1hdr.b_bufcnt = hdr->b_l1hdr.b_bufcnt;
 	nhdr->b_l1hdr.b_byteswap = hdr->b_l1hdr.b_byteswap;
@@ -3540,7 +3575,6 @@ arc_hdr_realloc_crypt(arc_buf_hdr_t *hdr, boolean_t need_crypt)
 	nhdr->b_l1hdr.b_l2_hits = hdr->b_l1hdr.b_l2_hits;
 	nhdr->b_l1hdr.b_acb = hdr->b_l1hdr.b_acb;
 	nhdr->b_l1hdr.b_pabd = hdr->b_l1hdr.b_pabd;
-	nhdr->b_l1hdr.b_buf = hdr->b_l1hdr.b_buf;
 
 	/*
 	 * This refcount_add() exists only to ensure that the individual
@@ -3548,7 +3582,7 @@ arc_hdr_realloc_crypt(arc_buf_hdr_t *hdr, boolean_t need_crypt)
 	 * a small race condition that could trigger ASSERTs.
 	 */
 	(void) refcount_add(&nhdr->b_l1hdr.b_refcnt, FTAG);
-
+	nhdr->b_l1hdr.b_buf = hdr->b_l1hdr.b_buf;
 	for (buf = nhdr->b_l1hdr.b_buf; buf != NULL; buf = buf->b_next) {
 		mutex_enter(&buf->b_evict_lock);
 		buf->b_hdr = nhdr;
@@ -3557,11 +3591,44 @@ arc_hdr_realloc_crypt(arc_buf_hdr_t *hdr, boolean_t need_crypt)
 
 	refcount_transfer(&nhdr->b_l1hdr.b_refcnt, &hdr->b_l1hdr.b_refcnt);
 	(void) refcount_remove(&nhdr->b_l1hdr.b_refcnt, FTAG);
+	ASSERT0(refcount_count(&hdr->b_l1hdr.b_refcnt));
 
 	if (need_crypt) {
 		arc_hdr_set_flags(nhdr, ARC_FLAG_PROTECTED);
 	} else {
 		arc_hdr_clear_flags(nhdr, ARC_FLAG_PROTECTED);
+	}
+
+	/* unset all members of the original hdr */
+	bzero(&hdr->b_dva, sizeof (dva_t));
+	hdr->b_birth = 0;
+	hdr->b_type = ARC_BUFC_INVALID;
+	hdr->b_flags = 0;
+	hdr->b_psize = 0;
+	hdr->b_lsize = 0;
+	hdr->b_spa = 0;
+	hdr->b_l1hdr.b_freeze_cksum = NULL;
+	hdr->b_l1hdr.b_buf = NULL;
+	hdr->b_l1hdr.b_bufcnt = 0;
+	hdr->b_l1hdr.b_byteswap = 0;
+	hdr->b_l1hdr.b_state = NULL;
+	hdr->b_l1hdr.b_arc_access = 0;
+	hdr->b_l1hdr.b_mru_hits = 0;
+	hdr->b_l1hdr.b_mru_ghost_hits = 0;
+	hdr->b_l1hdr.b_mfu_hits = 0;
+	hdr->b_l1hdr.b_mfu_ghost_hits = 0;
+	hdr->b_l1hdr.b_l2_hits = 0;
+	hdr->b_l1hdr.b_acb = NULL;
+	hdr->b_l1hdr.b_pabd = NULL;
+
+	if (ocache == hdr_full_crypt_cache) {
+		ASSERT(!HDR_HAS_RABD(hdr));
+		hdr->b_crypt_hdr.b_ot = DMU_OT_NONE;
+		hdr->b_crypt_hdr.b_ebufcnt = 0;
+		hdr->b_crypt_hdr.b_dsobj = 0;
+		bzero(hdr->b_crypt_hdr.b_salt, ZIO_DATA_SALT_LEN);
+		bzero(hdr->b_crypt_hdr.b_iv, ZIO_DATA_IV_LEN);
+		bzero(hdr->b_crypt_hdr.b_mac, ZIO_DATA_MAC_LEN);
 	}
 
 	buf_discard_identity(hdr);
@@ -7125,12 +7192,10 @@ arc_write(zio_t *pio, spa_t *spa, uint64_t txg,
 }
 
 static int
-arc_memory_throttle(uint64_t reserve, uint64_t txg)
+arc_memory_throttle(spa_t *spa, uint64_t reserve, uint64_t txg)
 {
 #ifdef _KERNEL
 	uint64_t available_memory = arc_free_memory();
-	static uint64_t page_load = 0;
-	static uint64_t last_txg = 0;
 
 #if defined(_ILP32)
 	available_memory =
@@ -7140,9 +7205,9 @@ arc_memory_throttle(uint64_t reserve, uint64_t txg)
 	if (available_memory > arc_all_memory() * arc_lotsfree_percent / 100)
 		return (0);
 
-	if (txg > last_txg) {
-		last_txg = txg;
-		page_load = 0;
+	if (txg > spa->spa_lowmem_last_txg) {
+		spa->spa_lowmem_last_txg = txg;
+		spa->spa_lowmem_page_load = 0;
 	}
 	/*
 	 * If we are in pageout, we know that memory is already tight,
@@ -7150,21 +7215,22 @@ arc_memory_throttle(uint64_t reserve, uint64_t txg)
 	 * continue to let page writes occur as quickly as possible.
 	 */
 	if (current_is_kswapd()) {
-		if (page_load > MAX(arc_sys_free / 4, available_memory) / 4) {
+		if (spa->spa_lowmem_page_load >
+		    MAX(arc_sys_free / 4, available_memory) / 4) {
 			DMU_TX_STAT_BUMP(dmu_tx_memory_reclaim);
 			return (SET_ERROR(ERESTART));
 		}
 		/* Note: reserve is inflated, so we deflate */
-		page_load += reserve / 8;
+		atomic_add_64(&spa->spa_lowmem_page_load, reserve / 8);
 		return (0);
-	} else if (page_load > 0 && arc_reclaim_needed()) {
+	} else if (spa->spa_lowmem_page_load > 0 && arc_reclaim_needed()) {
 		/* memory is low, delay before restarting */
 		ARCSTAT_INCR(arcstat_memory_throttle_count, 1);
 		DMU_TX_STAT_BUMP(dmu_tx_memory_reclaim);
 		return (SET_ERROR(EAGAIN));
 	}
-	page_load = 0;
-#endif
+	spa->spa_lowmem_page_load = 0;
+#endif /* _KERNEL */
 	return (0);
 }
 
@@ -7176,7 +7242,7 @@ arc_tempreserve_clear(uint64_t reserve)
 }
 
 int
-arc_tempreserve_space(uint64_t reserve, uint64_t txg)
+arc_tempreserve_space(spa_t *spa, uint64_t reserve, uint64_t txg)
 {
 	int error;
 	uint64_t anon_size;
@@ -7212,7 +7278,7 @@ arc_tempreserve_space(uint64_t reserve, uint64_t txg)
 	 * in order to compress/encrypt/etc the data.  We therefore need to
 	 * make sure that there is sufficient available memory for this.
 	 */
-	error = arc_memory_throttle(reserve, txg);
+	error = arc_memory_throttle(spa, reserve, txg);
 	if (error != 0)
 		return (error);
 
@@ -7220,12 +7286,24 @@ arc_tempreserve_space(uint64_t reserve, uint64_t txg)
 	 * Throttle writes when the amount of dirty data in the cache
 	 * gets too large.  We try to keep the cache less than half full
 	 * of dirty blocks so that our sync times don't grow too large.
+	 *
+	 * In the case of one pool being built on another pool, we want
+	 * to make sure we don't end up throttling the lower (backing)
+	 * pool when the upper pool is the majority contributor to dirty
+	 * data. To insure we make forward progress during throttling, we
+	 * also check the current pool's net dirty data and only throttle
+	 * if it exceeds zfs_arc_pool_dirty_percent of the anonymous dirty
+	 * data in the cache.
+	 *
 	 * Note: if two requests come in concurrently, we might let them
 	 * both succeed, when one of them should fail.  Not a huge deal.
 	 */
+	uint64_t total_dirty = reserve + arc_tempreserve + anon_size;
+	uint64_t spa_dirty_anon = spa_dirty_data(spa);
 
-	if (reserve + arc_tempreserve + anon_size > arc_c / 2 &&
-	    anon_size > arc_c / 4) {
+	if (total_dirty > arc_c * zfs_arc_dirty_limit_percent / 100 &&
+	    anon_size > arc_c * zfs_arc_anon_limit_percent / 100 &&
+	    spa_dirty_anon > anon_size * zfs_arc_pool_dirty_percent / 100) {
 #ifdef ZFS_DEBUG
 		uint64_t meta_esize =
 		    refcount_count(&arc_anon->arcs_esize[ARC_BUFC_METADATA]);
