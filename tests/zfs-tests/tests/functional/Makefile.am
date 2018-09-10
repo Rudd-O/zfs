@@ -1,5 +1,6 @@
 SUBDIRS = \
 	acl \
+	alloc_class \
 	arc \
 	atime \
 	bootfs \
@@ -27,6 +28,7 @@ SUBDIRS = \
 	hkdf \
 	inheritance \
 	inuse \
+	io \
 	kstat \
 	large_files \
 	largest_pool \

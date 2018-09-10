@@ -20,20 +20,23 @@
  */
 
 /*
- * Copyright (c) 2011, 2017 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2018 by Delphix. All rights reserved.
  * Copyright (c) 2013 by Saso Kiselkov. All rights reserved.
  * Copyright (c) 2013, Joyent, Inc. All rights reserved.
  * Copyright (c) 2014, Nexenta Systems, Inc. All rights reserved.
+ * Copyright (c) 2017, Intel Corporation.
  */
 
 #ifndef _KERNEL
 #include <errno.h>
 #include <string.h>
+#include <sys/stat.h>
 #endif
 #include <sys/debug.h>
 #include <sys/fs/zfs.h>
 #include <sys/inttypes.h>
 #include <sys/types.h>
+#include <sys/zfs_sysfs.h>
 #include "zfeature_common.h"
 
 /*
@@ -101,10 +104,29 @@ zfeature_is_supported(const char *guid)
 }
 
 int
+zfeature_lookup_guid(const char *guid, spa_feature_t *res)
+{
+	for (spa_feature_t i = 0; i < SPA_FEATURES; i++) {
+		zfeature_info_t *feature = &spa_feature_table[i];
+		if (!feature->fi_zfs_mod_supported)
+			continue;
+		if (strcmp(guid, feature->fi_guid) == 0) {
+			if (res != NULL)
+				*res = i;
+			return (0);
+		}
+	}
+
+	return (ENOENT);
+}
+
+int
 zfeature_lookup_name(const char *name, spa_feature_t *res)
 {
 	for (spa_feature_t i = 0; i < SPA_FEATURES; i++) {
 		zfeature_info_t *feature = &spa_feature_table[i];
+		if (!feature->fi_zfs_mod_supported)
+			continue;
 		if (strcmp(name, feature->fi_uname) == 0) {
 			if (res != NULL)
 				*res = i;
@@ -137,6 +159,48 @@ deps_contains_feature(const spa_feature_t *deps, const spa_feature_t feature)
 	return (B_FALSE);
 }
 
+#if !defined(_KERNEL) && !defined(LIB_ZPOOL_BUILD)
+static boolean_t
+zfs_mod_supported_impl(const char *scope, const char *name, const char *sysfs)
+{
+	struct stat64 statbuf;
+	char *path;
+	boolean_t supported = B_FALSE;
+	int len;
+
+	len = asprintf(&path, "%s/%s/%s", sysfs, scope, name);
+
+	if (len > 0) {
+		supported = !!(stat64(path, &statbuf) == 0);
+		free(path);
+	}
+	return (supported);
+}
+
+boolean_t
+zfs_mod_supported(const char *scope, const char *name)
+{
+	return (zfs_mod_supported_impl(scope, name, ZFS_SYSFS_DIR) ||
+	    zfs_mod_supported_impl(scope, name, ZFS_SYSFS_ALT_DIR));
+}
+#endif
+
+static boolean_t
+zfs_mod_supported_feature(const char *name)
+{
+	/*
+	 * The zfs module spa_feature_table[], whether in-kernel or in
+	 * libzpool, always supports all the features. libzfs needs to
+	 * query the running module, via sysfs, to determine which
+	 * features are supported.
+	 */
+#if defined(_KERNEL) || defined(LIB_ZPOOL_BUILD)
+	return (B_TRUE);
+#else
+	return (zfs_mod_supported(ZFS_SYSFS_POOL_FEATURES, name));
+#endif
+}
+
 static void
 zfeature_register(spa_feature_t fid, const char *guid, const char *name,
     const char *desc, zfeature_flags_t flags, const spa_feature_t *deps)
@@ -163,6 +227,7 @@ zfeature_register(spa_feature_t fid, const char *guid, const char *name,
 	feature->fi_desc = desc;
 	feature->fi_flags = flags;
 	feature->fi_depends = deps;
+	feature->fi_zfs_mod_supported = zfs_mod_supported_feature(guid);
 }
 
 void
@@ -358,9 +423,17 @@ zpool_feature_init(void)
 	    ZFEATURE_FLAG_READONLY_COMPAT | ZFEATURE_FLAG_PER_DATASET,
 	    project_quota_deps);
 	}
+
+	{
+	zfeature_register(SPA_FEATURE_ALLOCATION_CLASSES,
+	    "org.zfsonlinux:allocation_classes", "allocation_classes",
+	    "Support for separate allocation classes.",
+	    ZFEATURE_FLAG_READONLY_COMPAT, NULL);
+	}
 }
 
 #if defined(_KERNEL)
+EXPORT_SYMBOL(zfeature_lookup_guid);
 EXPORT_SYMBOL(zfeature_lookup_name);
 EXPORT_SYMBOL(zfeature_is_supported);
 EXPORT_SYMBOL(zfeature_is_valid_guid);

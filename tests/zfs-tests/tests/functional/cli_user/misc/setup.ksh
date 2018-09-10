@@ -69,12 +69,12 @@ log_must zfs unmount $TESTPOOL/$TESTFS/$TESTFS2.unmounted
 
 
 # send our snapshot to a known file in /tmp
-zfs send $TESTPOOL/$TESTFS@snap > /tmp/zfstest_datastream.dat
-if [ ! -s /tmp/zfstest_datastream.dat ]
+zfs send $TESTPOOL/$TESTFS@snap > $TEST_BASE_DIR/zfstest_datastream.dat
+if [ ! -s $TEST_BASE_DIR/zfstest_datastream.dat ]
 then
 	log_fail "ZFS send datafile was not created!"
 fi
-log_must chmod 644 /tmp/zfstest_datastream.dat
+log_must chmod 644 $TEST_BASE_DIR/zfstest_datastream.dat
 
 
 # create a filesystem that has particular properties to test set/get
@@ -153,7 +153,7 @@ then
 	done
 
 	# copy a v1 pool from cli_root
-	cp $STF_SUITE/tests/functional/cli_root/zpool_upgrade/zfs-pool-v1.dat.bz2 \
+	cp $STF_SUITE/tests/functional/cli_root/zpool_upgrade/blockfiles/zfs-pool-v1.dat.bz2 \
 	    /$TESTDIR
 	log_must bunzip2 /$TESTDIR/zfs-pool-v1.dat.bz2
 	log_must zpool import -d /$TESTDIR v1-pool

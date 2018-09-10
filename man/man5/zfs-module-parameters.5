@@ -1722,6 +1722,29 @@ Default value: \fB0\fR.
 .sp
 .ne 2
 .na
+\fBzfs_ddt_data_is_special\fR (int)
+.ad
+.RS 12n
+If enabled, ZFS will place DDT data into the special allocation class.
+.sp
+Default value: \fB1\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs_user_indirect_is_special\fR (int)
+.ad
+.RS 12n
+If enabled, ZFS will place user data (both file and zvol) indirect blocks
+into the special allocation class.
+.sp
+Default value: \fB1\fR.
+.RE
+
+.sp
+.ne 2
+.na
 \fBzfs_multihost_history\fR (int)
 .ad
 .RS 12n
@@ -2509,6 +2532,19 @@ Any writes above that will be executed with lower (asynchronous) priority
 to limit potential SLOG device abuse by single active ZIL writer.
 .sp
 Default value: \fB786,432\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzio_decompress_fail_fraction\fR (int)
+.ad
+.RS 12n
+If non-zero, this value represents the denominator of the probability that zfs
+should induce a decompression failure. For instance, for a 5% decompression
+failure rate, this value should be set to 20.
+.sp
+Default value: \fB0\fR.
 .RE
 
 .sp

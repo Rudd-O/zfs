@@ -315,6 +315,20 @@ dnodesize_changed_cb(void *arg, uint64_t newval)
 }
 
 static void
+smallblk_changed_cb(void *arg, uint64_t newval)
+{
+	objset_t *os = arg;
+
+	/*
+	 * Inheritance and range checking should have been done by now.
+	 */
+	ASSERT(newval <= SPA_OLD_MAXBLOCKSIZE);
+	ASSERT(ISP2(newval));
+
+	os->os_zpl_special_smallblock = newval;
+}
+
+static void
 logbias_changed_cb(void *arg, uint64_t newval)
 {
 	objset_t *os = arg;
@@ -555,6 +569,12 @@ dmu_objset_open_impl(spa_t *spa, dsl_dataset_t *ds, blkptr_t *bp,
 				err = dsl_prop_register(ds,
 				    zfs_prop_to_name(ZFS_PROP_DNODESIZE),
 				    dnodesize_changed_cb, os);
+			}
+			if (err == 0) {
+				err = dsl_prop_register(ds,
+				    zfs_prop_to_name(
+				    ZFS_PROP_SPECIAL_SMALL_BLOCKS),
+				    smallblk_changed_cb, os);
 			}
 		}
 		if (needlock)
@@ -1118,7 +1138,7 @@ dmu_objset_create_check(void *arg, dmu_tx_t *tx)
 		return (SET_ERROR(EEXIST));
 	}
 
-	error = dmu_objset_create_crypt_check(pdd, doca->doca_dcp);
+	error = dmu_objset_create_crypt_check(pdd, doca->doca_dcp, NULL);
 	if (error != 0) {
 		dsl_dir_rele(pdd, FTAG);
 		return (error);

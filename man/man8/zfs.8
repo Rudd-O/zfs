@@ -292,7 +292,7 @@
 .Ar tag Ar snapshot Ns ...
 .Nm
 .Cm holds
-.Op Fl r
+.Op Fl rH
 .Ar snapshot Ns ...
 .Nm
 .Cm release
@@ -718,6 +718,16 @@ This property can be either
 .Sy yes
 or
 .Sy no .
+.It Sy objsetid
+A unique identifier for this dataset within the pool. Unlike the dataset's
+.Sy guid
+, the
+.Sy objsetid
+of a dataset is not transferred to other pools when the snapshot is copied
+with a send/receive operation.
+The
+.Sy objsetid
+can be reused (for a new datatset) after the dataset is deleted.
 .It Sy origin
 For cloned file systems or volumes, the snapshot from which the clone was
 created.
@@ -1512,6 +1522,16 @@ This feature must be enabled to be used
 .Po see
 .Xr zpool-features 5
 .Pc .
+.It Sy special_small_blocks Ns = Ns Em size
+This value represents the threshold block size for including small file
+blocks into the special allocation class. Valid values are zero or a
+power of two from 512B up to 128K. The default size is 0 which means no
+small file blocks will be allocated in the special class.
+.Pp
+Before setting this property, a special class vdev must be added to the
+pool. See
+.Xr zpool 8
+for more details on the special allocation class.
 .It Sy mountpoint Ns = Ns Pa path Ns | Ns Sy none Ns | Ns Sy legacy
 Controls the mount point used for this file system.
 See the
@@ -3912,6 +3932,34 @@ results if the same property is specified in multiple
 or
 .Fl x
 options.
+.Pp
+The
+.Fl o
+option may also be used to override encryption properties upon initial
+receive. This allows unencrypted streams to be received as encrypted datasets.
+To cause the received dataset (or root dataset of a recursive stream) to be
+received as an encryption root, specify encryption properties in the same
+manner as is required for
+.Nm
+.Cm create .
+For instance:
+.Bd -literal
+# zfs send tank/test@snap1 | zfs recv -o encryption=on -o keyformat=passphrase -o keylocation=file:///path/to/keyfile
+.Ed
+.Pp
+Note that
+.Op Fl o Ar keylocation Ns = Ns Ar prompt
+may not be specified here, since stdin is already being utilized for the send
+stream. Once the receive has completed, you can use
+.Nm
+.Cm set
+to change this setting after the fact. Similarly, you can receive a dataset as
+an encrypted child by specifying
+.Op Fl x Ar encryption
+to force the property to be inherited. Overriding encryption properties (except
+for
+.Sy keylocation Ns )
+is not possible with raw send streams.
 .It Fl s
 If the receive is interrupted, save the partially received state, rather
 than deleting it.
@@ -4001,7 +4049,8 @@ command restricts modifications of the global namespace to the root user.
 .Ar perm Ns | Ns @ Ns Ar setname Ns Oo , Ns Ar perm Ns | Ns @ Ns
 .Ar setname Oc Ns ...
 .Ar filesystem Ns | Ns Ar volume
-.br
+.Xc
+.It Xo
 .Nm
 .Cm allow
 .Op Fl dl
@@ -4184,7 +4233,8 @@ and can be no more than 64 characters long.
 .Oo Ar perm Ns | Ns @ Ns Ar setname Ns Oo , Ns Ar perm Ns | Ns @ Ns
 .Ar setname Oc Ns ... Oc
 .Ar filesystem Ns | Ns Ar volume
-.br
+.Xc
+.It Xo
 .Nm
 .Cm unallow
 .Op Fl dlr
@@ -4266,7 +4316,7 @@ of all descendent file systems.
 .It Xo
 .Nm
 .Cm holds
-.Op Fl r
+.Op Fl rH
 .Ar snapshot Ns ...
 .Xc
 Lists all existing user references for the given snapshot or snapshots.
@@ -4274,6 +4324,8 @@ Lists all existing user references for the given snapshot or snapshots.
 .It Fl r
 Lists the holds that are set on the named descendent snapshots, in addition to
 listing the holds on the named snapshot.
+.It Fl H
+Do not print headers, use tab-delimited output.
 .El
 .It Xo
 .Nm

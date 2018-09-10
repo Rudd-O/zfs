@@ -23,6 +23,7 @@
  * Copyright (c) 2011, 2017 by Delphix. All rights reserved.
  * Copyright (c) 2013 by Saso Kiselkov. All rights reserved.
  * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2017, Intel Corporation.
  */
 
 #ifndef _ZFEATURE_COMMON_H
@@ -63,6 +64,7 @@ typedef enum spa_feature {
 	SPA_FEATURE_OBSOLETE_COUNTS,
 	SPA_FEATURE_POOL_CHECKPOINT,
 	SPA_FEATURE_SPACEMAP_V2,
+	SPA_FEATURE_ALLOCATION_CLASSES,
 	SPA_FEATURES
 } spa_feature_t;
 
@@ -85,6 +87,7 @@ typedef struct zfeature_info {
 	const char *fi_guid;	/* On-disk feature identifier */
 	const char *fi_desc;	/* Feature description */
 	zfeature_flags_t fi_flags;
+	boolean_t fi_zfs_mod_supported;	/* supported by running zfs module */
 	/* array of dependencies, terminated by SPA_FEATURE_NONE */
 	const spa_feature_t *fi_depends;
 } zfeature_info_t;
@@ -98,6 +101,7 @@ extern zfeature_info_t spa_feature_table[SPA_FEATURES];
 extern boolean_t zfeature_is_valid_guid(const char *);
 
 extern boolean_t zfeature_is_supported(const char *);
+extern int zfeature_lookup_guid(const char *, spa_feature_t *);
 extern int zfeature_lookup_name(const char *, spa_feature_t *);
 extern boolean_t zfeature_depends_on(spa_feature_t, spa_feature_t);
 

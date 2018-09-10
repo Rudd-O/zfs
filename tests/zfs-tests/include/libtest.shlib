@@ -41,6 +41,20 @@ if [ -n "$STF_PATH" ]; then
 	PATH="$STF_PATH"
 fi
 
+#
+# Generic dot version comparison function
+#
+# Returns success when version $1 is greater than or equal to $2.
+#
+function compare_version_gte
+{
+	if [[ "$(printf "$1\n$2" | sort -V | tail -n1)" == "$1" ]]; then
+		return 0
+	else
+		return 1
+	fi
+}
+
 # Linux kernel version comparison function
 #
 # $1 Linux version ("4.10", "2.6.32") or blank for installed Linux version
@@ -1992,7 +2006,7 @@ function check_hotspare_state # pool disk state{inuse,avail}
 function wait_hotspare_state # pool disk state timeout
 {
 	typeset pool=$1
-	typeset disk=${2#$/DEV_DSKDIR/}
+	typeset disk=${2#*$DEV_DSKDIR/}
 	typeset state=$3
 	typeset timeout=${4:-60}
 	typeset -i i=0
@@ -2036,7 +2050,7 @@ function check_slog_state # pool disk state{online,offline,unavail}
 function check_vdev_state # pool disk state{online,offline,unavail}
 {
 	typeset pool=$1
-	typeset disk=${2#$/DEV_DSKDIR/}
+	typeset disk=${2#*$DEV_DSKDIR/}
 	typeset state=$3
 
 	cur_state=$(get_device_state $pool $disk)
@@ -2055,7 +2069,7 @@ function check_vdev_state # pool disk state{online,offline,unavail}
 function wait_vdev_state # pool disk state timeout
 {
 	typeset pool=$1
-	typeset disk=${2#$/DEV_DSKDIR/}
+	typeset disk=${2#*$DEV_DSKDIR/}
 	typeset state=$3
 	typeset timeout=${4:-60}
 	typeset -i i=0

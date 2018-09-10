@@ -21,7 +21,7 @@
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2012, Joyent, Inc. All rights reserved.
- * Copyright (c) 2011, 2017 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2018 by Delphix. All rights reserved.
  * Copyright (c) 2014 by Saso Kiselkov. All rights reserved.
  * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
  */
@@ -1561,6 +1561,9 @@ arc_cksum_free(arc_buf_hdr_t *hdr)
 static boolean_t
 arc_hdr_has_uncompressed_buf(arc_buf_hdr_t *hdr)
 {
+	ASSERT(hdr->b_l1hdr.b_state == arc_anon ||
+	    MUTEX_HELD(HDR_LOCK(hdr)) || HDR_EMPTY(hdr));
+
 	for (arc_buf_t *b = hdr->b_l1hdr.b_buf; b != NULL; b = b->b_next) {
 		if (!ARC_BUF_COMPRESSED(b)) {
 			return (B_TRUE);
@@ -1584,15 +1587,13 @@ arc_cksum_verify(arc_buf_t *buf)
 	if (!(zfs_flags & ZFS_DEBUG_MODIFY))
 		return;
 
-	if (ARC_BUF_COMPRESSED(buf)) {
-		ASSERT(hdr->b_l1hdr.b_freeze_cksum == NULL ||
-		    arc_hdr_has_uncompressed_buf(hdr));
+	if (ARC_BUF_COMPRESSED(buf))
 		return;
-	}
 
 	ASSERT(HDR_HAS_L1HDR(hdr));
 
 	mutex_enter(&hdr->b_l1hdr.b_freeze_lock);
+
 	if (hdr->b_l1hdr.b_freeze_cksum == NULL || HDR_IO_ERROR(hdr)) {
 		mutex_exit(&hdr->b_l1hdr.b_freeze_lock);
 		return;
@@ -1650,11 +1651,7 @@ arc_cksum_compute(arc_buf_t *buf)
 	ASSERT(HDR_HAS_L1HDR(hdr));
 
 	mutex_enter(&buf->b_hdr->b_l1hdr.b_freeze_lock);
-	if (hdr->b_l1hdr.b_freeze_cksum != NULL) {
-		ASSERT(arc_hdr_has_uncompressed_buf(hdr));
-		mutex_exit(&hdr->b_l1hdr.b_freeze_lock);
-		return;
-	} else if (ARC_BUF_COMPRESSED(buf)) {
+	if (hdr->b_l1hdr.b_freeze_cksum != NULL || ARC_BUF_COMPRESSED(buf)) {
 		mutex_exit(&hdr->b_l1hdr.b_freeze_lock);
 		return;
 	}
@@ -1746,14 +1743,10 @@ arc_buf_thaw(arc_buf_t *buf)
 	arc_cksum_verify(buf);
 
 	/*
-	 * Compressed buffers do not manipulate the b_freeze_cksum or
-	 * allocate b_thawed.
+	 * Compressed buffers do not manipulate the b_freeze_cksum.
 	 */
-	if (ARC_BUF_COMPRESSED(buf)) {
-		ASSERT(hdr->b_l1hdr.b_freeze_cksum == NULL ||
-		    arc_hdr_has_uncompressed_buf(hdr));
+	if (ARC_BUF_COMPRESSED(buf))
 		return;
-	}
 
 	ASSERT(HDR_HAS_L1HDR(hdr));
 	arc_cksum_free(hdr);
@@ -1763,26 +1756,14 @@ arc_buf_thaw(arc_buf_t *buf)
 void
 arc_buf_freeze(arc_buf_t *buf)
 {
-	arc_buf_hdr_t *hdr = buf->b_hdr;
-	kmutex_t *hash_lock;
-
 	if (!(zfs_flags & ZFS_DEBUG_MODIFY))
 		return;
 
-	if (ARC_BUF_COMPRESSED(buf)) {
-		ASSERT(hdr->b_l1hdr.b_freeze_cksum == NULL ||
-		    arc_hdr_has_uncompressed_buf(hdr));
+	if (ARC_BUF_COMPRESSED(buf))
 		return;
-	}
 
-	hash_lock = HDR_LOCK(hdr);
-	mutex_enter(hash_lock);
-
-	ASSERT(HDR_HAS_L1HDR(hdr));
-	ASSERT(hdr->b_l1hdr.b_freeze_cksum != NULL ||
-	    hdr->b_l1hdr.b_state == arc_anon);
+	ASSERT(HDR_HAS_L1HDR(buf->b_hdr));
 	arc_cksum_compute(buf);
-	mutex_exit(hash_lock);
 }
 
 /*
@@ -1901,7 +1882,7 @@ arc_hdr_authenticate(arc_buf_hdr_t *hdr, spa_t *spa, uint64_t dsobj)
 	void *tmpbuf = NULL;
 	abd_t *abd = hdr->b_l1hdr.b_pabd;
 
-	ASSERT(HDR_LOCK(hdr) == NULL || MUTEX_HELD(HDR_LOCK(hdr)));
+	ASSERT(MUTEX_HELD(HDR_LOCK(hdr)) || HDR_EMPTY(hdr));
 	ASSERT(HDR_AUTHENTICATED(hdr));
 	ASSERT3P(hdr->b_l1hdr.b_pabd, !=, NULL);
 
@@ -1971,7 +1952,7 @@ arc_hdr_decrypt(arc_buf_hdr_t *hdr, spa_t *spa, const zbookmark_phys_t *zb)
 	boolean_t no_crypt = B_FALSE;
 	boolean_t bswap = (hdr->b_l1hdr.b_byteswap != DMU_BSWAP_NUMFUNCS);
 
-	ASSERT(HDR_LOCK(hdr) == NULL || MUTEX_HELD(HDR_LOCK(hdr)));
+	ASSERT(MUTEX_HELD(HDR_LOCK(hdr)) || HDR_EMPTY(hdr));
 	ASSERT(HDR_ENCRYPTED(hdr));
 
 	arc_hdr_alloc_abd(hdr, B_FALSE);
@@ -2090,7 +2071,7 @@ arc_buf_untransform_in_place(arc_buf_t *buf, kmutex_t *hash_lock)
 
 	ASSERT(HDR_ENCRYPTED(hdr));
 	ASSERT3U(hdr->b_crypt_hdr.b_ot, ==, DMU_OT_DNODE);
-	ASSERT(HDR_LOCK(hdr) == NULL || MUTEX_HELD(HDR_LOCK(hdr)));
+	ASSERT(MUTEX_HELD(HDR_LOCK(hdr)) || HDR_EMPTY(hdr));
 	ASSERT3P(hdr->b_l1hdr.b_pabd, !=, NULL);
 
 	zio_crypt_copy_dnode_bonus(hdr->b_l1hdr.b_pabd, buf->b_data,
@@ -4658,6 +4639,13 @@ arc_adjust(void)
 	}
 
 	/*
+	 * Re-sum ARC stats after the first round of evictions.
+	 */
+	asize = aggsum_value(&arc_size);
+	ameta = aggsum_value(&arc_meta_used);
+
+
+	/*
 	 * Adjust MFU size
 	 *
 	 * Now that we've tried to evict enough from the MRU to get its
@@ -5803,10 +5791,12 @@ arc_getbuf_func(zio_t *zio, const zbookmark_phys_t *zb, const blkptr_t *bp,
 	arc_buf_t **bufp = arg;
 
 	if (buf == NULL) {
+		ASSERT(zio == NULL || zio->io_error != 0);
 		*bufp = NULL;
 	} else {
+		ASSERT(zio == NULL || zio->io_error == 0);
 		*bufp = buf;
-		ASSERT(buf->b_data);
+		ASSERT(buf->b_data != NULL);
 	}
 }
 
@@ -5934,12 +5924,6 @@ arc_read_done(zio_t *zio)
 		    &acb->acb_zb, acb->acb_private, acb->acb_encrypted,
 		    acb->acb_compressed, acb->acb_noauth, B_TRUE,
 		    &acb->acb_buf);
-		if (error != 0) {
-			(void) remove_reference(hdr, hash_lock,
-			    acb->acb_private);
-			arc_buf_destroy_impl(acb->acb_buf);
-			acb->acb_buf = NULL;
-		}
 
 		/*
 		 * Assert non-speculative zios didn't fail because an
@@ -5962,9 +5946,34 @@ arc_read_done(zio_t *zio)
 			}
 		}
 
-		if (zio->io_error == 0)
+		if (error != 0) {
+			/*
+			 * Decompression or decryption failed.  Set
+			 * io_error so that when we call acb_done
+			 * (below), we will indicate that the read
+			 * failed. Note that in the unusual case
+			 * where one callback is compressed and another
+			 * uncompressed, we will mark all of them
+			 * as failed, even though the uncompressed
+			 * one can't actually fail.  In this case,
+			 * the hdr will not be anonymous, because
+			 * if there are multiple callbacks, it's
+			 * because multiple threads found the same
+			 * arc buf in the hash table.
+			 */
 			zio->io_error = error;
+		}
 	}
+
+	/*
+	 * If there are multiple callbacks, we must have the hash lock,
+	 * because the only way for multiple threads to find this hdr is
+	 * in the hash table.  This ensures that if there are multiple
+	 * callbacks, the hdr is not anonymous.  If it were anonymous,
+	 * we couldn't use arc_buf_destroy() in the error case below.
+	 */
+	ASSERT(callback_cnt < 2 || hash_lock != NULL);
+
 	hdr->b_l1hdr.b_acb = NULL;
 	arc_hdr_clear_flags(hdr, ARC_FLAG_IO_IN_PROGRESS);
 	if (callback_cnt == 0)
@@ -6006,7 +6015,17 @@ arc_read_done(zio_t *zio)
 
 	/* execute each callback and free its structure */
 	while ((acb = callback_list) != NULL) {
-		if (acb->acb_done) {
+		if (acb->acb_done != NULL) {
+			if (zio->io_error != 0 && acb->acb_buf != NULL) {
+				/*
+				 * If arc_buf_alloc_impl() fails during
+				 * decompression, the buf will still be
+				 * allocated, and needs to be freed here.
+				 */
+				arc_buf_destroy(acb->acb_buf,
+				    acb->acb_private);
+				acb->acb_buf = NULL;
+			}
 			acb->acb_done(zio, &zio->io_bookmark, zio->io_bp,
 			    acb->acb_buf, acb->acb_private);
 		}

@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012, 2015 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2018 by Delphix. All rights reserved.
  */
 
 /* Portions Copyright 2010 Robert Milkowski */
@@ -1256,6 +1256,9 @@ zfsvfs_setup(zfsvfs_t *zfsvfs, boolean_t mounting)
 		/* restore readonly bit */
 		if (readonly != 0)
 			readonly_changed_cb(zfsvfs, B_TRUE);
+
+		ASSERT3P(zfsvfs->z_kstat.dk_kstats, ==, NULL);
+		dataset_kstats_create(&zfsvfs->z_kstat, zfsvfs->z_os);
 	}
 
 	/*
@@ -1288,6 +1291,7 @@ zfsvfs_free(zfsvfs_t *zfsvfs)
 	vmem_free(zfsvfs->z_hold_trees, sizeof (avl_tree_t) * size);
 	vmem_free(zfsvfs->z_hold_locks, sizeof (kmutex_t) * size);
 	zfsvfs_vfs_free(zfsvfs->z_vfs);
+	dataset_kstats_destroy(&zfsvfs->z_kstat);
 	kmem_free(zfsvfs, sizeof (zfsvfs_t));
 }
 
@@ -1741,10 +1745,10 @@ zfsvfs_teardown(zfsvfs_t *zfsvfs, boolean_t unmounting)
 	zfs_unregister_callbacks(zfsvfs);
 
 	/*
-	 * Evict cached data
+	 * Evict cached data. We must write out any dirty data before
+	 * disowning the dataset.
 	 */
-	if (dsl_dataset_is_dirty(dmu_objset_ds(zfsvfs->z_os)) &&
-	    !zfs_is_readonly(zfsvfs))
+	if (!zfs_is_readonly(zfsvfs))
 		txg_wait_synced(dmu_objset_pool(zfsvfs->z_os), 0);
 	dmu_objset_evict_dbufs(zfsvfs->z_os);
 
@@ -1965,6 +1969,9 @@ zfs_remount(struct super_block *sb, int *flags, zfs_mnt_t *zm)
 	error = zfsvfs_parse_options(zm->mnt_data, &vfsp);
 	if (error)
 		return (error);
+
+	if (!zfs_is_readonly(zfsvfs) && (*flags & MS_RDONLY))
+		txg_wait_synced(dmu_objset_pool(zfsvfs->z_os), 0);
 
 	zfs_unregister_callbacks(zfsvfs);
 	zfsvfs_vfs_free(zfsvfs->z_vfs);

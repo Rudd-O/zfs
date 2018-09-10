@@ -121,6 +121,12 @@ rewind_reason = 'Arbitrary pool rewind is not guaranteed'
 enospc_reason = 'Exact free space reporting is not guaranteed'
 
 #
+# Some tests require a minimum version of the fio benchmark utility.
+# Older distributions such as CentOS 6.x only provide fio-2.0.13.
+#
+fio_reason = 'Fio v2.3 or newer required'
+
+#
 # Some tests are not applicable to Linux or need to be updated to operate
 # in the manor required by Linux.  Any tests which are skipped for this
 # reason will be suppressed in the final analysis output.
@@ -210,8 +216,6 @@ maybe = {
     'cli_root/zdb/zdb_006_pos': ['FAIL', known_reason],
     'cli_root/zfs_get/zfs_get_004_pos': ['FAIL', known_reason],
     'cli_root/zfs_get/zfs_get_009_pos': ['SKIP', '5479'],
-    'cli_root/zfs_receive/receive-o-x_props_override':
-        ['FAIL', known_reason],
     'cli_root/zfs_rename/zfs_rename_006_pos': ['FAIL', '5647'],
     'cli_root/zfs_rename/zfs_rename_009_neg': ['FAIL', '5648'],
     'cli_root/zfs_rollback/zfs_rollback_001_pos': ['FAIL', '6415'],
@@ -246,10 +250,12 @@ maybe = {
     'inuse/inuse_005_pos': ['SKIP', disk_reason],
     'inuse/inuse_008_pos': ['SKIP', disk_reason],
     'inuse/inuse_009_pos': ['SKIP', disk_reason],
+    'io/mmap': ['SKIP', fio_reason],
     'largest_pool/largest_pool_001_pos': ['FAIL', known_reason],
     'pyzfs/pyzfs_unittest': ['SKIP', python_deps_reason],
     'no_space/enospc_002_pos': ['FAIL', enospc_reason],
     'projectquota/setup': ['SKIP', exec_reason],
+    'redundancy/redundancy_004_neg': ['FAIL', '7290'],
     'reservation/reservation_008_pos': ['FAIL', '7741'],
     'reservation/reservation_018_pos': ['FAIL', '5642'],
     'rsend/rsend_019_pos': ['FAIL', '6086'],

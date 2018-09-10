@@ -21,7 +21,7 @@
 
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2011, 2017 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2018 by Delphix. All rights reserved.
  * Copyright (c) 2012, Joyent, Inc. All rights reserved.
  * Copyright (c) 2013 Steven Hartland. All rights reserved.
  * Copyright (c) 2016, Intel Corporation.
@@ -157,6 +157,7 @@ typedef enum zfs_error {
 	EZFS_NO_CHECKPOINT,	/* pool has no checkpoint */
 	EZFS_DEVRM_IN_PROGRESS,	/* a device is currently being removed */
 	EZFS_VDEV_TOO_BIG,	/* a device is too big to be used */
+	EZFS_IOC_NOTSUPPORTED,	/* operation not supported by zfs module */
 	EZFS_UNKNOWN
 } zfs_error_t;
 
@@ -527,7 +528,7 @@ extern nvlist_t *zfs_get_clones_nvl(zfs_handle_t *);
  */
 extern int zfs_crypto_get_encryption_root(zfs_handle_t *, boolean_t *, char *);
 extern int zfs_crypto_create(libzfs_handle_t *, char *, nvlist_t *, nvlist_t *,
-    uint8_t **, uint_t *);
+    boolean_t stdin_available, uint8_t **, uint_t *);
 extern int zfs_crypto_clone_check(libzfs_handle_t *, zfs_handle_t *, char *,
     nvlist_t *);
 extern int zfs_crypto_attempt_load_keys(libzfs_handle_t *, char *);
