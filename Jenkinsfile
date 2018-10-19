@@ -33,7 +33,10 @@ pipeline {
                     ).trim()
                     println "Git hash is reported as ${env.GIT_HASH}"
                 }
-                sh "git clean -fxd"
+                sh "git clean -fxd && rm -rf src/zfs"
+                sh '''
+                    cp -a "$JENKINS_HOME"/shell_lib.sh "$JENKINS_HOME"/userContent/mocklock .
+                '''
             }
         }
         stage('Parallelize') {
@@ -49,10 +52,6 @@ pipeline {
                             node('zfs') {
                                 stage("Setup ${it.join(' ')}") {
                                     timeout(time: 15, unit: 'MINUTES') {
-                                        sh '''
-                                            cp -a "$JENKINS_HOME"/userContent/mocklock .
-                                            cp -a "$JENKINS_HOME"/shell_lib.sh .
-                                        '''
                                         sh "./mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic -v --install glibc-devel kernel-devel zlib-devel libuuid-devel libblkid-devel libattr-devel openssl-devel"
                                         sh """
                                             # make sure none of these unpleasant things are installed in the chroot prior to building
