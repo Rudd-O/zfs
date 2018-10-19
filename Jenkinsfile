@@ -66,7 +66,7 @@ pipeline {
                                 }
                                 stage("Copy source ${it.join(' ')}") {
                                     timeout(time: 5, unit: 'MINUTES') {
-                                        sh "rm -rf *"
+                                        sh "rm -rf * .git"
                                         unstash "src"
                                         sh """
                                             # Copy ZFS source.
