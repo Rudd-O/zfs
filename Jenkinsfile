@@ -8,7 +8,6 @@ pipeline {
     agent none
 
     options {
-        checkoutToSubdirectory 'src/zfs'
         disableConcurrentBuilds()
     }
 
@@ -29,19 +28,12 @@ pipeline {
                 }
                 script {
                     env.GIT_HASH = sh (
-                        script: "cd src/zfs && git rev-parse --short HEAD",
+                        script: "git rev-parse --short HEAD",
                         returnStdout: true
                     ).trim()
                     println "Git hash is reported as ${env.GIT_HASH}"
                 }
-                sh '''
-                    cp -a "$JENKINS_HOME"/userContent/mocklock .
-                    cp -a "$JENKINS_HOME"/shell_lib.sh .
-                '''
-                sh "rm -rf build dist"
-                stash includes: 'mocklock', name: 'mocklock'
-                stash includes: 'shell_lib.sh', name: 'shell_lib'
-                stash includes: 'src/**', name: 'src'
+                sh "git clean -fxd"
             }
         }
         stage('Parallelize') {
@@ -57,10 +49,11 @@ pipeline {
                             node('zfs') {
                                 stage("Setup ${it.join(' ')}") {
                                     timeout(time: 15, unit: 'MINUTES') {
-                                        unstash 'mocklock'
-                                        unstash 'shell_lib'
-                                        sh "rm -rf build dist"
-                                        sh "./mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic -v --install kernel-devel zlib-devel libuuid-devel libblkid-devel libattr-devel openssl-devel"
+                                        sh '''
+                                            cp -a "$JENKINS_HOME"/userContent/mocklock .
+                                            cp -a "$JENKINS_HOME"/shell_lib.sh .
+                                        '''
+                                        sh "./mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic -v --install glibc-devel kernel-devel zlib-devel libuuid-devel libblkid-devel libattr-devel openssl-devel"
                                         sh """
                                             # make sure none of these unpleasant things are installed in the chroot prior to building
                                             output=\$(/usr/local/bin/mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic --shell 'rpm -q libuutil1 libzpool2 libzfs2-devel zfs libzfs2' | grep -v '^package ' || true)
@@ -73,11 +66,9 @@ pipeline {
                                 }
                                 stage("Copy source ${it.join(' ')}") {
                                     timeout(time: 5, unit: 'MINUTES') {
-                                        unstash 'src'
                                         sh """
-                                            find src/zfs -xtype l -print0 | xargs -0 -n 1 -i bash -c 'test -f "\$1" || { rm -f "\$1" && touch "\$1" ; }' -- {}
                                             # Copy ZFS source.
-                                            ./mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic --copyin src/zfs/ /builddir/zfs/zfs/
+                                            ./mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic --copyin . /builddir/zfs/zfs/
                                             # Ensure that copied files are owned by mockbuild, not by root.
                                             ./mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic --shell 'cd /builddir/zfs && chown mockbuild -R zfs'
                                         """
@@ -90,14 +81,12 @@ pipeline {
                                                 ./mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic --unpriv --shell '
                                                     set -e -x -o pipefail
                                                     mkdir -p /builddir/zfs/zfs-builtrpms
-                                                    (
-                                                        cd /builddir/zfs/zfs
-                                                        ./autogen.sh
-                                                        sed "s/_META_RELEASE=.*/_META_RELEASE=0.${env.BUILD_NUMBER}.${env.GIT_HASH}/" -i configure
-                                                        ./configure --with-config=user
-                                                        make srpm-dkms srpm-utils
-                                                        mv *.rpm ../zfs-builtrpms
-                                                    ) 2>&1 | sed -u "s/^/zfs: /" &
+                                                    cd /builddir/zfs/zfs
+                                                    ./autogen.sh
+                                                    sed "s/_META_RELEASE=.*/_META_RELEASE=0.${env.BUILD_NUMBER}.${env.GIT_HASH}/" -i configure
+                                                    ./configure --with-config=user
+                                                    make srpm-dkms srpm-utils
+                                                    mv *.rpm ../zfs-builtrpms
                                                     zfspid=\$!
                                                     wait \$zfspid || retval=\$?
                                                     exit \$retval
@@ -124,10 +113,9 @@ pipeline {
                                         """
                                     }
                                 }
-                                stage("Stash ${it.join(' ')}") {
+                                stage("Archive ${it.join(' ')}") {
                                     timeout(time: 5, unit: 'MINUTES') {
-                                        sh "find dist/ | sort"
-                                        stash includes: "dist/**", name: "dist-${myRelease}"
+                                        archiveArtifacts artifacts: 'dist/**', fingerprint: true
                                     }
                                 }
                             }
@@ -137,17 +125,13 @@ pipeline {
                 }
             }
         }
-        stage('Collect') {
+        stage('Publish') {
             agent { label 'master' }
             steps {
-                script {
-                    for (r in params.RELEASE.split(' ')) {
-                        unstash "dist-${r}"
-                    }
-                }
-                sh "find dist/ | sort"
-                archiveArtifacts 'dist/**'
-                fingerprint 'dist/**'
+                copyArtifacts(
+                        projectName: JOB_NAME,
+                        selector: specific(BUILD_NUMBER),
+                )
                 script {
                     if (env.BRANCH_NAME == "master") {
                         funcs.uploadDeliverables('dist/*/*.rpm')
