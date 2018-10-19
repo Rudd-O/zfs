@@ -33,6 +33,11 @@
 %global _initconfdir /etc/sysconfig
 %endif
 
+# Set the default systemd generator dir.
+%if %{undefined _systemdgeneratordir}
+%global _systemdgeneratordir    %{_unitdir}-generators
+%endif
+
 %bcond_with    debug
 %bcond_with    debuginfo
 %bcond_with    asan
