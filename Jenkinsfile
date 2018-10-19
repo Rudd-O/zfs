@@ -37,6 +37,7 @@ pipeline {
                 sh '''
                     cp -a "$JENKINS_HOME"/shell_lib.sh "$JENKINS_HOME"/userContent/mocklock .
                 '''
+                stash includes: '**', name: 'src'
             }
         }
         stage('Parallelize') {
@@ -65,8 +66,9 @@ pipeline {
                                 }
                                 stage("Copy source ${it.join(' ')}") {
                                     timeout(time: 5, unit: 'MINUTES') {
+                                        sh "rm -rf *"
+                                        unstash "src"
                                         sh """
-                                            ls -la
                                             # Copy ZFS source.
                                             ./mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic --copyin . /builddir/zfs/zfs/
                                             # Ensure that copied files are owned by mockbuild, not by root.
