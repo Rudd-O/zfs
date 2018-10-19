@@ -66,6 +66,7 @@ pipeline {
                                 stage("Copy source ${it.join(' ')}") {
                                     timeout(time: 5, unit: 'MINUTES') {
                                         sh """
+                                            ls -la
                                             # Copy ZFS source.
                                             ./mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic --copyin . /builddir/zfs/zfs/
                                             # Ensure that copied files are owned by mockbuild, not by root.
