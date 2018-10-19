@@ -1,5 +1,8 @@
 // https://github.com/Rudd-O/shared-jenkins-libraries
 @Library('shared-jenkins-libraries@master') _
+
+def RELEASE = funcs.loadParameter('parameters.groovy', 'RELEASE', '23 27 28')
+
 pipeline {
 
     agent none
@@ -14,7 +17,7 @@ pipeline {
     }
 
     parameters {
-        string defaultValue: '23 25 26 27', description: '', name: 'RELEASE', trim: true
+        string defaultValue: RELEASE, description: '', name: 'RELEASE', trim: true
     }
 
     stages {
