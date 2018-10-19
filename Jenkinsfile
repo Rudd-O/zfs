@@ -16,7 +16,7 @@ pipeline {
     }
 
     parameters {
-        string defaultValue: RELEASE, description: '', name: 'RELEASE', trim: true
+        string defaultValue: '', description: "Override which Fedora releases to build for.  If empty, defaults to ${RELEASE}.", name: 'RELEASE', trim: true
     }
 
     stages {
@@ -44,8 +44,11 @@ pipeline {
             agent { label 'master' }
             steps {
                 script {
+                    if (params.RELEASE != '') {
+                        RELEASE = params.RELEASE
+                    }
                     def axisList = [
-                        params.RELEASE.split(' '),
+                        RELEASE.split(' '),
                     ]
                     def task = {
                         def myRelease = it[0]
