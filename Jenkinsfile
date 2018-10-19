@@ -53,7 +53,7 @@ pipeline {
                             node('zfs') {
                                 stage("Setup ${it.join(' ')}") {
                                     timeout(time: 15, unit: 'MINUTES') {
-                                        sh "./mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic -v --install glibc-devel kernel-devel zlib-devel libuuid-devel libblkid-devel libattr-devel openssl-devel"
+                                        sh "./mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic -v --install glibc-devel libtirpc-devel kernel-devel zlib-devel libuuid-devel libblkid-devel libattr-devel openssl-devel"
                                         sh """
                                             # make sure none of these unpleasant things are installed in the chroot prior to building
                                             output=\$(/usr/local/bin/mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic --shell 'rpm -q libuutil1 libzpool2 libzfs2-devel zfs libzfs2' | grep -v '^package ' || true)
