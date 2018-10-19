@@ -286,7 +286,7 @@ struct vdev {
 
 	/*
 	 * The queue depth parameters determine how many async writes are
-	 * still pending (i.e. allocated by net yet issued to disk) per
+	 * still pending (i.e. allocated but not yet issued to disk) per
 	 * top-level (vdev_async_write_queue_depth) and the maximum allowed
 	 * (vdev_max_async_write_queue_depth). These values only apply to
 	 * top-level vdevs.
@@ -335,6 +335,7 @@ struct vdev {
 	boolean_t	vdev_isspare;	/* was a hot spare		*/
 	boolean_t	vdev_isl2cache;	/* was a l2cache device		*/
 	boolean_t	vdev_copy_uberblocks;  /* post expand copy uberblocks */
+	boolean_t	vdev_resilver_deferred;  /* resilver deferred */
 	vdev_queue_t	vdev_queue;	/* I/O deadline schedule queue	*/
 	vdev_cache_t	vdev_cache;	/* physical block cache		*/
 	spa_aux_vdev_t	*vdev_aux;	/* for l2cache and spares vdevs	*/
@@ -493,13 +494,13 @@ extern int zfs_vdev_cache_size;
 extern void vdev_indirect_sync_obsolete(vdev_t *vd, dmu_tx_t *tx);
 extern boolean_t vdev_indirect_should_condense(vdev_t *vd);
 extern void spa_condense_indirect_start_sync(vdev_t *vd, dmu_tx_t *tx);
-extern int vdev_obsolete_sm_object(vdev_t *vd);
-extern boolean_t vdev_obsolete_counts_are_precise(vdev_t *vd);
+extern int vdev_obsolete_sm_object(vdev_t *vd, uint64_t *sm_obj);
+extern int vdev_obsolete_counts_are_precise(vdev_t *vd, boolean_t *are_precise);
 
 /*
  * Other miscellaneous functions
  */
-int vdev_checkpoint_sm_object(vdev_t *vd);
+int vdev_checkpoint_sm_object(vdev_t *vd, uint64_t *sm_obj);
 
 #ifdef	__cplusplus
 }

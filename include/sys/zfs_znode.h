@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012, 2015 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2018 by Delphix. All rights reserved.
  * Copyright 2016 Nexenta Systems, Inc. All rights reserved.
  */
 
@@ -191,7 +191,7 @@ typedef struct znode {
 	krwlock_t	z_parent_lock;	/* parent lock for directories */
 	krwlock_t	z_name_lock;	/* "master" lock for dirent locks */
 	zfs_dirlock_t	*z_dirlocks;	/* directory entry lock list */
-	zfs_rlock_t	z_range_lock;	/* file range lock */
+	rangelock_t	z_rangelock;	/* file range locks */
 	uint8_t		z_unlinked;	/* file has been unlinked */
 	uint8_t		z_atime_dirty;	/* atime needs to be synced */
 	uint8_t		z_zn_prefetch;	/* Prefetch znodes? */
@@ -223,7 +223,7 @@ typedef struct znode_hold {
 	uint64_t	zh_obj;		/* object id */
 	kmutex_t	zh_lock;	/* lock serializing object access */
 	avl_node_t	zh_node;	/* avl tree linkage */
-	refcount_t	zh_refcount;	/* active consumer reference count */
+	zfs_refcount_t	zh_refcount;	/* active consumer reference count */
 } znode_hold_t;
 
 static inline uint64_t
@@ -389,7 +389,6 @@ extern void zfs_log_acl(zilog_t *zilog, dmu_tx_t *tx, znode_t *zp,
     vsecattr_t *vsecp, zfs_fuid_info_t *fuidp);
 extern void zfs_xvattr_set(znode_t *zp, xvattr_t *xvap, dmu_tx_t *tx);
 extern void zfs_upgrade(zfsvfs_t *zfsvfs, dmu_tx_t *tx);
-extern int zfs_create_share_dir(zfsvfs_t *zfsvfs, dmu_tx_t *tx);
 
 #if defined(HAVE_UIO_RW)
 extern caddr_t zfs_map_page(page_t *, enum seg_rw);

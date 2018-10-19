@@ -97,6 +97,7 @@ static int zpool_do_replace(int, char **);
 static int zpool_do_split(int, char **);
 
 static int zpool_do_scrub(int, char **);
+static int zpool_do_resilver(int, char **);
 
 static int zpool_do_import(int, char **);
 static int zpool_do_export(int, char **);
@@ -149,6 +150,7 @@ typedef enum {
 	HELP_REPLACE,
 	HELP_REMOVE,
 	HELP_SCRUB,
+	HELP_RESILVER,
 	HELP_STATUS,
 	HELP_UPGRADE,
 	HELP_EVENTS,
@@ -276,6 +278,7 @@ static zpool_command_t command_table[] = {
 	{ "split",	zpool_do_split,		HELP_SPLIT		},
 	{ NULL },
 	{ "scrub",	zpool_do_scrub,		HELP_SCRUB		},
+	{ "resilver",	zpool_do_resilver,	HELP_RESILVER		},
 	{ NULL },
 	{ "import",	zpool_do_import,	HELP_IMPORT		},
 	{ "export",	zpool_do_export,	HELP_EXPORT		},
@@ -358,6 +361,8 @@ get_usage(zpool_help_t idx)
 		return (gettext("\treopen [-n] <pool>\n"));
 	case HELP_SCRUB:
 		return (gettext("\tscrub [-s | -p] <pool> ...\n"));
+	case HELP_RESILVER:
+		return (gettext("\tresilver <pool> ...\n"));
 	case HELP_STATUS:
 		return (gettext("\tstatus [-c [script1,script2,...]] [-gLPvxD]"
 		    "[-T d|u] [pool] ... \n"
@@ -1742,7 +1747,7 @@ static void
 print_status_config(zpool_handle_t *zhp, status_cbdata_t *cb, const char *name,
     nvlist_t *nv, int depth, boolean_t isspare)
 {
-	nvlist_t **child;
+	nvlist_t **child, *root;
 	uint_t c, children;
 	pool_scan_stat_t *ps = NULL;
 	vdev_stat_t *vs;
@@ -1868,14 +1873,20 @@ print_status_config(zpool_handle_t *zhp, status_cbdata_t *cb, const char *name,
 		}
 	}
 
-	(void) nvlist_lookup_uint64_array(nv, ZPOOL_CONFIG_SCAN_STATS,
+	/* The root vdev has the scrub/resilver stats */
+	root = fnvlist_lookup_nvlist(zpool_get_config(zhp, NULL),
+	    ZPOOL_CONFIG_VDEV_TREE);
+	(void) nvlist_lookup_uint64_array(root, ZPOOL_CONFIG_SCAN_STATS,
 	    (uint64_t **)&ps, &c);
 
-	if (ps != NULL && ps->pss_state == DSS_SCANNING &&
-	    vs->vs_scan_processed != 0 && children == 0) {
-		(void) printf(gettext("  (%s)"),
-		    (ps->pss_func == POOL_SCAN_RESILVER) ?
-		    "resilvering" : "repairing");
+	if (ps != NULL && ps->pss_state == DSS_SCANNING && children == 0) {
+		if (vs->vs_scan_processed != 0) {
+			(void) printf(gettext("  (%s)"),
+			    (ps->pss_func == POOL_SCAN_RESILVER) ?
+			    "resilvering" : "repairing");
+		} else if (vs->vs_resilver_deferred) {
+			(void) printf(gettext("  (awaiting resilver)"));
+		}
 	}
 
 	if (cb->vcdl != NULL) {
@@ -1903,6 +1914,7 @@ print_status_config(zpool_handle_t *zhp, status_cbdata_t *cb, const char *name,
 
 		vname = zpool_vdev_name(g_zfs, zhp, child[c],
 		    cb->cb_name_flags | VDEV_NAME_TYPE_ID);
+
 		print_status_config(zhp, cb, vname, child[c], depth + 2,
 		    isspare);
 		free(vname);
@@ -3755,7 +3767,7 @@ single_histo_average(uint64_t *histo, unsigned int buckets)
 
 static void
 print_iostat_queues(iostat_cbdata_t *cb, nvlist_t *oldnv,
-    nvlist_t *newnv, double scale)
+    nvlist_t *newnv)
 {
 	int i;
 	uint64_t val;
@@ -3785,7 +3797,7 @@ print_iostat_queues(iostat_cbdata_t *cb, nvlist_t *oldnv,
 		format = ZFS_NICENUM_1024;
 
 	for (i = 0; i < ARRAY_SIZE(names); i++) {
-		val = nva[i].data[0] * scale;
+		val = nva[i].data[0];
 		print_one_stat(val, format, column_width, cb->cb_scripted);
 	}
 
@@ -3794,7 +3806,7 @@ print_iostat_queues(iostat_cbdata_t *cb, nvlist_t *oldnv,
 
 static void
 print_iostat_latency(iostat_cbdata_t *cb, nvlist_t *oldnv,
-    nvlist_t *newnv, double scale)
+    nvlist_t *newnv)
 {
 	int i;
 	uint64_t val;
@@ -3824,7 +3836,7 @@ print_iostat_latency(iostat_cbdata_t *cb, nvlist_t *oldnv,
 	/* Print our avg latencies on the line */
 	for (i = 0; i < ARRAY_SIZE(names); i++) {
 		/* Compute average latency for a latency histo */
-		val = single_histo_average(nva[i].data, nva[i].count) * scale;
+		val = single_histo_average(nva[i].data, nva[i].count);
 		print_one_stat(val, format, column_width, cb->cb_scripted);
 	}
 	free_calc_stats(nva, ARRAY_SIZE(names));
@@ -3972,9 +3984,9 @@ print_vdev_stats(zpool_handle_t *zhp, const char *name, nvlist_t *oldnv,
 		print_iostat_default(calcvs, cb, scale);
 	}
 	if (cb->cb_flags & IOS_LATENCY_M)
-		print_iostat_latency(cb, oldnv, newnv, scale);
+		print_iostat_latency(cb, oldnv, newnv);
 	if (cb->cb_flags & IOS_QUEUES_M)
-		print_iostat_queues(cb, oldnv, newnv, scale);
+		print_iostat_queues(cb, oldnv, newnv);
 	if (cb->cb_flags & IOS_ANYHISTO_M) {
 		printf("\n");
 		print_iostat_histos(cb, oldnv, newnv, scale, name);
@@ -6247,7 +6259,7 @@ scrub_callback(zpool_handle_t *zhp, void *data)
 	 * Ignore faulted pools.
 	 */
 	if (zpool_get_state(zhp) == POOL_STATE_UNAVAIL) {
-		(void) fprintf(stderr, gettext("cannot scrub '%s': pool is "
+		(void) fprintf(stderr, gettext("cannot scan '%s': pool is "
 		    "currently unavailable\n"), zpool_get_name(zhp));
 		return (1);
 	}
@@ -6314,6 +6326,44 @@ zpool_do_scrub(int argc, char **argv)
 
 	return (for_each_pool(argc, argv, B_TRUE, NULL, scrub_callback, &cb));
 }
+
+/*
+ * zpool resilver <pool> ...
+ *
+ *	Restarts any in-progress resilver
+ */
+int
+zpool_do_resilver(int argc, char **argv)
+{
+	int c;
+	scrub_cbdata_t cb;
+
+	cb.cb_type = POOL_SCAN_RESILVER;
+	cb.cb_scrub_cmd = POOL_SCRUB_NORMAL;
+	cb.cb_argc = argc;
+	cb.cb_argv = argv;
+
+	/* check options */
+	while ((c = getopt(argc, argv, "")) != -1) {
+		switch (c) {
+		case '?':
+			(void) fprintf(stderr, gettext("invalid option '%c'\n"),
+			    optopt);
+			usage(B_FALSE);
+		}
+	}
+
+	argc -= optind;
+	argv += optind;
+
+	if (argc < 1) {
+		(void) fprintf(stderr, gettext("missing pool name argument\n"));
+		usage(B_FALSE);
+	}
+
+	return (for_each_pool(argc, argv, B_TRUE, NULL, scrub_callback, &cb));
+}
+
 
 /*
  * Print out detailed scrub status.

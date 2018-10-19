@@ -139,7 +139,7 @@ typedef struct spa_config_lock {
 	kthread_t	*scl_writer;
 	int		scl_write_wanted;
 	kcondvar_t	scl_cv;
-	refcount_t	scl_count;
+	zfs_refcount_t	scl_count;
 } spa_config_lock_t;
 
 typedef struct spa_config_dirent {
@@ -281,6 +281,13 @@ struct spa {
 	uint64_t	spa_scan_pass_scrub_spent_paused; /* total paused */
 	uint64_t	spa_scan_pass_exam;	/* examined bytes per pass */
 	uint64_t	spa_scan_pass_issued;	/* issued bytes per pass */
+
+	/*
+	 * We are in the middle of a resilver, and another resilver
+	 * is needed once this one completes. This is set iff any
+	 * vdev_resilver_deferred is set.
+	 */
+	boolean_t	spa_resilver_deferred;
 	kmutex_t	spa_async_lock;		/* protect async state */
 	kthread_t	*spa_async_thread;	/* thread doing async task */
 	int		spa_async_suspended;	/* async tasks suspended */
@@ -387,12 +394,12 @@ struct spa {
 
 	/*
 	 * spa_refcount & spa_config_lock must be the last elements
-	 * because refcount_t changes size based on compilation options.
+	 * because zfs_refcount_t changes size based on compilation options.
 	 * In order for the MDB module to function correctly, the other
 	 * fields must remain in the same location.
 	 */
 	spa_config_lock_t spa_config_lock[SCL_LOCKS]; /* config changes */
-	refcount_t	spa_refcount;		/* number of opens */
+	zfs_refcount_t	spa_refcount;		/* number of opens */
 
 	taskq_t		*spa_upgrade_taskq;	/* taskq for upgrade jobs */
 };

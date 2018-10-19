@@ -252,6 +252,7 @@ AC_CONFIG_FILES([
 	tests/zfs-tests/tests/functional/cli_root/zpool_online/Makefile
 	tests/zfs-tests/tests/functional/cli_root/zpool_remove/Makefile
 	tests/zfs-tests/tests/functional/cli_root/zpool_reopen/Makefile
+	tests/zfs-tests/tests/functional/cli_root/zpool_resilver/Makefile
 	tests/zfs-tests/tests/functional/cli_root/zpool_replace/Makefile
 	tests/zfs-tests/tests/functional/cli_root/zpool_scrub/Makefile
 	tests/zfs-tests/tests/functional/cli_root/zpool_set/Makefile
@@ -283,7 +284,6 @@ AC_CONFIG_FILES([
 	tests/zfs-tests/tests/functional/inheritance/Makefile
 	tests/zfs-tests/tests/functional/inuse/Makefile
 	tests/zfs-tests/tests/functional/io/Makefile
-	tests/zfs-tests/tests/functional/kstat/Makefile
 	tests/zfs-tests/tests/functional/large_files/Makefile
 	tests/zfs-tests/tests/functional/largest_pool/Makefile
 	tests/zfs-tests/tests/functional/link_count/Makefile
@@ -301,6 +301,7 @@ AC_CONFIG_FILES([
 	tests/zfs-tests/tests/functional/pool_checkpoint/Makefile
 	tests/zfs-tests/tests/functional/poolversion/Makefile
 	tests/zfs-tests/tests/functional/privilege/Makefile
+	tests/zfs-tests/tests/functional/procfs/Makefile
 	tests/zfs-tests/tests/functional/projectquota/Makefile
 	tests/zfs-tests/tests/functional/pyzfs/Makefile
 	tests/zfs-tests/tests/functional/quota/Makefile
