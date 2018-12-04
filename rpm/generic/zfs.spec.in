@@ -223,6 +223,7 @@ Group:          System Environment/Kernel
 Requires:       %{name}%{?_isa} = %{version}-%{release}
 Requires:       dracut
 Requires:       /usr/bin/awk
+Requires:       util-linux
 Requires:       grep
 
 %description dracut

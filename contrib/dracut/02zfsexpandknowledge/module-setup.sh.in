@@ -9,15 +9,47 @@ get_devtype() {
   echo "$typ"
 }
 
+get_pool_devices_via_lsblk() {
+  # This code path is hit only when zpool list fails.
+  #
+  # zpool list fails when the kernel module and the
+  # userspace utilities have a serious mismatch,
+  # usually caused by booting with an older initramfs
+  # that loads a prior module which is not compatible
+  # with the userspace utilities, therefore rendering
+  # the creation of a new bootable initramfs impossible
+  # after that boot.  This fallback then takes over
+  # from get_pool_devices when get_pool_devices fails.
+  #
+  # Caveat: pool names with spaces are unsupported due
+  # to the way variables are read in the loop below.
+  local label
+  local fstype
+  local pooldev
+  local resolved
+  while read label fstype pooldev ; do
+    if [ "$label" == "$1" -a "$fstype" == "zfs_member" ] ; then
+      if [ -n "$pooldev" -a -e "$pooldev" ] ; then
+        if [ -h "$pooldev" ] ; then
+            resolved=`readlink -f "$pooldev"`
+        else
+            resolved="$pooldev"
+        fi
+        dinfo "zfsexpandknowledge: pool $1 has device $pooldev (which resolves to $resolved)"
+        echo "$resolved"
+      fi
+    fi
+  done < <(lsblk -p -n -o LABEL,FSTYPE,NAME -r)
+}
+
 get_pool_devices() {
-  # also present in 99zfssystemd
   local poolconfigtemp
   local poolconfigoutput
   local pooldev
   local prefix
   local resolved
   poolconfigtemp=`mktemp`
-  @sbindir@/zpool list -v -H -P "$1" > "$poolconfigtemp" 2>&1
+  @sbindir@/zpool list -v -H -P "$1" > "$poolconfigtemp" 2>&1 || { rm -f "$poolconfigtemp" ; get_pool_devices_via_lsblk "$@" ; return $? ; }
   if [ "$?" != "0" ] ; then
     poolconfigoutput=$(cat "$poolconfigtemp")
     dinfo "zfsexpandknowledge: pool $1 cannot be listed: $poolconfigoutput"
