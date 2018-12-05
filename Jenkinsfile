@@ -37,6 +37,7 @@ pipeline {
                 sh '''
                     cp -a "$JENKINS_HOME"/shell_lib.sh "$JENKINS_HOME"/userContent/mocklock .
                 '''
+                stash includes: 'shell_lib.sh,mocklock', name: 'tooling'
                 stash includes: '**', name: 'src'
             }
         }
@@ -56,6 +57,7 @@ pipeline {
                             node('zfs') {
                                 stage("Setup ${it.join(' ')}") {
                                     timeout(time: 15, unit: 'MINUTES') {
+                                        unstash "tooling"
                                         sh "./mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic -v --install glibc-devel libtirpc-devel kernel-devel zlib-devel libuuid-devel libblkid-devel libattr-devel openssl-devel"
                                         sh """
                                             # make sure none of these unpleasant things are installed in the chroot prior to building
