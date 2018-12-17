@@ -54,6 +54,7 @@
 
 #include <libzfs.h>
 #include <libzfs_core.h>
+#include <libzutil.h>
 
 #include "zfs_namecheck.h"
 #include "zfs_prop.h"
@@ -2293,7 +2294,7 @@ recv_open_grand_origin(zfs_handle_t *zhp)
 }
 
 static int
-recv_rename_impl(zfs_handle_t *zhp, zfs_cmd_t *zc)
+recv_rename_impl(zfs_handle_t *zhp, const char *name, const char *newname)
 {
 	int err;
 	zfs_handle_t *ozhp = NULL;
@@ -2303,7 +2304,7 @@ recv_rename_impl(zfs_handle_t *zhp, zfs_cmd_t *zc)
 	 * attempted to rename the dataset outside of its encryption root.
 	 * Force the dataset to become an encryption root and try again.
 	 */
-	err = ioctl(zhp->zfs_hdl->libzfs_fd, ZFS_IOC_RENAME, &zc);
+	err = lzc_rename(name, newname);
 	if (err == EACCES) {
 		ozhp = recv_open_grand_origin(zhp);
 		if (ozhp == NULL) {
@@ -2316,7 +2317,7 @@ recv_rename_impl(zfs_handle_t *zhp, zfs_cmd_t *zc)
 		if (err != 0)
 			goto out;
 
-		err = ioctl(zhp->zfs_hdl->libzfs_fd, ZFS_IOC_RENAME, &zc);
+		err = lzc_rename(name, newname);
 	}
 
 out:
@@ -2330,7 +2331,6 @@ recv_rename(libzfs_handle_t *hdl, const char *name, const char *tryname,
     int baselen, char *newname, recvflags_t *flags)
 {
 	static int seq;
-	zfs_cmd_t zc = {"\0"};
 	int err;
 	prop_changelist_t *clp = NULL;
 	zfs_handle_t *zhp = NULL;
@@ -2350,19 +2350,13 @@ recv_rename(libzfs_handle_t *hdl, const char *name, const char *tryname,
 	if (err)
 		goto out;
 
-	zc.zc_objset_type = DMU_OST_ZFS;
-	(void) strlcpy(zc.zc_name, name, sizeof (zc.zc_name));
-
 	if (tryname) {
 		(void) strcpy(newname, tryname);
-
-		(void) strlcpy(zc.zc_value, tryname, sizeof (zc.zc_value));
-
 		if (flags->verbose) {
 			(void) printf("attempting rename %s to %s\n",
-			    zc.zc_name, zc.zc_value);
+			    name, newname);
 		}
-		err = recv_rename_impl(zhp, &zc);
+		err = recv_rename_impl(zhp, name, newname);
 		if (err == 0)
 			changelist_rename(clp, name, tryname);
 	} else {
@@ -2374,13 +2368,12 @@ recv_rename(libzfs_handle_t *hdl, const char *name, const char *tryname,
 
 		(void) snprintf(newname, ZFS_MAX_DATASET_NAME_LEN,
 		    "%.*srecv-%u-%u", baselen, name, getpid(), seq);
-		(void) strlcpy(zc.zc_value, newname, sizeof (zc.zc_value));
 
 		if (flags->verbose) {
 			(void) printf("failed - trying rename %s to %s\n",
-			    zc.zc_name, zc.zc_value);
+			    name, newname);
 		}
-		err = recv_rename_impl(zhp, &zc);
+		err = recv_rename_impl(zhp, name, newname);
 		if (err == 0)
 			changelist_rename(clp, name, newname);
 		if (err && flags->verbose) {
@@ -2460,7 +2453,6 @@ static int
 recv_destroy(libzfs_handle_t *hdl, const char *name, int baselen,
     char *newname, recvflags_t *flags)
 {
-	zfs_cmd_t zc = {"\0"};
 	int err = 0;
 	prop_changelist_t *clp;
 	zfs_handle_t *zhp;
@@ -2483,17 +2475,20 @@ recv_destroy(libzfs_handle_t *hdl, const char *name, int baselen,
 	if (err)
 		return (err);
 
-	zc.zc_objset_type = DMU_OST_ZFS;
-	zc.zc_defer_destroy = defer;
-	(void) strlcpy(zc.zc_name, name, sizeof (zc.zc_name));
-
 	if (flags->verbose)
-		(void) printf("attempting destroy %s\n", zc.zc_name);
-	err = ioctl(hdl->libzfs_fd, ZFS_IOC_DESTROY, &zc);
+		(void) printf("attempting destroy %s\n", name);
+	if (zhp->zfs_type == ZFS_TYPE_SNAPSHOT) {
+		nvlist_t *nv = fnvlist_alloc();
+		fnvlist_add_boolean(nv, name);
+		err = lzc_destroy_snaps(nv, defer, NULL);
+		fnvlist_free(nv);
+	} else {
+		err = lzc_destroy(name);
+	}
 	if (err == 0) {
 		if (flags->verbose)
 			(void) printf("success\n");
-		changelist_remove(clp, zc.zc_name);
+		changelist_remove(clp, name);
 	}
 
 	(void) changelist_postfix(clp);
@@ -3800,8 +3795,9 @@ zfs_receive_one(libzfs_handle_t *hdl, int infd, const char *tosnap,
 	}
 
 	ASSERT(strstr(drrb->drr_toname, sendfs) == drrb->drr_toname);
-	ASSERT(chopprefix > drrb->drr_toname);
-	ASSERT(chopprefix <= drrb->drr_toname + strlen(drrb->drr_toname));
+	ASSERT(chopprefix > drrb->drr_toname || strchr(sendfs, '/') == NULL);
+	ASSERT(chopprefix <= drrb->drr_toname + strlen(drrb->drr_toname) ||
+	    strchr(sendfs, '/') == NULL);
 	ASSERT(chopprefix[0] == '/' || chopprefix[0] == '@' ||
 	    chopprefix[0] == '\0');
 
@@ -3928,7 +3924,7 @@ zfs_receive_one(libzfs_handle_t *hdl, int infd, const char *tosnap,
 				zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
 				    "destination has snapshots (eg. %s)\n"
 				    "must destroy them to overwrite it"),
-				    name);
+				    zc.zc_name);
 				err = zfs_error(hdl, EZFS_EXISTS, errbuf);
 				goto out;
 			}

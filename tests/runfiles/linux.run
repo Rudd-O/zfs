@@ -181,7 +181,7 @@ tests = ['zfs_mount_001_pos', 'zfs_mount_002_pos', 'zfs_mount_003_pos',
     'zfs_mount_007_pos', 'zfs_mount_008_pos', 'zfs_mount_009_neg',
     'zfs_mount_010_neg', 'zfs_mount_011_neg', 'zfs_mount_012_neg',
     'zfs_mount_all_001_pos', 'zfs_mount_encrypted', 'zfs_mount_remount',
-    'zfs_multi_mount']
+    'zfs_multi_mount', 'zfs_mount_all_fail', 'zfs_mount_all_mountpoints']
 tags = ['functional', 'cli_root', 'zfs_mount']
 
 [tests/functional/cli_root/zfs_program]
@@ -206,7 +206,7 @@ tests = ['zfs_receive_001_pos', 'zfs_receive_002_pos', 'zfs_receive_003_pos',
     'zfs_receive_013_pos', 'zfs_receive_014_pos', 'zfs_receive_015_pos',
     'receive-o-x_props_override', 'zfs_receive_from_encrypted',
     'zfs_receive_to_encrypted', 'zfs_receive_raw',
-    'zfs_receive_raw_incremental']
+    'zfs_receive_raw_incremental', 'zfs_receive_-e']
 tags = ['functional', 'cli_root', 'zfs_receive']
 
 [tests/functional/cli_root/zfs_remap]
@@ -440,7 +440,7 @@ tags = ['functional', 'cli_root', 'zpool_set']
 [tests/functional/cli_root/zpool_split]
 tests = ['zpool_split_cliargs', 'zpool_split_devices',
     'zpool_split_encryption', 'zpool_split_props', 'zpool_split_vdevs',
-    'zpool_split_resilver']
+    'zpool_split_resilver', 'zpool_split_wholedisk']
 tags = ['functional', 'cli_root', 'zpool_split']
 
 [tests/functional/cli_root/zpool_status]
@@ -543,10 +543,10 @@ tests = ['exec_001_pos', 'exec_002_neg']
 tags = ['functional', 'exec']
 
 [tests/functional/fault]
-tests = ['auto_online_001_pos', 'auto_replace_001_pos', 'auto_spare_001_pos',
-    'auto_spare_002_pos', 'auto_spare_ashift', 'auto_spare_multiple',
-    'auto_spare_shared', 'scrub_after_resilver', 'decrypt_fault',
-    'decompress_fault']
+tests = ['auto_offline_001_pos', 'auto_online_001_pos', 'auto_replace_001_pos',
+    'auto_spare_001_pos', 'auto_spare_002_pos', 'auto_spare_ashift',
+    'auto_spare_multiple', 'auto_spare_shared', 'scrub_after_resilver',
+    'decrypt_fault', 'decompress_fault', 'zpool_status_-s']
 tags = ['functional', 'fault']
 
 [tests/functional/features/async_destroy]
@@ -728,9 +728,9 @@ tests = ['removal_all_vdev', 'removal_check_space',
     'removal_remap', 'removal_remap_deadlists',
     'removal_resume_export', 'removal_sanity', 'removal_with_add',
     'removal_with_create_fs', 'removal_with_dedup',
-    'removal_with_export', 'removal_with_ganging',
-    'removal_with_remap', 'removal_with_remove',
-    'removal_with_scrub', 'removal_with_send',
+    'removal_with_errors', 'removal_with_export',
+    'removal_with_ganging', 'removal_with_faulted', 'removal_with_remap',
+    'removal_with_remove', 'removal_with_scrub', 'removal_with_send',
     'removal_with_send_recv', 'removal_with_snapshot',
     'removal_with_write', 'removal_with_zdb', 'remove_expanded',
     'remove_mirror', 'remove_mirror_sanity', 'remove_raidz']

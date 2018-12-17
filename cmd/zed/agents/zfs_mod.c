@@ -73,6 +73,7 @@
 #include <fcntl.h>
 #include <libnvpair.h>
 #include <libzfs.h>
+#include <libzutil.h>
 #include <limits.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -427,8 +428,16 @@ zfs_process_add(zpool_handle_t *zhp, nvlist_t *vdev, boolean_t labeled)
 	nvlist_free(newvd);
 
 	/*
-	 * auto replace a leaf disk at same physical location
+	 * Wait for udev to verify the links exist, then auto-replace
+	 * the leaf disk at same physical location.
 	 */
+	if (zpool_label_disk_wait(path, 3000) != 0) {
+		zed_log_msg(LOG_WARNING, "zfs_mod: expected replacement "
+		    "disk %s is missing", path);
+		nvlist_free(nvroot);
+		return;
+	}
+
 	ret = zpool_vdev_attach(zhp, fullpath, path, nvroot, B_TRUE);
 
 	zed_log_msg(LOG_INFO, "  zpool_vdev_replace: %s with %s (%s)",
@@ -467,7 +476,20 @@ zfs_iter_vdev(zpool_handle_t *zhp, nvlist_t *nvl, void *data)
 	    &child, &children) == 0) {
 		for (c = 0; c < children; c++)
 			zfs_iter_vdev(zhp, child[c], data);
-		return;
+	}
+
+	/*
+	 * Iterate over any spares and cache devices
+	 */
+	if (nvlist_lookup_nvlist_array(nvl, ZPOOL_CONFIG_SPARES,
+	    &child, &children) == 0) {
+		for (c = 0; c < children; c++)
+			zfs_iter_vdev(zhp, child[c], data);
+	}
+	if (nvlist_lookup_nvlist_array(nvl, ZPOOL_CONFIG_L2CACHE,
+	    &child, &children) == 0) {
+		for (c = 0; c < children; c++)
+			zfs_iter_vdev(zhp, child[c], data);
 	}
 
 	/* once a vdev was matched and processed there is nothing left to do */

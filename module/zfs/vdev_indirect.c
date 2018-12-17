@@ -1265,6 +1265,8 @@ vdev_indirect_read_all(zio_t *zio)
 {
 	indirect_vsd_t *iv = zio->io_vsd;
 
+	ASSERT3U(zio->io_type, ==, ZIO_TYPE_READ);
+
 	for (indirect_split_t *is = list_head(&iv->iv_splits);
 	    is != NULL; is = list_next(&iv->iv_splits, is)) {
 		for (int i = 0; i < is->is_children; i++) {
@@ -1347,7 +1349,8 @@ vdev_indirect_io_start(zio_t *zio)
 		    vdev_indirect_child_io_done, zio));
 	} else {
 		iv->iv_split_block = B_TRUE;
-		if (zio->io_flags & (ZIO_FLAG_SCRUB | ZIO_FLAG_RESILVER)) {
+		if (zio->io_type == ZIO_TYPE_READ &&
+		    zio->io_flags & (ZIO_FLAG_SCRUB | ZIO_FLAG_RESILVER)) {
 			/*
 			 * Read all copies.  Note that for simplicity,
 			 * we don't bother consulting the DTL in the
@@ -1356,13 +1359,17 @@ vdev_indirect_io_start(zio_t *zio)
 			vdev_indirect_read_all(zio);
 		} else {
 			/*
-			 * Read one copy of each split segment, from the
-			 * top-level vdev.  Since we don't know the
-			 * checksum of each split individually, the child
-			 * zio can't ensure that we get the right data.
-			 * E.g. if it's a mirror, it will just read from a
-			 * random (healthy) leaf vdev.  We have to verify
-			 * the checksum in vdev_indirect_io_done().
+			 * If this is a read zio, we read one copy of each
+			 * split segment, from the top-level vdev.  Since
+			 * we don't know the checksum of each split
+			 * individually, the child zio can't ensure that
+			 * we get the right data. E.g. if it's a mirror,
+			 * it will just read from a random (healthy) leaf
+			 * vdev. We have to verify the checksum in
+			 * vdev_indirect_io_done().
+			 *
+			 * For write zios, the vdev code will ensure we write
+			 * to all children.
 			 */
 			for (indirect_split_t *is = list_head(&iv->iv_splits);
 			    is != NULL; is = list_next(&iv->iv_splits, is)) {
@@ -1587,6 +1594,8 @@ vdev_indirect_splits_enumerate_randomly(indirect_vsd_t *iv, zio_t *zio)
 static int
 vdev_indirect_splits_damage(indirect_vsd_t *iv, zio_t *zio)
 {
+	int error;
+
 	/* Presume all the copies are unique for initial selection. */
 	for (indirect_split_t *is = list_head(&iv->iv_splits);
 	    is != NULL; is = list_next(&iv->iv_splits, is)) {
@@ -1599,13 +1608,18 @@ vdev_indirect_splits_damage(indirect_vsd_t *iv, zio_t *zio)
 				list_insert_tail(&is->is_unique_child, ic);
 			}
 		}
+
+		if (list_is_empty(&is->is_unique_child)) {
+			error = SET_ERROR(EIO);
+			goto out;
+		}
 	}
 
 	/*
 	 * Set each is_good_child to a randomly-selected child which
 	 * is known to contain validated data.
 	 */
-	int error = vdev_indirect_splits_enumerate_randomly(iv, zio);
+	error = vdev_indirect_splits_enumerate_randomly(iv, zio);
 	if (error)
 		goto out;
 
@@ -1614,7 +1628,7 @@ vdev_indirect_splits_damage(indirect_vsd_t *iv, zio_t *zio)
 	 * result in two or less unique copies per indirect_child_t.
 	 * Both may need to be checked in order to reconstruct the block.
 	 * Set iv->iv_attempts_max such that all unique combinations will
-	 * enumerated, but limit the damage to at most 16 indirect splits.
+	 * enumerated, but limit the damage to at most 12 indirect splits.
 	 */
 	iv->iv_attempts_max = 1;
 
@@ -1632,7 +1646,7 @@ vdev_indirect_splits_damage(indirect_vsd_t *iv, zio_t *zio)
 		}
 
 		iv->iv_attempts_max *= 2;
-		if (iv->iv_attempts_max > (1ULL << 16)) {
+		if (iv->iv_attempts_max >= (1ULL << 12)) {
 			iv->iv_attempts_max = UINT64_MAX;
 			break;
 		}
@@ -1718,7 +1732,7 @@ vdev_indirect_reconstruct_io_done(zio_t *zio)
 	/*
 	 * If nonzero, every 1/x blocks will be damaged, in order to validate
 	 * reconstruction when there are split segments with damaged copies.
-	 * Known_good will TRUE when reconstruction is known to be possible.
+	 * Known_good will be TRUE when reconstruction is known to be possible.
 	 */
 	if (zfs_reconstruct_indirect_damage_fraction != 0 &&
 	    spa_get_random(zfs_reconstruct_indirect_damage_fraction) == 0)

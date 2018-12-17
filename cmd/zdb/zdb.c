@@ -67,7 +67,9 @@
 #include <sys/dsl_crypt.h>
 #include <sys/dsl_scan.h>
 #include <zfs_comutil.h>
-#include <libzfs.h>
+
+#include <libnvpair.h>
+#include <libzutil.h>
 
 #include "zdb.h"
 
@@ -106,7 +108,6 @@ typedef void object_viewer_t(objset_t *, uint64_t, void *data, size_t size);
 
 uint64_t *zopt_object = NULL;
 static unsigned zopt_objects = 0;
-libzfs_handle_t *g_zfs;
 uint64_t max_inflight = 1000;
 static int leaked_objects = 0;
 static range_tree_t *mos_refd_objs;
@@ -225,6 +226,7 @@ dump_debug_buffer(void)
 {
 	if (dump_opt['G']) {
 		(void) printf("\n");
+		(void) fflush(stdout);
 		zfs_dbgmsg_print("zdb");
 	}
 }
@@ -2453,10 +2455,11 @@ dump_dir(objset_t *os)
 	dmu_objset_name(os, osname);
 
 	(void) printf("Dataset %s [%s], ID %llu, cr_txg %llu, "
-	    "%s, %llu objects%s\n",
+	    "%s, %llu objects%s%s\n",
 	    osname, type, (u_longlong_t)dmu_objset_id(os),
 	    (u_longlong_t)dds.dds_creation_txg,
-	    numbuf, (u_longlong_t)usedobjs, blkbuf);
+	    numbuf, (u_longlong_t)usedobjs, blkbuf,
+	    (dds.dds_inconsistent) ? " (inconsistent)" : "");
 
 	if (zopt_objects != 0) {
 		for (i = 0; i < zopt_objects; i++)
@@ -2519,15 +2522,15 @@ dump_dir(objset_t *os)
 	(void) printf("\tPercent empty: %10lf\n",
 	    (double)(max_slot_used - total_slots_used)*100 /
 	    (double)max_slot_used);
-
-	ASSERT3U(object_count, ==, usedobjs);
-
 	(void) printf("\n");
 
 	if (error != ESRCH) {
 		(void) fprintf(stderr, "dmu_object_next() = %d\n", error);
 		abort();
 	}
+
+	ASSERT3U(object_count, ==, usedobjs);
+
 	if (leaked_objects != 0) {
 		(void) printf("%d potentially leaked objects detected\n",
 		    leaked_objects);
@@ -5994,10 +5997,6 @@ main(int argc, char **argv)
 	spa_load_verify_dryrun = B_TRUE;
 
 	kernel_init(FREAD);
-	if ((g_zfs = libzfs_init()) == NULL) {
-		(void) fprintf(stderr, "%s", libzfs_error_init(errno));
-		return (1);
-	}
 
 	if (dump_all)
 		verbose = MAX(verbose, 1);
@@ -6055,17 +6054,6 @@ main(int argc, char **argv)
 	error = 0;
 	target = argv[0];
 
-	char *checkpoint_pool = NULL;
-	char *checkpoint_target = NULL;
-	if (dump_opt['k']) {
-		checkpoint_pool = import_checkpointed_state(target, cfg,
-		    &checkpoint_target);
-
-		if (checkpoint_target != NULL)
-			target = checkpoint_target;
-
-	}
-
 	if (strpbrk(target, "/@") != NULL) {
 		size_t targetlen;
 
@@ -6087,7 +6075,8 @@ main(int argc, char **argv)
 		args.path = searchdirs;
 		args.can_be_active = B_TRUE;
 
-		error = zpool_tryimport(g_zfs, target_pool, &cfg, &args);
+		error = zpool_find_config(NULL, target_pool, &cfg, &args,
+		    &libzpool_config_ops);
 
 		if (error == 0) {
 
@@ -6109,6 +6098,24 @@ main(int argc, char **argv)
 			error = spa_import(target_pool, cfg, NULL,
 			    flags | ZFS_IMPORT_SKIP_MMP);
 		}
+	}
+
+	/*
+	 * import_checkpointed_state makes the assumption that the
+	 * target pool that we pass it is already part of the spa
+	 * namespace. Because of that we need to make sure to call
+	 * it always after the -e option has been processed, which
+	 * imports the pool to the namespace if it's not in the
+	 * cachefile.
+	 */
+	char *checkpoint_pool = NULL;
+	char *checkpoint_target = NULL;
+	if (dump_opt['k']) {
+		checkpoint_pool = import_checkpointed_state(target, cfg,
+		    &checkpoint_target);
+
+		if (checkpoint_target != NULL)
+			target = checkpoint_target;
 	}
 
 	if (target_pool != target)
@@ -6219,7 +6226,6 @@ main(int argc, char **argv)
 
 	dump_debug_buffer();
 
-	libzfs_fini(g_zfs);
 	kernel_fini();
 
 	return (error);

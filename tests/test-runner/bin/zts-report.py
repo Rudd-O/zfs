@@ -151,8 +151,6 @@ summary = {
 # reasons listed above can be used.
 #
 known = {
-    'acl/posix/posix_001_pos': ['FAIL', known_reason],
-    'acl/posix/posix_002_pos': ['FAIL', known_reason],
     'casenorm/sensitive_none_lookup': ['FAIL', '7633'],
     'casenorm/sensitive_none_delete': ['FAIL', '7633'],
     'casenorm/sensitive_formd_lookup': ['FAIL', '7633'],
@@ -167,7 +165,6 @@ known = {
     'casenorm/mixed_formd_lookup': ['FAIL', '7633'],
     'casenorm/mixed_formd_lookup_ci': ['FAIL', '7633'],
     'casenorm/mixed_formd_delete': ['FAIL', '7633'],
-    'cli_root/zfs_mount/zfs_mount_006_pos': ['SKIP', '4990'],
     'cli_root/zfs_receive/zfs_receive_004_neg': ['FAIL', known_reason],
     'cli_root/zfs_unshare/zfs_unshare_002_pos': ['SKIP', na_reason],
     'cli_root/zfs_unshare/zfs_unshare_006_pos': ['SKIP', na_reason],
@@ -217,8 +214,6 @@ maybe = {
     'cli_root/zdb/zdb_006_pos': ['FAIL', known_reason],
     'cli_root/zfs_get/zfs_get_004_pos': ['FAIL', known_reason],
     'cli_root/zfs_get/zfs_get_009_pos': ['SKIP', '5479'],
-    'cli_root/zfs_rename/zfs_rename_006_pos': ['FAIL', '5647'],
-    'cli_root/zfs_rename/zfs_rename_009_neg': ['FAIL', '5648'],
     'cli_root/zfs_rollback/zfs_rollback_001_pos': ['FAIL', '6415'],
     'cli_root/zfs_rollback/zfs_rollback_002_pos': ['FAIL', '6416'],
     'cli_root/zfs_share/setup': ['SKIP', share_reason],
@@ -292,9 +287,10 @@ def process_results(pathname):
         sys.exit(1)
 
     prefix = '/zfs-tests/tests/functional/'
-    pattern = '^Test:\s*\S*%s(\S+)\s*\(run as (\S+)\)\s*\[(\S+)\]\s*\[(\S+)\]'\
+    pattern = \
+        r'^Test:\s*\S*%s(\S+)\s*\(run as (\S+)\)\s*\[(\S+)\]\s*\[(\S+)\]' \
         % prefix
-    pattern_log = '^\s*Log directory:\s*(\S*)'
+    pattern_log = r'^\s*Log directory:\s*(\S*)'
 
     d = {}
     for l in f.readlines():

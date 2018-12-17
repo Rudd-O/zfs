@@ -2049,7 +2049,7 @@ metaslab_activate(metaslab_t *msp, int allocator, uint64_t activation_weight)
 			 * The metaslab was activated for another allocator
 			 * while we were waiting, we should reselect.
 			 */
-			return (EBUSY);
+			return (SET_ERROR(EBUSY));
 		}
 		if ((error = metaslab_activate_allocator(msp->ms_group, msp,
 		    allocator, activation_weight)) != 0) {
@@ -3309,9 +3309,12 @@ metaslab_alloc_dva(spa_t *spa, metaslab_class_t *mc, uint64_t psize,
 
 	/*
 	 * For testing, make some blocks above a certain size be gang blocks.
-	 * This will also test spilling from special to normal.
+	 * This will result in more split blocks when using device removal,
+	 * and a large number of split blocks coupled with ztest-induced
+	 * damage can result in extremely long reconstruction times.  This
+	 * will also test spilling from special to normal.
 	 */
-	if (psize >= metaslab_force_ganging && (ddi_get_lbolt() & 3) == 0) {
+	if (psize >= metaslab_force_ganging && (spa_get_random(100) < 3)) {
 		metaslab_trace_add(zal, NULL, NULL, psize, d, TRACE_FORCE_GANG,
 		    allocator);
 		return (SET_ERROR(ENOSPC));
@@ -3886,15 +3889,21 @@ metaslab_claim_concrete(vdev_t *vd, uint64_t offset, uint64_t size,
 	int error = 0;
 
 	if (offset >> vd->vdev_ms_shift >= vd->vdev_ms_count)
-		return (ENXIO);
+		return (SET_ERROR(ENXIO));
 
 	ASSERT3P(vd->vdev_ms, !=, NULL);
 	msp = vd->vdev_ms[offset >> vd->vdev_ms_shift];
 
 	mutex_enter(&msp->ms_lock);
 
-	if ((txg != 0 && spa_writeable(spa)) || !msp->ms_loaded)
+	if ((txg != 0 && spa_writeable(spa)) || !msp->ms_loaded) {
 		error = metaslab_activate(msp, 0, METASLAB_WEIGHT_CLAIM);
+		if (error == EBUSY) {
+			ASSERT(msp->ms_loaded);
+			ASSERT(msp->ms_weight & METASLAB_ACTIVE_MASK);
+			error = 0;
+		}
+	}
 
 	if (error == 0 &&
 	    !range_tree_contains(msp->ms_allocatable, offset, size))

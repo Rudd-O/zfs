@@ -119,6 +119,7 @@ static scan_cb_t dsl_scan_scrub_cb;
 static int scan_ds_queue_compare(const void *a, const void *b);
 static int scan_prefetch_queue_compare(const void *a, const void *b);
 static void scan_ds_queue_clear(dsl_scan_t *scn);
+static void scan_ds_prefetch_queue_clear(dsl_scan_t *scn);
 static boolean_t scan_ds_queue_contains(dsl_scan_t *scn, uint64_t dsobj,
     uint64_t *txg);
 static void scan_ds_queue_insert(dsl_scan_t *scn, uint64_t dsobj, uint64_t txg);
@@ -169,6 +170,7 @@ int zfs_obsolete_min_time_ms = 500; /* min millisecs to obsolete per txg */
 int zfs_free_min_time_ms = 1000; /* min millisecs to free per txg */
 int zfs_resilver_min_time_ms = 3000; /* min millisecs to resilver per txg */
 int zfs_scan_checkpoint_intval = 7200; /* in seconds */
+int zfs_scan_suspend_progress = 0; /* set to prevent scans from progressing */
 int zfs_no_scrub_io = B_FALSE; /* set to disable scrub i/o */
 int zfs_no_scrub_prefetch = B_FALSE; /* set to disable scrub prefetch */
 enum ddt_class zfs_scrub_ddt_class_max = DDT_CLASS_DUPLICATE;
@@ -390,7 +392,6 @@ dsl_scan_init(dsl_pool_t *dp, uint64_t txg)
 	scn->scn_maxinflight_bytes = MAX(zfs_scan_vdev_limit *
 	    dsl_scan_count_leaves(spa->spa_root_vdev), 1ULL << 20);
 
-	bcopy(&scn->scn_phys, &scn->scn_phys_cached, sizeof (scn->scn_phys));
 	avl_create(&scn->scn_queue, scan_ds_queue_compare, sizeof (scan_ds_t),
 	    offsetof(scan_ds_t, sds_node));
 	avl_create(&scn->scn_prefetch_queue, scan_prefetch_queue_compare,
@@ -484,6 +485,8 @@ dsl_scan_init(dsl_pool_t *dp, uint64_t txg)
 		}
 	}
 
+	bcopy(&scn->scn_phys, &scn->scn_phys_cached, sizeof (scn->scn_phys));
+
 	/* reload the queue into the in-core state */
 	if (scn->scn_phys.scn_queue_obj != 0) {
 		zap_cursor_t zc;
@@ -512,8 +515,10 @@ dsl_scan_fini(dsl_pool_t *dp)
 
 		if (scn->scn_taskq != NULL)
 			taskq_destroy(scn->scn_taskq);
+
 		scan_ds_queue_clear(scn);
 		avl_destroy(&scn->scn_queue);
+		scan_ds_prefetch_queue_clear(scn);
 		avl_destroy(&scn->scn_prefetch_queue);
 
 		kmem_free(dp->dp_scan, sizeof (dsl_scan_t));
@@ -810,6 +815,7 @@ dsl_scan_done(dsl_scan_t *scn, boolean_t complete, dmu_tx_t *tx)
 		scn->scn_phys.scn_queue_obj = 0;
 	}
 	scan_ds_queue_clear(scn);
+	scan_ds_prefetch_queue_clear(scn);
 
 	scn->scn_phys.scn_flags &= ~DSF_SCRUB_PAUSED;
 
@@ -969,6 +975,7 @@ dsl_scrub_pause_resume_sync(void *arg, dmu_tx_t *tx)
 		/* can't pause a scrub when there is no in-progress scrub */
 		spa->spa_scan_pass_scrub_pause = gethrestime_sec();
 		scn->scn_phys.scn_flags |= DSF_SCRUB_PAUSED;
+		scn->scn_phys_cached.scn_flags |= DSF_SCRUB_PAUSED;
 		dsl_scan_sync_state(scn, tx, SYNC_CACHED);
 		spa_event_notify(spa, NULL, NULL, ESC_ZFS_SCRUB_PAUSED);
 	} else {
@@ -983,6 +990,7 @@ dsl_scrub_pause_resume_sync(void *arg, dmu_tx_t *tx)
 			    gethrestime_sec() - spa->spa_scan_pass_scrub_pause;
 			spa->spa_scan_pass_scrub_pause = 0;
 			scn->scn_phys.scn_flags &= ~DSF_SCRUB_PAUSED;
+			scn->scn_phys_cached.scn_flags &= ~DSF_SCRUB_PAUSED;
 			dsl_scan_sync_state(scn, tx, SYNC_CACHED);
 		}
 	}
@@ -1407,6 +1415,22 @@ static void
 scan_prefetch_ctx_add_ref(scan_prefetch_ctx_t *spc, void *tag)
 {
 	zfs_refcount_add(&spc->spc_refcnt, tag);
+}
+
+static void
+scan_ds_prefetch_queue_clear(dsl_scan_t *scn)
+{
+	spa_t *spa = scn->scn_dp->dp_spa;
+	void *cookie = NULL;
+	scan_prefetch_issue_ctx_t *spic = NULL;
+
+	mutex_enter(&spa->spa_scrub_lock);
+	while ((spic = avl_destroy_nodes(&scn->scn_prefetch_queue,
+	    &cookie)) != NULL) {
+		scan_prefetch_ctx_rele(spic->spic_spc, scn);
+		kmem_free(spic, sizeof (scan_prefetch_issue_ctx_t));
+	}
+	mutex_exit(&spa->spa_scrub_lock);
 }
 
 static boolean_t
@@ -2386,6 +2410,20 @@ dsl_scan_ddt_entry(dsl_scan_t *scn, enum zio_checksum checksum,
 	if (!dsl_scan_is_running(scn))
 		return;
 
+	/*
+	 * This function is special because it is the only thing
+	 * that can add scan_io_t's to the vdev scan queues from
+	 * outside dsl_scan_sync(). For the most part this is ok
+	 * as long as it is called from within syncing context.
+	 * However, dsl_scan_sync() expects that no new sio's will
+	 * be added between when all the work for a scan is done
+	 * and the next txg when the scan is actually marked as
+	 * completed. This check ensures we do not issue new sio's
+	 * during this period.
+	 */
+	if (scn->scn_done_txg != 0)
+		return;
+
 	for (p = 0; p < DDT_PHYS_TYPES; p++, ddp++) {
 		if (ddp->ddp_phys_birth == 0 ||
 		    ddp->ddp_phys_birth > scn->scn_phys.scn_max_txg)
@@ -3340,6 +3378,27 @@ dsl_scan_sync(dsl_pool_t *dp, dmu_tx_t *tx)
 		return;
 
 	/*
+	 * zfs_scan_suspend_progress can be set to disable scan progress.
+	 * We don't want to spin the txg_sync thread, so we add a delay
+	 * here to simulate the time spent doing a scan. This is mostly
+	 * useful for testing and debugging.
+	 */
+	if (zfs_scan_suspend_progress) {
+		uint64_t scan_time_ns = gethrtime() - scn->scn_sync_start_time;
+		int mintime = (scn->scn_phys.scn_func == POOL_SCAN_RESILVER) ?
+		    zfs_resilver_min_time_ms : zfs_scrub_min_time_ms;
+
+		while (zfs_scan_suspend_progress &&
+		    !txg_sync_waiting(scn->scn_dp) &&
+		    !spa_shutting_down(scn->scn_dp->dp_spa) &&
+		    NSEC2MSEC(scan_time_ns) < mintime) {
+			delay(hz);
+			scan_time_ns = gethrtime() - scn->scn_sync_start_time;
+		}
+		return;
+	}
+
+	/*
 	 * It is possible to switch from unsorted to sorted at any time,
 	 * but afterwards the scan will remain sorted unless reloaded from
 	 * a checkpoint after a reboot.
@@ -3468,6 +3527,8 @@ dsl_scan_sync(dsl_pool_t *dp, dmu_tx_t *tx)
 			    (longlong_t)tx->tx_txg);
 		}
 	} else if (scn->scn_is_sorted && scn->scn_bytes_pending != 0) {
+		ASSERT(scn->scn_clearing);
+
 		/* need to issue scrubbing IOs from per-vdev queues */
 		scn->scn_zio_root = zio_root(dp->dp_spa, NULL,
 		    NULL, ZIO_FLAG_CANFAIL);
@@ -4050,6 +4111,10 @@ MODULE_PARM_DESC(zfs_free_min_time_ms, "Min millisecs to free per txg");
 
 module_param(zfs_resilver_min_time_ms, int, 0644);
 MODULE_PARM_DESC(zfs_resilver_min_time_ms, "Min millisecs to resilver per txg");
+
+module_param(zfs_scan_suspend_progress, int, 0644);
+MODULE_PARM_DESC(zfs_scan_suspend_progress,
+	"Set to prevent scans from progressing");
 
 module_param(zfs_no_scrub_io, int, 0644);
 MODULE_PARM_DESC(zfs_no_scrub_io, "Set to disable scrub I/O");

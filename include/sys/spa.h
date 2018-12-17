@@ -1009,7 +1009,6 @@ extern void spa_load_note(spa_t *spa, const char *fmt, ...);
 extern void spa_activate_mos_feature(spa_t *spa, const char *feature,
     dmu_tx_t *tx);
 extern void spa_deactivate_mos_feature(spa_t *spa, const char *feature);
-extern int spa_rename(const char *oldname, const char *newname);
 extern spa_t *spa_by_guid(uint64_t pool_guid, uint64_t device_guid);
 extern boolean_t spa_guid_exists(uint64_t pool_guid, uint64_t device_guid);
 extern char *spa_strdup(const char *);
@@ -1077,9 +1076,11 @@ extern const char *spa_state_to_name(spa_t *spa);
 /* error handling */
 struct zbookmark_phys;
 extern void spa_log_error(spa_t *spa, const zbookmark_phys_t *zb);
-extern void zfs_ereport_post(const char *class, spa_t *spa, vdev_t *vd,
+extern int zfs_ereport_post(const char *class, spa_t *spa, vdev_t *vd,
     const zbookmark_phys_t *zb, zio_t *zio, uint64_t stateoroffset,
     uint64_t length);
+extern boolean_t zfs_ereport_is_valid(const char *class, spa_t *spa, vdev_t *vd,
+    zio_t *zio);
 extern nvlist_t *zfs_event_create(spa_t *spa, vdev_t *vd, const char *type,
     const char *name, nvlist_t *aux);
 extern void zfs_post_remove(spa_t *spa, vdev_t *vd);
