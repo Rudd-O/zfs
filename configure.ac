@@ -48,6 +48,7 @@ AC_CONFIG_HEADERS([zfs_config.h], [
 AC_PROG_INSTALL
 AC_PROG_CC
 AC_PROG_LIBTOOL
+PKG_PROG_PKG_CONFIG
 AM_PROG_AS
 AM_PROG_CC_C_O
 AX_CODE_COVERAGE
@@ -131,6 +132,7 @@ AC_CONFIG_FILES([
 	contrib/initramfs/scripts/Makefile
 	contrib/initramfs/scripts/local-top/Makefile
 	contrib/pyzfs/Makefile
+	contrib/pyzfs/setup.py
 	module/Makefile
 	module/avl/Makefile
 	module/nvpair/Makefile
@@ -247,6 +249,7 @@ AC_CONFIG_FILES([
 	tests/zfs-tests/tests/functional/cli_root/zpool_history/Makefile
 	tests/zfs-tests/tests/functional/cli_root/zpool_import/Makefile
 	tests/zfs-tests/tests/functional/cli_root/zpool_import/blockfiles/Makefile
+	tests/zfs-tests/tests/functional/cli_root/zpool_initialize/Makefile
 	tests/zfs-tests/tests/functional/cli_root/zpool_labelclear/Makefile
 	tests/zfs-tests/tests/functional/cli_root/zpool/Makefile
 	tests/zfs-tests/tests/functional/cli_root/zpool_offline/Makefile
@@ -289,6 +292,7 @@ AC_CONFIG_FILES([
 	tests/zfs-tests/tests/functional/largest_pool/Makefile
 	tests/zfs-tests/tests/functional/link_count/Makefile
 	tests/zfs-tests/tests/functional/libzfs/Makefile
+	tests/zfs-tests/tests/functional/limits/Makefile
 	tests/zfs-tests/tests/functional/migration/Makefile
 	tests/zfs-tests/tests/functional/mmap/Makefile
 	tests/zfs-tests/tests/functional/mmp/Makefile

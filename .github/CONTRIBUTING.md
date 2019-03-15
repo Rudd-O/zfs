@@ -56,14 +56,15 @@ of these tools are discussed in detail on the [debugging ZFS wiki
 page](https://github.com/zfsonlinux/zfs/wiki/Debugging).
 
 ### Where can I ask for help?
-The [mailing list](https://github.com/zfsonlinux/zfs/wiki/Mailing-Lists)
-is the best place to ask for help.
+[The zfs-discuss mailing list or IRC](http://list.zfsonlinux.org)
+are the best places to ask for help. Please do not file support requests
+on the GitHub issue tracker.
 
 ## How Can I Contribute?
 
 ### Reporting Bugs
-*Please* contact us via the [mailing
-list](https://github.com/zfsonlinux/zfs/wiki/Mailing-Lists) if you aren't
+*Please* contact us via the [zfs-discuss mailing
+list or IRC](http://list.zfsonlinux.org) if you aren't
 certain that you are experiencing a bug.
 
 If you run into an issue, please search our [issue
@@ -164,7 +165,7 @@ coding convention.
 ### Commit Message Formats
 #### New Changes
 Commit messages for new changes must meet the following guidelines:
-* In 50 characters or less, provide a summary of the change as the
+* In 72 characters or less, provide a summary of the change as the
 first line in the commit message.
 * A body which provides a description of the change. If necessary,
 please summarize important information such as why the proposed

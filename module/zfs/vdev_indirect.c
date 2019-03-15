@@ -213,8 +213,7 @@ int zfs_condense_indirect_commit_entry_delay_ms = 0;
  * copies to participate fairly in the reconstruction when all combinations
  * cannot be checked and prevents repeated use of one bad copy.
  */
-int zfs_reconstruct_indirect_combinations_max = 256;
-
+int zfs_reconstruct_indirect_combinations_max = 4096;
 
 /*
  * Enable to simulate damaged segments and validate reconstruction.  This
@@ -647,7 +646,7 @@ spa_condense_indirect_thread_check(void *arg, zthr_t *zthr)
 }
 
 /* ARGSUSED */
-static int
+static void
 spa_condense_indirect_thread(void *arg, zthr_t *zthr)
 {
 	spa_t *spa = arg;
@@ -685,7 +684,6 @@ spa_condense_indirect_thread(void *arg, zthr_t *zthr)
 
 	VERIFY0(space_map_open(&prev_obsolete_sm, spa->spa_meta_objset,
 	    scip->scip_prev_obsolete_sm_object, 0, vd->vdev_asize, 0));
-	space_map_update(prev_obsolete_sm);
 	counts = vdev_indirect_mapping_load_obsolete_counts(old_mapping);
 	if (prev_obsolete_sm != NULL) {
 		vdev_indirect_mapping_load_obsolete_spacemap(old_mapping,
@@ -744,13 +742,11 @@ spa_condense_indirect_thread(void *arg, zthr_t *zthr)
 	 * shutting down.
 	 */
 	if (zthr_iscancelled(zthr))
-		return (0);
+		return;
 
 	VERIFY0(dsl_sync_task(spa_name(spa), NULL,
 	    spa_condense_indirect_complete_sync, sci, 0,
 	    ZFS_SPACE_CHECK_EXTRA_RESERVED));
-
-	return (0);
 }
 
 /*
@@ -841,7 +837,6 @@ vdev_indirect_sync_obsolete(vdev_t *vd, dmu_tx_t *tx)
 		VERIFY0(space_map_open(&vd->vdev_obsolete_sm,
 		    spa->spa_meta_objset, obsolete_sm_object,
 		    0, vd->vdev_asize, 0));
-		space_map_update(vd->vdev_obsolete_sm);
 	}
 
 	ASSERT(vd->vdev_obsolete_sm != NULL);
@@ -850,7 +845,6 @@ vdev_indirect_sync_obsolete(vdev_t *vd, dmu_tx_t *tx)
 
 	space_map_write(vd->vdev_obsolete_sm,
 	    vd->vdev_obsolete_segments, SM_ALLOC, SM_NO_VDEVID, tx);
-	space_map_update(vd->vdev_obsolete_sm);
 	range_tree_vacate(vd->vdev_obsolete_segments, NULL, NULL);
 }
 
@@ -1857,6 +1851,7 @@ vdev_ops_t vdev_indirect_ops = {
 	NULL,
 	NULL,
 	vdev_indirect_remap,
+	NULL,
 	VDEV_TYPE_INDIRECT,	/* name of this vdev type */
 	B_FALSE			/* leaf vdev */
 };

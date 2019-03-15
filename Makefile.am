@@ -24,6 +24,13 @@ EXTRA_DIST += config/config.awk config/rpm.am config/deb.am config/tgz.am
 EXTRA_DIST += META AUTHORS COPYRIGHT LICENSE NEWS NOTICE README.md
 EXTRA_DIST += grub2/README
 
+# Include all the extra licensing information for modules
+EXTRA_DIST += module/icp/algs/skein/THIRDPARTYLICENSE module/icp/algs/skein/THIRDPARTYLICENSE.descrip
+EXTRA_DIST += module/icp/asm-x86_64/aes/THIRDPARTYLICENSE.gladman module/icp/asm-x86_64/aes/THIRDPARTYLICENSE.gladman.descrip
+EXTRA_DIST += module/icp/asm-x86_64/aes/THIRDPARTYLICENSE.openssl module/icp/asm-x86_64/aes/THIRDPARTYLICENSE.openssl.descrip
+EXTRA_DIST += module/spl/THIRDPARTYLICENSE.gplv2 module/spl/THIRDPARTYLICENSE.gplv2.descrip
+EXTRA_DIST += module/zfs/THIRDPARTYLICENSE.cityhash module/zfs/THIRDPARTYLICENSE.cityhash.descrip
+
 @CODE_COVERAGE_RULES@
 
 .PHONY: gitrev
@@ -69,7 +76,7 @@ install-data-hook:
 	ln -fs zfs.release spl.release
 endif
 
-codecheck: cstyle shellcheck flake8 mancheck testscheck
+codecheck: cstyle shellcheck flake8 mancheck testscheck vcscheck
 
 checkstyle: codecheck commitcheck
 
@@ -110,6 +117,12 @@ testscheck:
 		\( -name '*.cfg' -executable \) | \
 		xargs -r stat -c '%A %n' | \
 		awk '{c++; print} END {if(c>0) exit 1}'
+
+vcscheck:
+	@if git rev-parse --git-dir > /dev/null 2>&1; then \
+		git ls-files . --exclude-standard --others | \
+		awk '{c++; print} END {if(c>0) exit 1}' ; \
+	fi
 
 lint: cppcheck paxcheck
 

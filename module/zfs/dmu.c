@@ -25,6 +25,7 @@
  * Copyright (c) 2013, Joyent, Inc. All rights reserved.
  * Copyright (c) 2016, Nexenta Systems, Inc. All rights reserved.
  * Copyright (c) 2015 by Chunwei Chen. All rights reserved.
+ * Copyright (c) 2019 Datto Inc.
  */
 
 #include <sys/dmu.h>
@@ -61,12 +62,12 @@
 int zfs_nopwrite_enabled = 1;
 
 /*
- * Tunable to control percentage of dirtied blocks from frees in one TXG.
- * After this threshold is crossed, additional dirty blocks from frees
- * wait until the next TXG.
+ * Tunable to control percentage of dirtied L1 blocks from frees allowed into
+ * one TXG. After this threshold is crossed, additional dirty blocks from frees
+ * will wait until the next TXG.
  * A value of zero will disable this throttle.
  */
-unsigned long zfs_per_txg_dirty_frees_percent = 30;
+unsigned long zfs_per_txg_dirty_frees_percent = 5;
 
 /*
  * Enable/disable forcing txg sync when dirty in dmu_offset_next.
@@ -76,9 +77,9 @@ int zfs_dmu_offset_next_sync = 0;
 /*
  * This can be used for testing, to ensure that certain actions happen
  * while in the middle of a remap (which might otherwise complete too
- * quickly).
+ * quickly).  Used by ztest(8).
  */
-int zfs_object_remap_one_indirect_delay_ticks = 0;
+int zfs_object_remap_one_indirect_delay_ms = 0;
 
 const dmu_object_type_info_t dmu_ot[DMU_OT_NUMTYPES] = {
 	{DMU_BSWAP_UINT8,  TRUE,  FALSE, FALSE, "unallocated"		},
@@ -330,13 +331,13 @@ dmu_rm_spill(objset_t *os, uint64_t object, dmu_tx_t *tx)
 }
 
 /*
- * returns ENOENT, EIO, or 0.
+ * Lookup and hold the bonus buffer for the provided dnode.  If the dnode
+ * has not yet been allocated a new bonus dbuf a will be allocated.
+ * Returns ENOENT, EIO, or 0.
  */
-int
-dmu_bonus_hold_impl(objset_t *os, uint64_t object, void *tag, uint32_t flags,
-    dmu_buf_t **dbp)
+int dmu_bonus_hold_by_dnode(dnode_t *dn, void *tag, dmu_buf_t **dbp,
+    uint32_t flags)
 {
-	dnode_t *dn;
 	dmu_buf_impl_t *db;
 	int error;
 	uint32_t db_flags = DB_RF_MUST_SUCCEED;
@@ -345,10 +346,6 @@ dmu_bonus_hold_impl(objset_t *os, uint64_t object, void *tag, uint32_t flags,
 		db_flags |= DB_RF_NOPREFETCH;
 	if (flags & DMU_READ_NO_DECRYPT)
 		db_flags |= DB_RF_NO_DECRYPT;
-
-	error = dnode_hold(os, object, FTAG, &dn);
-	if (error)
-		return (error);
 
 	rw_enter(&dn->dn_struct_rwlock, RW_READER);
 	if (dn->dn_bonus == NULL) {
@@ -372,8 +369,6 @@ dmu_bonus_hold_impl(objset_t *os, uint64_t object, void *tag, uint32_t flags,
 	 */
 	rw_exit(&dn->dn_struct_rwlock);
 
-	dnode_rele(dn, FTAG);
-
 	error = dbuf_read(db, NULL, db_flags);
 	if (error) {
 		dnode_evict_bonus(dn);
@@ -387,9 +382,19 @@ dmu_bonus_hold_impl(objset_t *os, uint64_t object, void *tag, uint32_t flags,
 }
 
 int
-dmu_bonus_hold(objset_t *os, uint64_t obj, void *tag, dmu_buf_t **dbp)
+dmu_bonus_hold(objset_t *os, uint64_t object, void *tag, dmu_buf_t **dbp)
 {
-	return (dmu_bonus_hold_impl(os, obj, tag, DMU_READ_NO_PREFETCH, dbp));
+	dnode_t *dn;
+	int error;
+
+	error = dnode_hold(os, object, FTAG, &dn);
+	if (error)
+		return (error);
+
+	error = dmu_bonus_hold_by_dnode(dn, tag, dbp, DMU_READ_NO_PREFETCH);
+	dnode_rele(dn, FTAG);
+
+	return (error);
 }
 
 /*
@@ -705,11 +710,13 @@ dmu_prefetch(objset_t *os, uint64_t object, int64_t level, uint64_t offset,
  *
  * On input, *start should be the first offset that does not need to be
  * freed (e.g. "offset + length").  On return, *start will be the first
- * offset that should be freed.
+ * offset that should be freed and l1blks is set to the number of level 1
+ * indirect blocks found within the chunk.
  */
 static int
-get_next_chunk(dnode_t *dn, uint64_t *start, uint64_t minimum)
+get_next_chunk(dnode_t *dn, uint64_t *start, uint64_t minimum, uint64_t *l1blks)
 {
+	uint64_t blks;
 	uint64_t maxblks = DMU_MAX_ACCESS >> (dn->dn_indblkshift + 1);
 	/* bytes of data covered by a level-1 indirect block */
 	uint64_t iblkrange =
@@ -719,11 +726,16 @@ get_next_chunk(dnode_t *dn, uint64_t *start, uint64_t minimum)
 
 	if (*start - minimum <= iblkrange * maxblks) {
 		*start = minimum;
+		/*
+		 * Assume full L1 blocks and 128k recordsize to approximate the
+		 * expected number of L1 blocks in this chunk
+		 */
+		*l1blks = minimum / (1024 * 128 * 1024);
 		return (0);
 	}
 	ASSERT(ISP2(iblkrange));
 
-	for (uint64_t blks = 0; *start > minimum && blks < maxblks; blks++) {
+	for (blks = 0; *start > minimum && blks < maxblks; blks++) {
 		int err;
 
 		/*
@@ -741,6 +753,7 @@ get_next_chunk(dnode_t *dn, uint64_t *start, uint64_t minimum)
 			*start = minimum;
 			break;
 		} else if (err != 0) {
+			*l1blks = blks;
 			return (err);
 		}
 
@@ -749,6 +762,7 @@ get_next_chunk(dnode_t *dn, uint64_t *start, uint64_t minimum)
 	}
 	if (*start < minimum)
 		*start = minimum;
+	*l1blks = blks;
 	return (0);
 }
 
@@ -788,7 +802,7 @@ dmu_free_long_range_impl(objset_t *os, dnode_t *dn, uint64_t offset,
 		dirty_frees_threshold =
 		    zfs_per_txg_dirty_frees_percent * zfs_dirty_data_max / 100;
 	else
-		dirty_frees_threshold = zfs_dirty_data_max / 4;
+		dirty_frees_threshold = zfs_dirty_data_max / 20;
 
 	if (length == DMU_OBJECT_END || offset + length > object_size)
 		length = object_size - offset;
@@ -796,6 +810,7 @@ dmu_free_long_range_impl(objset_t *os, dnode_t *dn, uint64_t offset,
 	while (length != 0) {
 		uint64_t chunk_end, chunk_begin, chunk_len;
 		uint64_t long_free_dirty_all_txgs = 0;
+		uint64_t l1blks;
 		dmu_tx_t *tx;
 
 		if (dmu_objset_zfs_unmounting(dn->dn_objset))
@@ -804,7 +819,7 @@ dmu_free_long_range_impl(objset_t *os, dnode_t *dn, uint64_t offset,
 		chunk_end = chunk_begin = offset + length;
 
 		/* move chunk_begin backwards to the beginning of this chunk */
-		err = get_next_chunk(dn, &chunk_begin, offset);
+		err = get_next_chunk(dn, &chunk_begin, offset, &l1blks);
 		if (err)
 			return (err);
 		ASSERT3U(chunk_begin, >=, offset);
@@ -845,9 +860,19 @@ dmu_free_long_range_impl(objset_t *os, dnode_t *dn, uint64_t offset,
 			return (err);
 		}
 
+		/*
+		 * In order to prevent unnecessary write throttling, for each
+		 * TXG, we track the cumulative size of L1 blocks being dirtied
+		 * in dnode_free_range() below. We compare this number to a
+		 * tunable threshold, past which we prevent new L1 dirty freeing
+		 * blocks from being added into the open TXG. See
+		 * dmu_free_long_range_impl() for details. The threshold
+		 * prevents write throttle activation due to dirty freeing L1
+		 * blocks taking up a large percentage of zfs_dirty_data_max.
+		 */
 		mutex_enter(&dp->dp_lock);
 		dp->dp_long_free_dirty_pertxg[dmu_tx_get_txg(tx) & TXG_MASK] +=
-		    chunk_len;
+		    l1blks << dn->dn_indblkshift;
 		mutex_exit(&dp->dp_lock);
 		DTRACE_PROBE3(free__long__range,
 		    uint64_t, long_free_dirty_all_txgs, uint64_t, chunk_len,
@@ -1075,6 +1100,7 @@ dmu_object_remap_one_indirect(objset_t *os, dnode_t *dn,
     uint64_t last_removal_txg, uint64_t offset)
 {
 	uint64_t l1blkid = dbuf_whichblock(dn, 1, offset);
+	dnode_t *dn_tx;
 	int err = 0;
 
 	rw_enter(&dn->dn_struct_rwlock, RW_READER);
@@ -1093,7 +1119,9 @@ dmu_object_remap_one_indirect(objset_t *os, dnode_t *dn,
 
 	/*
 	 * If this L1 was already written after the last removal, then we've
-	 * already tried to remap it.
+	 * already tried to remap it.  An additional hold is taken after the
+	 * dmu_tx_assign() to handle the case where the dnode is freed while
+	 * waiting for the next open txg.
 	 */
 	if (birth <= last_removal_txg &&
 	    dbuf_read(dbuf, NULL, DB_RF_MUST_SUCCEED) == 0 &&
@@ -1102,7 +1130,11 @@ dmu_object_remap_one_indirect(objset_t *os, dnode_t *dn,
 		dmu_tx_hold_remap_l1indirect(tx, dn->dn_object);
 		err = dmu_tx_assign(tx, TXG_WAIT);
 		if (err == 0) {
-			(void) dbuf_dirty(dbuf, tx);
+			err = dnode_hold(os, dn->dn_object, FTAG, &dn_tx);
+			if (err == 0) {
+				(void) dbuf_dirty(dbuf, tx);
+				dnode_rele(dn_tx, FTAG);
+			}
 			dmu_tx_commit(tx);
 		} else {
 			dmu_tx_abort(tx);
@@ -1111,7 +1143,7 @@ dmu_object_remap_one_indirect(objset_t *os, dnode_t *dn,
 
 	dbuf_rele(dbuf, FTAG);
 
-	delay(zfs_object_remap_one_indirect_delay_ticks);
+	delay(MSEC_TO_TICK(zfs_object_remap_one_indirect_delay_ms));
 
 	return (err);
 }
@@ -1133,7 +1165,7 @@ dmu_object_remap_indirects(objset_t *os, uint64_t object,
 {
 	uint64_t offset, l1span;
 	int err;
-	dnode_t *dn;
+	dnode_t *dn, *dn_tx;
 
 	err = dnode_hold(os, object, FTAG, &dn);
 	if (err != 0) {
@@ -1148,13 +1180,20 @@ dmu_object_remap_indirects(objset_t *os, uint64_t object,
 		/*
 		 * If the dnode has no indirect blocks, we cannot dirty them.
 		 * We still want to remap the blkptr(s) in the dnode if
-		 * appropriate, so mark it as dirty.
+		 * appropriate, so mark it as dirty.  An additional hold is
+		 * taken after the dmu_tx_assign() to handle the case where
+		 * the dnode is freed while waiting for the next open txg.
 		 */
 		if (err == 0 && dnode_needs_remap(dn)) {
 			dmu_tx_t *tx = dmu_tx_create(os);
-			dmu_tx_hold_bonus(tx, dn->dn_object);
-			if ((err = dmu_tx_assign(tx, TXG_WAIT)) == 0) {
-				dnode_setdirty(dn, tx);
+			dmu_tx_hold_bonus(tx, object);
+			err = dmu_tx_assign(tx, TXG_WAIT);
+			if (err == 0) {
+				err = dnode_hold(os, object, FTAG, &dn_tx);
+				if (err == 0) {
+					dnode_setdirty(dn_tx, tx);
+					dnode_rele(dn_tx, FTAG);
+				}
 				dmu_tx_commit(tx);
 			} else {
 				dmu_tx_abort(tx);
@@ -1670,7 +1709,7 @@ dmu_copy_from_buf(objset_t *os, uint64_t object, uint64_t offset,
  * If this is not possible copy the contents of passed arc buf via
  * dmu_write().
  */
-void
+int
 dmu_assign_arcbuf_by_dnode(dnode_t *dn, uint64_t offset, arc_buf_t *buf,
     dmu_tx_t *tx)
 {
@@ -1682,7 +1721,9 @@ dmu_assign_arcbuf_by_dnode(dnode_t *dn, uint64_t offset, arc_buf_t *buf,
 
 	rw_enter(&dn->dn_struct_rwlock, RW_READER);
 	blkid = dbuf_whichblock(dn, 0, offset);
-	VERIFY((db = dbuf_hold(dn, blkid, FTAG)) != NULL);
+	db = dbuf_hold(dn, blkid, FTAG);
+	if (db == NULL)
+		return (SET_ERROR(EIO));
 	rw_exit(&dn->dn_struct_rwlock);
 
 	/*
@@ -1702,17 +1743,22 @@ dmu_assign_arcbuf_by_dnode(dnode_t *dn, uint64_t offset, arc_buf_t *buf,
 		dmu_return_arcbuf(buf);
 		XUIOSTAT_BUMP(xuiostat_wbuf_copied);
 	}
+
+	return (0);
 }
 
-void
+int
 dmu_assign_arcbuf_by_dbuf(dmu_buf_t *handle, uint64_t offset, arc_buf_t *buf,
     dmu_tx_t *tx)
 {
+	int err;
 	dmu_buf_impl_t *dbuf = (dmu_buf_impl_t *)handle;
 
 	DB_DNODE_ENTER(dbuf);
-	dmu_assign_arcbuf_by_dnode(DB_DNODE(dbuf), offset, buf, tx);
+	err = dmu_assign_arcbuf_by_dnode(DB_DNODE(dbuf), offset, buf, tx);
 	DB_DNODE_EXIT(dbuf);
+
+	return (err);
 }
 
 typedef struct {
@@ -2109,7 +2155,7 @@ dmu_object_set_maxblkid(objset_t *os, uint64_t object, uint64_t maxblkid,
 	if (err)
 		return (err);
 	rw_enter(&dn->dn_struct_rwlock, RW_WRITER);
-	dnode_new_blkid(dn, maxblkid, tx, B_FALSE);
+	dnode_new_blkid(dn, maxblkid, tx, B_FALSE, B_TRUE);
 	rw_exit(&dn->dn_struct_rwlock);
 	dnode_rele(dn, FTAG);
 	return (0);
@@ -2533,6 +2579,7 @@ dmu_fini(void)
 
 #if defined(_KERNEL)
 EXPORT_SYMBOL(dmu_bonus_hold);
+EXPORT_SYMBOL(dmu_bonus_hold_by_dnode);
 EXPORT_SYMBOL(dmu_buf_hold_array_by_bonus);
 EXPORT_SYMBOL(dmu_buf_rele_array);
 EXPORT_SYMBOL(dmu_prefetch);

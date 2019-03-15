@@ -247,6 +247,10 @@ constrain_path() {
 	ln -fs "$STF_PATH/gunzip" "$STF_PATH/uncompress"
 	ln -fs "$STF_PATH/exportfs" "$STF_PATH/share"
 	ln -fs "$STF_PATH/exportfs" "$STF_PATH/unshare"
+
+	if [ -L "$STF_PATH/arc_summary3" ]; then
+		ln -fs "$STF_PATH/arc_summary3" "$STF_PATH/arc_summary"
+	fi
 }
 
 #
@@ -269,6 +273,7 @@ OPTIONS:
 	-f          Use files only, disables block device tests
 	-S          Enable stack tracer (negative performance impact)
 	-c          Only create and populate constrained path
+	-n NFSFILE  Use the nfsfile to determine the NFS configuration
 	-I NUM      Number of iterations
 	-d DIR      Use DIR for files and loopback devices
 	-s SIZE     Use vdevs of SIZE (default: 4G)
@@ -291,7 +296,7 @@ $0 -x
 EOF
 }
 
-while getopts 'hvqxkfScd:s:r:?t:T:u:I:' OPTION; do
+while getopts 'hvqxkfScn:d:s:r:?t:T:u:I:' OPTION; do
 	case $OPTION in
 	h)
 		usage
@@ -319,6 +324,12 @@ while getopts 'hvqxkfScd:s:r:?t:T:u:I:' OPTION; do
 	c)
 		constrain_path
 		exit
+		;;
+	n)
+		nfsfile=$OPTARG
+		[[ -f $nfsfile ]] || fail "Cannot read file: $nfsfile"
+		export NFS=1
+		. "$nfsfile"
 		;;
 	d)
 		FILEDIR="$OPTARG"

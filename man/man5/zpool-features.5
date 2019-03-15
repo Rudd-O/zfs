@@ -475,8 +475,7 @@ DEPENDENCIES	device_removal
 This feature is an enhancement of device_removal, which will over time
 reduce the memory used to track removed devices.  When indirect blocks
 are freed or remapped, we note that their part of the indirect mapping
-is "obsolete", i.e. no longer needed.  See also the \fBzfs remap\fR
-subcommand in \fBzfs\fR(1M).
+is "obsolete", i.e. no longer needed.
 
 This feature becomes \fBactive\fR when the "zpool remove" command is
 used on a top-level vdev, and will never return to being \fBenabled\fR.
@@ -700,6 +699,27 @@ The upgrade can also be started manually on filesystems by running
 `zfs set version=current <pool/fs>`. The upgrade process runs in the background
 and may take a while to complete for filesystems containing a large number of
 files.
+
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fBbookmark_v2\fR\fR
+.ad
+.RS 4n
+.TS
+l l .
+GUID	com.datto:bookmark_v2
+READ\-ONLY COMPATIBLE	no
+DEPENDENCIES	extensible_dataset
+.TE
+
+This feature enables the creation and management of larger bookmarks which are
+needed for other features in ZFS.
+
+This feature becomes \fBactive\fR when a v2 bookmark is created and will be
+returned to the \fBenabled\fR state when all v2 bookmarks are destroyed.
 
 .RE
 

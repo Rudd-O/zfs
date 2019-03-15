@@ -407,6 +407,10 @@ uint64_t dmu_object_alloc_ibs(objset_t *os, dmu_object_type_t ot, int blocksize,
 uint64_t dmu_object_alloc_dnsize(objset_t *os, dmu_object_type_t ot,
     int blocksize, dmu_object_type_t bonus_type, int bonus_len,
     int dnodesize, dmu_tx_t *tx);
+uint64_t dmu_object_alloc_hold(objset_t *os, dmu_object_type_t ot,
+    int blocksize, int indirect_blockshift, dmu_object_type_t bonustype,
+    int bonuslen, int dnodesize, dnode_t **allocated_dnode, void *tag,
+    dmu_tx_t *tx);
 int dmu_object_claim(objset_t *os, uint64_t object, dmu_object_type_t ot,
     int blocksize, dmu_object_type_t bonus_type, int bonus_len, dmu_tx_t *tx);
 int dmu_object_claim_dnsize(objset_t *os, uint64_t object, dmu_object_type_t ot,
@@ -473,7 +477,8 @@ int dmu_object_set_blocksize(objset_t *os, uint64_t object, uint64_t size,
 
 /*
  * Manually set the maxblkid on a dnode. This will adjust nlevels accordingly
- * to accommodate the change.
+ * to accommodate the change. When calling this function, the caller must
+ * ensure that the object's nlevels can sufficiently support the new maxblkid.
  */
 int dmu_object_set_maxblkid(objset_t *os, uint64_t object, uint64_t maxblkid,
     dmu_tx_t *tx);
@@ -521,9 +526,9 @@ void dmu_write_policy(objset_t *os, dnode_t *dn, int level, int wp,
  *
  * Returns ENOENT, EIO, or 0.
  */
-int dmu_bonus_hold_impl(objset_t *os, uint64_t object, void *tag,
-    uint32_t flags, dmu_buf_t **dbp);
-int dmu_bonus_hold(objset_t *os, uint64_t object, void *tag, dmu_buf_t **);
+int dmu_bonus_hold(objset_t *os, uint64_t object, void *tag, dmu_buf_t **dbp);
+int dmu_bonus_hold_by_dnode(dnode_t *dn, void *tag, dmu_buf_t **dbp,
+    uint32_t flags);
 int dmu_bonus_max(void);
 int dmu_set_bonus(dmu_buf_t *, int, dmu_tx_t *);
 int dmu_set_bonustype(dmu_buf_t *, dmu_object_type_t, dmu_tx_t *);
@@ -736,6 +741,7 @@ struct blkptr *dmu_buf_get_blkptr(dmu_buf_t *db);
  * (ie. you've called dmu_tx_hold_object(tx, db->db_object)).
  */
 void dmu_buf_will_dirty(dmu_buf_t *db, dmu_tx_t *tx);
+boolean_t dmu_buf_is_dirty(dmu_buf_t *db, dmu_tx_t *tx);
 void dmu_buf_set_crypt_params(dmu_buf_t *db_fake, boolean_t byteorder,
     const uint8_t *salt, const uint8_t *iv, const uint8_t *mac, dmu_tx_t *tx);
 
@@ -851,9 +857,9 @@ int dmu_write_uio_dnode(dnode_t *dn, struct uio *uio, uint64_t size,
 #endif
 struct arc_buf *dmu_request_arcbuf(dmu_buf_t *handle, int size);
 void dmu_return_arcbuf(struct arc_buf *buf);
-void dmu_assign_arcbuf_by_dnode(dnode_t *dn, uint64_t offset,
+int dmu_assign_arcbuf_by_dnode(dnode_t *dn, uint64_t offset,
     struct arc_buf *buf, dmu_tx_t *tx);
-void dmu_assign_arcbuf_by_dbuf(dmu_buf_t *handle, uint64_t offset,
+int dmu_assign_arcbuf_by_dbuf(dmu_buf_t *handle, uint64_t offset,
     struct arc_buf *buf, dmu_tx_t *tx);
 #define	dmu_assign_arcbuf	dmu_assign_arcbuf_by_dbuf
 void dmu_copy_from_buf(objset_t *os, uint64_t object, uint64_t offset,

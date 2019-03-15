@@ -97,6 +97,7 @@ static int zpool_do_detach(int, char **);
 static int zpool_do_replace(int, char **);
 static int zpool_do_split(int, char **);
 
+static int zpool_do_initialize(int, char **);
 static int zpool_do_scrub(int, char **);
 static int zpool_do_resilver(int, char **);
 
@@ -150,6 +151,7 @@ typedef enum {
 	HELP_ONLINE,
 	HELP_REPLACE,
 	HELP_REMOVE,
+	HELP_INITIALIZE,
 	HELP_SCRUB,
 	HELP_RESILVER,
 	HELP_STATUS,
@@ -278,6 +280,7 @@ static zpool_command_t command_table[] = {
 	{ "replace",	zpool_do_replace,	HELP_REPLACE		},
 	{ "split",	zpool_do_split,		HELP_SPLIT		},
 	{ NULL },
+	{ "initialize",	zpool_do_initialize,	HELP_INITIALIZE		},
 	{ "scrub",	zpool_do_scrub,		HELP_SCRUB		},
 	{ "resilver",	zpool_do_resilver,	HELP_RESILVER		},
 	{ NULL },
@@ -342,7 +345,7 @@ get_usage(zpool_help_t idx)
 		return (gettext("\tiostat [[[-c [script1,script2,...]"
 		    "[-lq]]|[-rw]] [-T d | u] [-ghHLpPvy]\n"
 		    "\t    [[pool ...]|[pool vdev ...]|[vdev ...]]"
-		    " [interval [count]]\n"));
+		    " [[-n] interval [count]]\n"));
 	case HELP_LABELCLEAR:
 		return (gettext("\tlabelclear [-f] <vdev>\n"));
 	case HELP_LIST:
@@ -360,13 +363,16 @@ get_usage(zpool_help_t idx)
 		return (gettext("\tremove [-nps] <pool> <device> ...\n"));
 	case HELP_REOPEN:
 		return (gettext("\treopen [-n] <pool>\n"));
+	case HELP_INITIALIZE:
+		return (gettext("\tinitialize [-c | -s] <pool> "
+		    "[<device> ...]\n"));
 	case HELP_SCRUB:
 		return (gettext("\tscrub [-s | -p] <pool> ...\n"));
 	case HELP_RESILVER:
 		return (gettext("\tresilver <pool> ...\n"));
 	case HELP_STATUS:
 		return (gettext("\tstatus [-c [script1,script2,...]] "
-		    "[-gLpPsvxD]  [-T d|u] [pool] ... \n"
+		    "[-igLpPsvxD]  [-T d|u] [pool] ... \n"
 		    "\t    [interval [count]]\n"));
 	case HELP_UPGRADE:
 		return (gettext("\tupgrade\n"
@@ -393,6 +399,27 @@ get_usage(zpool_help_t idx)
 	/* NOTREACHED */
 }
 
+static void
+zpool_collect_leaves(zpool_handle_t *zhp, nvlist_t *nvroot, nvlist_t *res)
+{
+	uint_t children = 0;
+	nvlist_t **child;
+	uint_t i;
+
+	(void) nvlist_lookup_nvlist_array(nvroot, ZPOOL_CONFIG_CHILDREN,
+	    &child, &children);
+
+	if (children == 0) {
+		char *path = zpool_vdev_name(g_zfs, zhp, nvroot, B_FALSE);
+		fnvlist_add_boolean(res, path);
+		free(path);
+		return;
+	}
+
+	for (i = 0; i < children; i++) {
+		zpool_collect_leaves(zhp, child[i], res);
+	}
+}
 
 /*
  * Callback routine that will print out a pool property value.
@@ -477,6 +504,99 @@ usage(boolean_t requested)
 	}
 
 	exit(requested ? 0 : 2);
+}
+
+/*
+ * zpool initialize [-c | -s] <pool> [<vdev> ...]
+ * Initialize all unused blocks in the specified vdevs, or all vdevs in the pool
+ * if none specified.
+ *
+ *	-c	Cancel. Ends active initializing.
+ *	-s	Suspend. Initializing can then be restarted with no flags.
+ */
+int
+zpool_do_initialize(int argc, char **argv)
+{
+	int c;
+	char *poolname;
+	zpool_handle_t *zhp;
+	nvlist_t *vdevs;
+	int err = 0;
+
+	struct option long_options[] = {
+		{"cancel",	no_argument,		NULL, 'c'},
+		{"suspend",	no_argument,		NULL, 's'},
+		{0, 0, 0, 0}
+	};
+
+	pool_initialize_func_t cmd_type = POOL_INITIALIZE_DO;
+	while ((c = getopt_long(argc, argv, "cs", long_options, NULL)) != -1) {
+		switch (c) {
+		case 'c':
+			if (cmd_type != POOL_INITIALIZE_DO &&
+			    cmd_type != POOL_INITIALIZE_CANCEL) {
+				(void) fprintf(stderr, gettext("-c cannot be "
+				    "combined with other options\n"));
+				usage(B_FALSE);
+			}
+			cmd_type = POOL_INITIALIZE_CANCEL;
+			break;
+		case 's':
+			if (cmd_type != POOL_INITIALIZE_DO &&
+			    cmd_type != POOL_INITIALIZE_SUSPEND) {
+				(void) fprintf(stderr, gettext("-s cannot be "
+				    "combined with other options\n"));
+				usage(B_FALSE);
+			}
+			cmd_type = POOL_INITIALIZE_SUSPEND;
+			break;
+		case '?':
+			if (optopt != 0) {
+				(void) fprintf(stderr,
+				    gettext("invalid option '%c'\n"), optopt);
+			} else {
+				(void) fprintf(stderr,
+				    gettext("invalid option '%s'\n"),
+				    argv[optind - 1]);
+			}
+			usage(B_FALSE);
+		}
+	}
+
+	argc -= optind;
+	argv += optind;
+
+	if (argc < 1) {
+		(void) fprintf(stderr, gettext("missing pool name argument\n"));
+		usage(B_FALSE);
+		return (-1);
+	}
+
+	poolname = argv[0];
+	zhp = zpool_open(g_zfs, poolname);
+	if (zhp == NULL)
+		return (-1);
+
+	vdevs = fnvlist_alloc();
+	if (argc == 1) {
+		/* no individual leaf vdevs specified, so add them all */
+		nvlist_t *config = zpool_get_config(zhp, NULL);
+		nvlist_t *nvroot = fnvlist_lookup_nvlist(config,
+		    ZPOOL_CONFIG_VDEV_TREE);
+		zpool_collect_leaves(zhp, nvroot, vdevs);
+	} else {
+		int i;
+		for (i = 1; i < argc; i++) {
+			fnvlist_add_boolean(vdevs, argv[i]);
+		}
+	}
+
+	err = zpool_initialize(zhp, cmd_type, vdevs);
+
+	fnvlist_free(vdevs);
+	zpool_close(zhp);
+
+	return (err);
 }
 
 /*
@@ -1675,6 +1795,7 @@ typedef struct status_cbdata {
 	boolean_t	cb_dedup_stats;
 	boolean_t	cb_print_status;
 	boolean_t	cb_print_slow_ios;
+	boolean_t	cb_print_vdev_init;
 	vdev_cmd_data_list_t	*vcdl;
 } status_cbdata_t;
 
@@ -1920,6 +2041,54 @@ print_status_config(zpool_handle_t *zhp, status_cbdata_t *cb, const char *name,
 		if (nvlist_lookup_string(nv, ZPOOL_CONFIG_PATH, &path) == 0) {
 			printf("  ");
 			zpool_print_cmd(cb->vcdl, zpool_get_name(zhp), path);
+		}
+	}
+
+	/* Optionally display vdev initialization status for leaves */
+	if (cb->cb_print_vdev_init && children == 0) {
+		if ((vs->vs_initialize_state == VDEV_INITIALIZE_ACTIVE ||
+		    vs->vs_initialize_state == VDEV_INITIALIZE_SUSPENDED ||
+		    vs->vs_initialize_state == VDEV_INITIALIZE_COMPLETE) &&
+		    !vs->vs_scan_removing) {
+			char zbuf[1024];
+			char tbuf[256];
+			struct tm zaction_ts;
+
+			time_t t = vs->vs_initialize_action_time;
+			int initialize_pct = 100;
+			if (vs->vs_initialize_state !=
+			    VDEV_INITIALIZE_COMPLETE) {
+				initialize_pct = (vs->vs_initialize_bytes_done *
+				    100 / (vs->vs_initialize_bytes_est + 1));
+			}
+
+			(void) localtime_r(&t, &zaction_ts);
+			(void) strftime(tbuf, sizeof (tbuf), "%c", &zaction_ts);
+
+			switch (vs->vs_initialize_state) {
+			case VDEV_INITIALIZE_SUSPENDED:
+				(void) snprintf(zbuf, sizeof (zbuf),
+				    ", suspended, started at %s", tbuf);
+				break;
+			case VDEV_INITIALIZE_ACTIVE:
+				(void) snprintf(zbuf, sizeof (zbuf),
+				    ", started at %s", tbuf);
+				break;
+			case VDEV_INITIALIZE_COMPLETE:
+				(void) snprintf(zbuf, sizeof (zbuf),
+				    ", completed at %s", tbuf);
+				break;
+			}
+
+			(void) printf(gettext("  (%d%% initialized%s)"),
+			    initialize_pct, zbuf);
+		} else {
+			(void) printf(gettext("  (uninitialized)"));
+		}
+	} else {
+		if (vs->vs_initialize_state == VDEV_INITIALIZE_ACTIVE &&
+		    children == 0) {
+			(void) printf(gettext("  (initializing)"));
 		}
 	}
 
@@ -2309,6 +2478,19 @@ show_import(nvlist_t *config)
 				    "old ones.\n"));
 				break;
 
+			case ZPOOL_ERRATA_ZOL_8308_ENCRYPTION:
+				(void) printf(gettext(" action: Any existing "
+				    "encrypted datasets contain an on-disk "
+				    "incompatibility\n\twhich may cause "
+				    "on-disk corruption with 'zfs recv' and "
+				    "which needs\n\tto be corrected. Enable "
+				    "the bookmark_v2 feature, backup "
+				    "these datasets\n\tto new encrypted "
+				    "datasets, and destroy the old ones. "
+				    "If this pool does\n\tnot contain any "
+				    "encrypted datasets, simply enable the "
+				    "bookmark_v2\n\tfeature.\n"));
+				break;
 			default:
 				/*
 				 * All errata must contain an action message.
@@ -3202,8 +3384,8 @@ static const name_and_columns_t iostat_top_labels[][IOSTAT_MAX_LABELS] =
 	[IOS_QUEUES] = {{"syncq_read", 2}, {"syncq_write", 2},
 	    {"asyncq_read", 2}, {"asyncq_write", 2}, {"scrubq_read", 2},
 	    {NULL}},
-	[IOS_L_HISTO] = {{"total_wait", 2}, {"disk_wait", 2},
-	    {"sync_queue", 2}, {"async_queue", 2}, {NULL}},
+	[IOS_L_HISTO] = {{"total_wait", 2}, {"disk_wait", 2}, {"syncq_wait", 2},
+	    {"asyncq_wait", 2}, {NULL}},
 	[IOS_RQ_HISTO] = {{"sync_read", 2}, {"sync_write", 2},
 	    {"async_read", 2}, {"async_write", 2}, {"scrub", 2}, {NULL}},
 
@@ -4748,6 +4930,7 @@ get_namewidth_iostat(zpool_handle_t *zhp, void *data)
  *	-w	Display latency histograms
  *	-r	Display request size histogram
  *	-T	Display a timestamp in date(1) or Unix format
+ *	-n	Only print headers once
  *
  * This command can be tricky because we want to be able to deal with pool
  * creation/destruction as well as vdev configuration changes.  The bulk of this
@@ -4763,6 +4946,8 @@ zpool_do_iostat(int argc, char **argv)
 	int npools;
 	float interval = 0;
 	unsigned long count = 0;
+	struct winsize win;
+	int winheight = 24;
 	zpool_list_t *list;
 	boolean_t verbose = B_FALSE;
 	boolean_t latency = B_FALSE, l_histo = B_FALSE, rq_histo = B_FALSE;
@@ -4771,6 +4956,7 @@ zpool_do_iostat(int argc, char **argv)
 	boolean_t guid = B_FALSE;
 	boolean_t follow_links = B_FALSE;
 	boolean_t full_name = B_FALSE;
+	boolean_t headers_once = B_FALSE;
 	iostat_cbdata_t cb = { 0 };
 	char *cmd = NULL;
 
@@ -4781,7 +4967,7 @@ zpool_do_iostat(int argc, char **argv)
 	uint64_t unsupported_flags;
 
 	/* check options */
-	while ((c = getopt(argc, argv, "c:gLPT:vyhplqrwH")) != -1) {
+	while ((c = getopt(argc, argv, "c:gLPT:vyhplqrwnH")) != -1) {
 		switch (c) {
 		case 'c':
 			if (cmd != NULL) {
@@ -4843,6 +5029,9 @@ zpool_do_iostat(int argc, char **argv)
 			break;
 		case 'y':
 			omit_since_boot = B_TRUE;
+			break;
+		case 'n':
+			headers_once = B_TRUE;
 			break;
 		case 'h':
 			usage(B_FALSE);
@@ -5046,6 +5235,26 @@ zpool_do_iostat(int argc, char **argv)
 			}
 
 			/*
+			 * Are we connected to TTY? If not, headers_once
+			 * should be true, to avoid breaking scripts.
+			 */
+			if (isatty(fileno(stdout)) == 0)
+				headers_once = B_TRUE;
+
+			/*
+			 * Check terminal size so we can print headers
+			 * even when terminal window has its height
+			 * changed.
+			 */
+			if (headers_once == B_FALSE) {
+				if (ioctl(1, TIOCGWINSZ, &win) != -1 &&
+				    win.ws_row > 0)
+					winheight = win.ws_row;
+				else
+					headers_once = B_TRUE;
+			}
+
+			/*
 			 * If it's the first time and we're not skipping it,
 			 * or either skip or verbose mode, print the header.
 			 *
@@ -5053,7 +5262,9 @@ zpool_do_iostat(int argc, char **argv)
 			 * every vdev, so skip this for histograms.
 			 */
 			if (((++cb.cb_iteration == 1 && !skip) ||
-			    (skip != verbose)) &&
+			    (skip != verbose) ||
+			    (!headers_once &&
+			    (cb.cb_iteration % winheight) == 0)) &&
 			    (!(cb.cb_flags & IOS_ANYHISTO_M)) &&
 			    !cb.cb_scripted)
 				print_iostat_header(&cb);
@@ -5062,7 +5273,6 @@ zpool_do_iostat(int argc, char **argv)
 				(void) fsleep(interval);
 				continue;
 			}
-
 
 			pool_list_iter(list, B_FALSE, print_iostat, &cb);
 
@@ -7204,6 +7414,19 @@ status_callback(zpool_handle_t *zhp, void *data)
 			    "mount existing encrypted datasets readonly.\n"));
 			break;
 
+		case ZPOOL_ERRATA_ZOL_8308_ENCRYPTION:
+			(void) printf(gettext("\tExisting encrypted datasets "
+			    "contain an on-disk incompatibility\n\twhich "
+			    "needs to be corrected.\n"));
+			(void) printf(gettext("action: To correct the issue "
+			    "enable the bookmark_v2 feature, backup\n\tany "
+			    "existing encrypted datasets to new encrypted "
+			    "datasets,\n\tand destroy the old ones. If this "
+			    "pool does not contain any\n\tencrypted "
+			    "datasets, simply enable the bookmark_v2 "
+			    "feature.\n"));
+			break;
+
 		default:
 			/*
 			 * All errata which allow the pool to be imported
@@ -7323,10 +7546,11 @@ status_callback(zpool_handle_t *zhp, void *data)
 }
 
 /*
- * zpool status [-c [script1,script2,...]] [-gLpPsvx] [-T d|u] [pool] ...
+ * zpool status [-c [script1,script2,...]] [-igLpPsvx] [-T d|u] [pool] ...
  *              [interval [count]]
  *
  *	-c CMD	For each vdev, run command CMD
+ *	-i	Display vdev initialization status.
  *	-g	Display guid for individual vdev name.
  *	-L	Follow links when resolving vdev path name.
  *	-p	Display values in parsable (exact) format.
@@ -7350,7 +7574,7 @@ zpool_do_status(int argc, char **argv)
 	char *cmd = NULL;
 
 	/* check options */
-	while ((c = getopt(argc, argv, "c:gLpPsvxDT:")) != -1) {
+	while ((c = getopt(argc, argv, "c:igLpPsvxDT:")) != -1) {
 		switch (c) {
 		case 'c':
 			if (cmd != NULL) {
@@ -7375,6 +7599,9 @@ zpool_do_status(int argc, char **argv)
 				exit(1);
 			}
 			cmd = optarg;
+			break;
+		case 'i':
+			cb.cb_print_vdev_init = B_TRUE;
 			break;
 		case 'g':
 			cb.cb_name_flags |= VDEV_NAME_GUID;

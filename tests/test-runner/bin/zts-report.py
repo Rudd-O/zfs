@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 
 #
 # This file and its contents are supplied under the terms of the
@@ -14,6 +14,8 @@
 #
 # Copyright (c) 2017 by Delphix. All rights reserved.
 # Copyright (c) 2018 by Lawrence Livermore National Security, LLC.
+#
+# This script must remain compatible with Python 2.6+ and Python 3.4+.
 #
 
 import os
@@ -310,7 +312,7 @@ def process_results(pathname):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) is not 2:
+    if len(sys.argv) != 2:
         usage('usage: %s <pathname>' % sys.argv[0])
     results = process_results(sys.argv[1])
 
