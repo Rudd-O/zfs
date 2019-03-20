@@ -11,6 +11,7 @@ ConditionPathExists=!@sysconfdir@/zfs/zpool.cache
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+ExecStartPre=@sbindir@/modprobe zfs zfs_autoimport_disable=1
 ExecStart=/bin/bash -c 'command -v getargbool >/dev/null || test -f /lib/dracut-lib.sh && . /lib/dracut-lib.sh || getargbool() { return 1 ; } ; if getargbool 0 zfs_force -y zfs.force -y zfsforce ; then ZPOOL_IMPORT_OPTS="${ZPOOL_IMPORT_OPTS} -f" ; fi ; @sbindir@/zpool import $ZPOOL_IMPORT_OPTS -aN -o cachefile=none'
 ExecStartPost=/bin/bash -c "/bin/systemctl set-environment BOOTFS=$(@sbindir@/zpool list -H -o bootfs | /bin/awk '$1 != \"-\" {print; exit}')"
 StandardOutput=journal+console
