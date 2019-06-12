@@ -6,6 +6,7 @@ Requires=systemd-udev-settle.service
 After=systemd-udev-settle.service
 After=dracut-cmdline.service
 After=cryptsetup.target
+Wants=cryptsetup.target
 After=systemd-remount-fs.service
 Before=zfs-import.target
 ConditionPathExists=@sysconfdir@/zfs/zpool.cache
