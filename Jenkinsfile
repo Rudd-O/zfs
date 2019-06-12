@@ -114,7 +114,7 @@ pipeline {
                                     }
                                 }
                                 stage("Build RPMs ${it.join(' ')}") {
-                                    timeout(time: 20, unit: 'MINUTES') {
+                                    timeout(time: 45, unit: 'MINUTES') {
                                         sh """
                                             . ./shell_lib.sh
                                             mockfedorarpms "${myRelease}" "dist/RELEASE=${myRelease}" build/*.src.rpm
@@ -122,7 +122,7 @@ pipeline {
                                     }
                                 }
                                 stage("Archive ${it.join(' ')}") {
-                                    timeout(time: 5, unit: 'MINUTES') {
+                                    timeout(time: 15, unit: 'MINUTES') {
                                         archiveArtifacts artifacts: 'dist/**', fingerprint: true
                                     }
                                 }
