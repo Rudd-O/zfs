@@ -58,16 +58,16 @@ pipeline {
                                 stage("Setup ${it.join(' ')}") {
                                     timeout(time: 15, unit: 'MINUTES') {
                                         unstash "tooling"
-                                        sh "./mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic -v --install glibc-devel libtirpc-devel kernel-devel zlib-devel libuuid-devel libblkid-devel libattr-devel openssl-devel"
+                                        sh "./mocklock -r fedora-${myRelease}-x86_64-generic -v --install glibc-devel libtirpc-devel kernel-devel zlib-devel libuuid-devel libblkid-devel libattr-devel openssl-devel"
                                         sh """
                                             # make sure none of these unpleasant things are installed in the chroot prior to building
                                             set -e
-                                            output=\$(./mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic --shell 'rpm -q libuutil1 libzpool2 libzfs2-devel zfs libzfs2' | grep -v '^package ' || true)
+                                            output=\$(./mocklock -r fedora-${myRelease}-x86_64-generic --shell 'rpm -q libuutil1 libzpool2 libzfs2-devel zfs libzfs2' | grep -v '^package ' || true)
                                             if [ "\$output" != "" ] ; then
-                                                ./mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic --remove libuutil1 libzpool2 libzfs2-devel zfs libzfs2
+                                                ./mocklock -r fedora-${myRelease}-x86_64-generic --remove libuutil1 libzpool2 libzfs2-devel zfs libzfs2
                                             fi
                                         """
-                                        sh "./mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic --unpriv --shell 'mkdir -p /builddir/zfs && rm -rf /builddir/zfs/zfs /builddir/zfs/zfs-builtrpms'"
+                                        sh "./mocklock -r fedora-${myRelease}-x86_64-generic --unpriv --shell 'mkdir -p /builddir/zfs && rm -rf /builddir/zfs/zfs /builddir/zfs/zfs-builtrpms'"
                                     }
                                 }
                                 stage("Copy source ${it.join(' ')}") {
@@ -76,9 +76,9 @@ pipeline {
                                         unstash "src"
                                         sh """
                                             # Copy ZFS source.
-                                            ./mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic --copyin . /builddir/zfs/zfs/
+                                            ./mocklock -r fedora-${myRelease}-x86_64-generic --copyin . /builddir/zfs/zfs/
                                             # Ensure that copied files are owned by mockbuild, not by root.
-                                            ./mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic --shell 'cd /builddir/zfs && chown mockbuild -R zfs'
+                                            ./mocklock -r fedora-${myRelease}-x86_64-generic --shell 'cd /builddir/zfs && chown mockbuild -R zfs'
                                         """
                                     }
                                 }
@@ -86,7 +86,7 @@ pipeline {
                                     timeout(time: 15, unit: 'MINUTES') {
                                         script {
                                             def program = """
-                                                ./mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic --unpriv --shell '
+                                                ./mocklock -r fedora-${myRelease}-x86_64-generic --unpriv --shell '
                                                     set -e -x -o pipefail
                                                     mkdir -p /builddir/zfs/zfs-builtrpms
                                                     cd /builddir/zfs/zfs
@@ -109,7 +109,7 @@ pipeline {
                                 stage("Copy SRPMs out ${it.join(' ')}") {
                                     timeout(time: 5, unit: 'MINUTES') {
                                         sh """
-                                            ./mocklock -r fedora-${myRelease}-${env.BRANCH_NAME}-x86_64-generic --copyout /builddir/zfs/zfs-builtrpms/ build/
+                                            ./mocklock -r fedora-${myRelease}-x86_64-generic --copyout /builddir/zfs/zfs-builtrpms/ build/
                                         """
                                     }
                                 }
