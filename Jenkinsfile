@@ -27,5 +27,5 @@ def srpm_step() {
 genericFedoraRPMPipeline(
     null,
     srpm_step(),
-    ['autoconf', 'automake']
+    ['autoconf', 'automake', 'libtool']
 )
