@@ -1,8 +1,6 @@
 // https://github.com/Rudd-O/shared-jenkins-libraries
 @Library('shared-jenkins-libraries@master') _
 
-def RELEASE = funcs.loadParameter('parameters.groovy', 'RELEASE', '28')
-
 
 def srpm_step() {
     return {
