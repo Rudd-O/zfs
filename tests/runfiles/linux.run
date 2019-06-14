@@ -37,7 +37,8 @@ tests = ['dbufstats_001_pos', 'dbufstats_002_pos']
 tags = ['functional', 'arc']
 
 [tests/functional/atime]
-tests = ['atime_001_pos', 'atime_002_neg', 'atime_003_pos']
+tests = ['atime_001_pos', 'atime_002_neg', 'atime_003_pos', 'root_atime_off',
+    'root_atime_on', 'root_relatime_on']
 tags = ['functional', 'atime']
 
 [tests/functional/bootfs]
@@ -344,7 +345,7 @@ tags = ['functional', 'cli_root', 'zpool_detach']
 
 [tests/functional/cli_root/zpool_events]
 tests = ['zpool_events_clear', 'zpool_events_cliargs', 'zpool_events_follow',
-    'zpool_events_poolname']
+    'zpool_events_poolname', 'zpool_events_errors']
 tags = ['functional', 'cli_root', 'zpool_events']
 
 [tests/functional/cli_root/zpool_expand]
@@ -392,7 +393,8 @@ tests = ['zpool_import_001_pos', 'zpool_import_002_pos',
 tags = ['functional', 'cli_root', 'zpool_import']
 
 [tests/functional/cli_root/zpool_labelclear]
-tests = ['zpool_labelclear_active', 'zpool_labelclear_exported']
+tests = ['zpool_labelclear_active', 'zpool_labelclear_exported',
+    'zpool_labelclear_removed', 'zpool_labelclear_valid']
 pre =
 post =
 tags = ['functional', 'cli_root', 'zpool_labelclear']
@@ -444,7 +446,7 @@ tags = ['functional', 'cli_root', 'zpool_resilver']
 tests = ['zpool_scrub_001_neg', 'zpool_scrub_002_pos', 'zpool_scrub_003_pos',
     'zpool_scrub_004_pos', 'zpool_scrub_005_pos',
     'zpool_scrub_encrypted_unloaded', 'zpool_scrub_print_repairing',
-    'zpool_scrub_offline_device']
+    'zpool_scrub_offline_device', 'zpool_scrub_multiple_copies']
 tags = ['functional', 'cli_root', 'zpool_scrub']
 
 [tests/functional/cli_root/zpool_set]
@@ -468,6 +470,17 @@ tags = ['functional', 'cli_root', 'zpool_status']
 [tests/functional/cli_root/zpool_sync]
 tests = ['zpool_sync_001_pos', 'zpool_sync_002_neg']
 tags = ['functional', 'cli_root', 'zpool_sync']
+
+[tests/functional/cli_root/zpool_trim]
+tests = ['zpool_trim_attach_detach_add_remove',
+    'zpool_trim_import_export', 'zpool_trim_multiple', 'zpool_trim_neg',
+    'zpool_trim_offline_export_import_online', 'zpool_trim_online_offline',
+    'zpool_trim_partial', 'zpool_trim_rate', 'zpool_trim_rate_neg',
+    'zpool_trim_secure', 'zpool_trim_split', 'zpool_trim_start_and_cancel_neg',
+    'zpool_trim_start_and_cancel_pos', 'zpool_trim_suspend_resume',
+    'zpool_trim_unsupported_vdevs', 'zpool_trim_verify_checksums',
+    'zpool_trim_verify_trimmed']
+tags = ['functional', 'zpool_trim']
 
 [tests/functional/cli_root/zpool_upgrade]
 tests = ['zpool_upgrade_001_pos', 'zpool_upgrade_002_pos',
@@ -622,7 +635,7 @@ tests = ['filesystem_count', 'filesystem_limit', 'snapshot_count',
 tags = ['functional', 'limits']
 
 [tests/functional/link_count]
-tests = ['link_count_001']
+tests = ['link_count_001', 'link_count_root_inode.ksh']
 tags = ['functional', 'link_count']
 
 [tests/functional/migration]
@@ -791,10 +804,11 @@ tests = ['rsend_001_pos', 'rsend_002_pos', 'rsend_003_pos', 'rsend_004_pos',
     'send-c_lz4_disabled', 'send-c_recv_lz4_disabled',
     'send-c_mixed_compression', 'send-c_stream_size_estimate', 'send-cD',
     'send-c_embedded_blocks', 'send-c_resume', 'send-cpL_varied_recsize',
-    'send-c_recv_dedup', 'send_encrypted_files', 'send_encrypted_heirarchy',
-    'send_encrypted_props', 'send_freeobjects', 'send_realloc_dnode_size',
-    'send_holds', 'send_hole_birth', 'send_mixed_raw',
-    'send-wDR_encrypted_zvol']
+    'send-c_recv_dedup', 'send_encrypted_files', 'send_encrypted_hierarchy',
+    'send_encrypted_props', 'send_encrypted_truncated_files',
+    'send_freeobjects', 'send_realloc_dnode_size', 'send_realloc_files',
+    'send_realloc_encrypted_files', 'send_spill_block', 'send_holds',
+    'send_hole_birth', 'send_mixed_raw', 'send-wDR_encrypted_zvol']
 tags = ['functional', 'rsend']
 
 [tests/functional/scrub_mirror]
@@ -836,6 +850,11 @@ tags = ['functional', 'threadsappend']
 [tests/functional/tmpfile]
 tests = ['tmpfile_001_pos', 'tmpfile_002_pos', 'tmpfile_003_pos']
 tags = ['functional', 'tmpfile']
+
+[tests/functional/trim]
+tests = ['autotrim_integrity', 'autotrim_config', 'autotrim_trim_integrity',
+    'trim_integrity', 'trim_config']
+tags = ['functional', 'trim']
 
 [tests/functional/truncate]
 tests = ['truncate_001_pos', 'truncate_002_pos', 'truncate_timestamps']

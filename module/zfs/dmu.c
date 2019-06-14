@@ -81,6 +81,13 @@ int zfs_dmu_offset_next_sync = 0;
  */
 int zfs_object_remap_one_indirect_delay_ms = 0;
 
+/*
+ * Limit the amount we can prefetch with one call to this amount.  This
+ * helps to limit the amount of memory that can be used by prefetching.
+ * Larger objects should be prefetched a bit at a time.
+ */
+int dmu_prefetch_max = 8 * SPA_MAXBLOCKSIZE;
+
 const dmu_object_type_info_t dmu_ot[DMU_OT_NUMTYPES] = {
 	{DMU_BSWAP_UINT8,  TRUE,  FALSE, FALSE, "unallocated"		},
 	{DMU_BSWAP_ZAP,    TRUE,  TRUE,  FALSE, "object directory"	},
@@ -668,6 +675,11 @@ dmu_prefetch(objset_t *os, uint64_t object, int64_t level, uint64_t offset,
 	}
 
 	/*
+	 * See comment before the definition of dmu_prefetch_max.
+	 */
+	len = MIN(len, dmu_prefetch_max);
+
+	/*
 	 * XXX - Note, if the dnode for the requested object is not
 	 * already cached, we will do a *synchronous* read in the
 	 * dnode_hold() call.  The same is true for any indirects.
@@ -719,18 +731,23 @@ get_next_chunk(dnode_t *dn, uint64_t *start, uint64_t minimum, uint64_t *l1blks)
 	uint64_t blks;
 	uint64_t maxblks = DMU_MAX_ACCESS >> (dn->dn_indblkshift + 1);
 	/* bytes of data covered by a level-1 indirect block */
-	uint64_t iblkrange =
-	    dn->dn_datablksz * EPB(dn->dn_indblkshift, SPA_BLKPTRSHIFT);
+	uint64_t iblkrange = (uint64_t)dn->dn_datablksz *
+	    EPB(dn->dn_indblkshift, SPA_BLKPTRSHIFT);
 
 	ASSERT3U(minimum, <=, *start);
 
-	if (*start - minimum <= iblkrange * maxblks) {
+	/*
+	 * Check if we can free the entire range assuming that all of the
+	 * L1 blocks in this range have data. If we can, we use this
+	 * worst case value as an estimate so we can avoid having to look
+	 * at the object's actual data.
+	 */
+	uint64_t total_l1blks =
+	    (roundup(*start, iblkrange) - (minimum / iblkrange * iblkrange)) /
+	    iblkrange;
+	if (total_l1blks <= maxblks) {
+		*l1blks = total_l1blks;
 		*start = minimum;
-		/*
-		 * Assume full L1 blocks and 128k recordsize to approximate the
-		 * expected number of L1 blocks in this chunk
-		 */
-		*l1blks = minimum / (1024 * 128 * 1024);
 		return (0);
 	}
 	ASSERT(ISP2(iblkrange));
@@ -745,6 +762,7 @@ get_next_chunk(dnode_t *dn, uint64_t *start, uint64_t minimum, uint64_t *l1blks)
 		 * to search.
 		 */
 		(*start)--;
+
 		err = dnode_next_offset(dn,
 		    DNODE_FIND_BACKWARDS, start, 2, 1, 0);
 
@@ -763,6 +781,7 @@ get_next_chunk(dnode_t *dn, uint64_t *start, uint64_t minimum, uint64_t *l1blks)
 	if (*start < minimum)
 		*start = minimum;
 	*l1blks = blks;
+
 	return (0);
 }
 
@@ -809,7 +828,6 @@ dmu_free_long_range_impl(objset_t *os, dnode_t *dn, uint64_t offset,
 
 	while (length != 0) {
 		uint64_t chunk_end, chunk_begin, chunk_len;
-		uint64_t long_free_dirty_all_txgs = 0;
 		uint64_t l1blks;
 		dmu_tx_t *tx;
 
@@ -827,25 +845,6 @@ dmu_free_long_range_impl(objset_t *os, dnode_t *dn, uint64_t offset,
 
 		chunk_len = chunk_end - chunk_begin;
 
-		mutex_enter(&dp->dp_lock);
-		for (int t = 0; t < TXG_SIZE; t++) {
-			long_free_dirty_all_txgs +=
-			    dp->dp_long_free_dirty_pertxg[t];
-		}
-		mutex_exit(&dp->dp_lock);
-
-		/*
-		 * To avoid filling up a TXG with just frees wait for
-		 * the next TXG to open before freeing more chunks if
-		 * we have reached the threshold of frees
-		 */
-		if (dirty_frees_threshold != 0 &&
-		    long_free_dirty_all_txgs >= dirty_frees_threshold) {
-			DMU_TX_STAT_BUMP(dmu_tx_dirty_frees_delay);
-			txg_wait_open(dp, 0);
-			continue;
-		}
-
 		tx = dmu_tx_create(os);
 		dmu_tx_hold_free(tx, dn->dn_object, chunk_begin, chunk_len);
 
@@ -860,6 +859,26 @@ dmu_free_long_range_impl(objset_t *os, dnode_t *dn, uint64_t offset,
 			return (err);
 		}
 
+		uint64_t txg = dmu_tx_get_txg(tx);
+
+		mutex_enter(&dp->dp_lock);
+		uint64_t long_free_dirty =
+		    dp->dp_long_free_dirty_pertxg[txg & TXG_MASK];
+		mutex_exit(&dp->dp_lock);
+
+		/*
+		 * To avoid filling up a TXG with just frees, wait for
+		 * the next TXG to open before freeing more chunks if
+		 * we have reached the threshold of frees.
+		 */
+		if (dirty_frees_threshold != 0 &&
+		    long_free_dirty >= dirty_frees_threshold) {
+			DMU_TX_STAT_BUMP(dmu_tx_dirty_frees_delay);
+			dmu_tx_commit(tx);
+			txg_wait_open(dp, 0, B_TRUE);
+			continue;
+		}
+
 		/*
 		 * In order to prevent unnecessary write throttling, for each
 		 * TXG, we track the cumulative size of L1 blocks being dirtied
@@ -871,12 +890,12 @@ dmu_free_long_range_impl(objset_t *os, dnode_t *dn, uint64_t offset,
 		 * blocks taking up a large percentage of zfs_dirty_data_max.
 		 */
 		mutex_enter(&dp->dp_lock);
-		dp->dp_long_free_dirty_pertxg[dmu_tx_get_txg(tx) & TXG_MASK] +=
+		dp->dp_long_free_dirty_pertxg[txg & TXG_MASK] +=
 		    l1blks << dn->dn_indblkshift;
 		mutex_exit(&dp->dp_lock);
 		DTRACE_PROBE3(free__long__range,
-		    uint64_t, long_free_dirty_all_txgs, uint64_t, chunk_len,
-		    uint64_t, dmu_tx_get_txg(tx));
+		    uint64_t, long_free_dirty, uint64_t, chunk_len,
+		    uint64_t, txg);
 		dnode_free_range(dn, chunk_begin, chunk_len, tx);
 
 		dmu_tx_commit(tx);
@@ -2621,6 +2640,10 @@ MODULE_PARM_DESC(zfs_per_txg_dirty_frees_percent,
 module_param(zfs_dmu_offset_next_sync, int, 0644);
 MODULE_PARM_DESC(zfs_dmu_offset_next_sync,
 	"Enable forcing txg sync to find holes");
+
+module_param(dmu_prefetch_max, int, 0644);
+MODULE_PARM_DESC(dmu_prefetch_max,
+	"Limit one prefetch call to this size");
 
 /* END CSTYLED */
 

@@ -28,6 +28,7 @@
  * Copyright 2016 Igor Kozhukhov <ikozhukhov@gmail.com>.
  * Copyright 2016 Nexenta Systems, Inc.
  * Copyright (c) 2019 Datto Inc.
+ * Copyright (c) 2019, loli10K <ezomori.nozomu@gmail.com>
  */
 
 #include <assert.h>
@@ -117,6 +118,7 @@ static int zfs_do_load_key(int argc, char **argv);
 static int zfs_do_unload_key(int argc, char **argv);
 static int zfs_do_change_key(int argc, char **argv);
 static int zfs_do_project(int argc, char **argv);
+static int zfs_do_version(int argc, char **argv);
 
 /*
  * Enable a reasonable set of defaults for libumem debugging on DEBUG builds.
@@ -171,6 +173,7 @@ typedef enum {
 	HELP_LOAD_KEY,
 	HELP_UNLOAD_KEY,
 	HELP_CHANGE_KEY,
+	HELP_VERSION
 } zfs_help_t;
 
 typedef struct zfs_command {
@@ -189,6 +192,8 @@ typedef struct zfs_command {
  * the generic usage message.
  */
 static zfs_command_t command_table[] = {
+	{ "version",	zfs_do_version, 	HELP_VERSION		},
+	{ NULL },
 	{ "create",	zfs_do_create,		HELP_CREATE		},
 	{ "destroy",	zfs_do_destroy,		HELP_DESTROY		},
 	{ NULL },
@@ -379,6 +384,8 @@ get_usage(zfs_help_t idx)
 		    "\t    [-o keylocation=<value>] [-o pbkfd2iters=<value>]\n"
 		    "\t    <filesystem|volume>\n"
 		    "\tchange-key -i [-l] <filesystem|volume>\n"));
+	case HELP_VERSION:
+		return (gettext("\tversion\n"));
 	}
 
 	abort();
@@ -1922,6 +1929,16 @@ zfs_do_get(int argc, char **argv)
 
 	fields = argv[0];
 
+	/*
+	 * Handle users who want to get all snapshots of the current
+	 * dataset (ex. 'zfs get -t snapshot refer <dataset>').
+	 */
+	if (types == ZFS_TYPE_SNAPSHOT && argc > 1 &&
+	    (flags & ZFS_ITER_RECURSE) == 0 && limit == 0) {
+		flags |= (ZFS_ITER_DEPTH_LIMIT | ZFS_ITER_RECURSE);
+		limit = 1;
+	}
+
 	if (zprop_get_list(g_zfs, fields, &cb.cb_proplist, ZFS_TYPE_DATASET)
 	    != 0)
 		usage(B_FALSE);
@@ -2222,7 +2239,7 @@ zfs_do_upgrade(int argc, char **argv)
 	boolean_t showversions = B_FALSE;
 	int ret = 0;
 	upgrade_cbdata_t cb = { 0 };
-	signed char c;
+	int c;
 	int flags = ZFS_ITER_ARGS_CAN_BE_PATHS;
 
 	/* check options */
@@ -3417,6 +3434,16 @@ zfs_do_list(int argc, char **argv)
 		types &= ~ZFS_TYPE_SNAPSHOT;
 
 	/*
+	 * Handle users who want to list all snapshots of the current
+	 * dataset (ex. 'zfs list -t snapshot <dataset>').
+	 */
+	if (types == ZFS_TYPE_SNAPSHOT && argc > 0 &&
+	    (flags & ZFS_ITER_RECURSE) == 0 && limit == 0) {
+		flags |= (ZFS_ITER_DEPTH_LIMIT | ZFS_ITER_RECURSE);
+		limit = 1;
+	}
+
+	/*
 	 * If the user specifies '-o all', the zprop_get_list() doesn't
 	 * normally include the name of the dataset.  For 'zfs list', we always
 	 * want this property to be first.
@@ -3906,7 +3933,7 @@ static int
 zfs_do_snapshot(int argc, char **argv)
 {
 	int ret = 0;
-	signed char c;
+	int c;
 	nvlist_t *props;
 	snap_cbdata_t sd = { 0 };
 	boolean_t multiple_snaps = B_FALSE;
@@ -6595,10 +6622,13 @@ share_mount(int op, int argc, char **argv)
 
 		/*
 		 * libshare isn't mt-safe, so only do the operation in parallel
-		 * if we're mounting.
+		 * if we're mounting. Additionally, the key-loading option must
+		 * be serialized so that we can prompt the user for their keys
+		 * in a consistent manner.
 		 */
 		zfs_foreach_mountpoint(g_zfs, cb.cb_handles, cb.cb_used,
-		    share_mount_one_cb, &share_mount_state, op == OP_MOUNT);
+		    share_mount_one_cb, &share_mount_state,
+		    op == OP_MOUNT && !(flags & MS_CRYPT));
 		ret = share_mount_state.sm_status;
 
 		for (int i = 0; i < cb.cb_used; i++)
@@ -6703,8 +6733,8 @@ unshare_unmount_compare(const void *larg, const void *rarg, void *unused)
 
 /*
  * Convenience routine used by zfs_do_umount() and manual_unmount().  Given an
- * absolute path, find the entry /proc/self/mounts, verify that its a
- * ZFS filesystems, and unmount it appropriately.
+ * absolute path, find the entry /proc/self/mounts, verify that it's a
+ * ZFS filesystem, and unmount it appropriately.
  */
 static int
 unshare_unmount_path(int op, char *path, int flags, boolean_t is_manual)
@@ -7169,6 +7199,7 @@ zfs_do_diff(int argc, char **argv)
 	char *atp, *copy;
 	int err = 0;
 	int c;
+	struct sigaction sa;
 
 	while ((c = getopt(argc, argv, "FHt")) != -1) {
 		switch (c) {
@@ -7226,10 +7257,19 @@ zfs_do_diff(int argc, char **argv)
 	 * Ignore SIGPIPE so that the library can give us
 	 * information on any failure
 	 */
-	(void) sigignore(SIGPIPE);
+	if (sigemptyset(&sa.sa_mask) == -1) {
+		err = errno;
+		goto out;
+	}
+	sa.sa_flags = 0;
+	sa.sa_handler = SIG_IGN;
+	if (sigaction(SIGPIPE, &sa, NULL) == -1) {
+		err = errno;
+		goto out;
+	}
 
 	err = zfs_show_diffs(zhp, STDOUT_FILENO, fromsnap, tosnap, flags);
-
+out:
 	zfs_close(zhp);
 
 	return (err != 0);
@@ -7486,7 +7526,7 @@ zfs_do_channel_program(int argc, char **argv)
 	}
 
 	if ((zhp = zpool_open(g_zfs, poolname)) == NULL) {
-		(void) fprintf(stderr, gettext("cannot open pool '%s'"),
+		(void) fprintf(stderr, gettext("cannot open pool '%s'\n"),
 		    poolname);
 		if (fd != 0)
 			(void) close(fd);
@@ -8039,6 +8079,18 @@ zfs_do_project(int argc, char **argv)
 	return (ret);
 }
 
+/*
+ * Display version message
+ */
+static int
+zfs_do_version(int argc, char **argv)
+{
+	if (zfs_version_print() == -1)
+		return (1);
+
+	return (0);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -8093,6 +8145,12 @@ main(int argc, char **argv)
 	if ((strcmp(cmdname, "-?") == 0) ||
 	    (strcmp(cmdname, "--help") == 0))
 		usage(B_TRUE);
+
+	/*
+	 * Special case '-V|--version'
+	 */
+	if ((strcmp(cmdname, "-V") == 0) || (strcmp(cmdname, "--version") == 0))
+		return (zfs_do_version(argc, argv));
 
 	if ((g_zfs = libzfs_init()) == NULL) {
 		(void) fprintf(stderr, "%s", libzfs_error_init(errno));

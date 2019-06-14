@@ -54,6 +54,7 @@
 #include "zfeature_common.h"
 #include <zfs_fletcher.h>
 #include <libzutil.h>
+#include <sys/zfs_sysfs.h>
 
 int
 libzfs_errno(libzfs_handle_t *hdl)
@@ -292,6 +293,16 @@ libzfs_error_description(libzfs_handle_t *hdl)
 		    "initialization"));
 	case EZFS_WRONG_PARENT:
 		return (dgettext(TEXT_DOMAIN, "invalid parent dataset"));
+	case EZFS_TRIMMING:
+		return (dgettext(TEXT_DOMAIN, "currently trimming"));
+	case EZFS_NO_TRIM:
+		return (dgettext(TEXT_DOMAIN, "there is no active trim"));
+	case EZFS_TRIM_NOTSUP:
+		return (dgettext(TEXT_DOMAIN, "trim operations are not "
+		    "supported by this device"));
+	case EZFS_NO_RESILVER_DEFER:
+		return (dgettext(TEXT_DOMAIN, "this action requires the "
+		    "resilver_defer feature"));
 	case EZFS_UNKNOWN:
 		return (dgettext(TEXT_DOMAIN, "unknown error"));
 	default:
@@ -1932,4 +1943,67 @@ zprop_iter(zprop_func func, void *cb, boolean_t show_all, boolean_t ordered,
     zfs_type_t type)
 {
 	return (zprop_iter_common(func, cb, show_all, ordered, type));
+}
+
+/*
+ * Fill given version buffer with zfs userland version
+ */
+void
+zfs_version_userland(char *version, int len)
+{
+	(void) strlcpy(version, ZFS_META_ALIAS, len);
+}
+
+/*
+ * Fill given version buffer with zfs kernel version read from ZFS_SYSFS_DIR
+ * Returns 0 on success, and -1 on error (with errno set)
+ */
+int
+zfs_version_kernel(char *version, int len)
+{
+	int _errno;
+	int fd;
+	int rlen;
+
+	if ((fd = open(ZFS_SYSFS_DIR "/version", O_RDONLY)) == -1)
+		return (-1);
+
+	if ((rlen = read(fd, version, len)) == -1) {
+		version[0] = '\0';
+		_errno = errno;
+		(void) close(fd);
+		errno = _errno;
+		return (-1);
+	}
+
+	version[rlen-1] = '\0';  /* discard '\n' */
+
+	if (close(fd) == -1)
+		return (-1);
+
+	return (0);
+}
+
+/*
+ * Prints both zfs userland and kernel versions
+ * Returns 0 on success, and -1 on error (with errno set)
+ */
+int
+zfs_version_print(void)
+{
+	char zver_userland[128];
+	char zver_kernel[128];
+
+	if (zfs_version_kernel(zver_kernel, sizeof (zver_kernel)) == -1) {
+		fprintf(stderr, "zfs_version_kernel() failed: %s\n",
+		    strerror(errno));
+		return (-1);
+	}
+
+	zfs_version_userland(zver_userland, sizeof (zver_userland));
+
+	(void) printf("%s\n", zver_userland);
+	(void) printf("zfs-kmod-%s\n", zver_kernel);
+
+	return (0);
 }

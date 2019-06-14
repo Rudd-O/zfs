@@ -2466,7 +2466,7 @@ dbuf_assign_arcbuf(dmu_buf_impl_t *db, arc_buf_t *buf, dmu_tx_t *tx)
 	ASSERT(db->db_level == 0);
 	ASSERT3U(dbuf_is_metadata(db), ==, arc_is_metadata(buf));
 	ASSERT(buf != NULL);
-	ASSERT(arc_buf_lsize(buf) == db->db.db_size);
+	ASSERT3U(arc_buf_lsize(buf), ==, db->db.db_size);
 	ASSERT(tx->tx_txg != 0);
 
 	arc_return_buf(buf, db);
@@ -3959,7 +3959,7 @@ dbuf_sync_leaf(dbuf_dirty_record_t *dr, dmu_tx_t *tx)
 
 	ASSERT(!list_link_active(&dr->dr_dirty_node));
 	if (dn->dn_object == DMU_META_DNODE_OBJECT) {
-		list_insert_tail(&dn->dn_dirty_records[txg&TXG_MASK], dr);
+		list_insert_tail(&dn->dn_dirty_records[txg & TXG_MASK], dr);
 		DB_DNODE_EXIT(db);
 	} else {
 		/*

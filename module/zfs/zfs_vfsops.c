@@ -303,7 +303,21 @@ zfs_sync(struct super_block *sb, int wait, cred_t *cr)
 static void
 atime_changed_cb(void *arg, uint64_t newval)
 {
-	((zfsvfs_t *)arg)->z_atime = newval;
+	zfsvfs_t *zfsvfs = arg;
+	struct super_block *sb = zfsvfs->z_sb;
+
+	if (sb == NULL)
+		return;
+	/*
+	 * Update SB_NOATIME bit in VFS super block.  Since atime update is
+	 * determined by atime_needs_update(), atime_needs_update() needs to
+	 * return false if atime is turned off, and not unconditionally return
+	 * false if atime is turned on.
+	 */
+	if (newval)
+		sb->s_flags &= ~SB_NOATIME;
+	else
+		sb->s_flags |= SB_NOATIME;
 }
 
 static void
@@ -988,7 +1002,7 @@ zfsvfs_init(zfsvfs_t *zfsvfs, objset_t *os)
 	    zfs_zpl_version_map(spa_version(dmu_objset_spa(os)))) {
 		(void) printk("Can't mount a version %lld file system "
 		    "on a version %lld pool\n. Pool must be upgraded to mount "
-		    "this file system.", (u_longlong_t)zfsvfs->z_version,
+		    "this file system.\n", (u_longlong_t)zfsvfs->z_version,
 		    (u_longlong_t)spa_version(dmu_objset_spa(os)));
 		return (SET_ERROR(ENOTSUP));
 	}
@@ -1034,14 +1048,6 @@ zfsvfs_init(zfsvfs_t *zfsvfs, objset_t *os)
 		if ((error == 0) && (val == ZFS_XATTR_SA))
 			zfsvfs->z_xattr_sa = B_TRUE;
 	}
-
-	error = sa_setup(os, sa_obj, zfs_attr_table, ZPL_END,
-	    &zfsvfs->z_attr_table);
-	if (error != 0)
-		return (error);
-
-	if (zfsvfs->z_version >= ZPL_VERSION_SA)
-		sa_register_update_callback(os, zfs_sa_upgrade);
 
 	error = zap_lookup(os, MASTER_NODE_OBJ, ZFS_ROOT_OBJ, 8, 1,
 	    &zfsvfs->z_root);
@@ -1116,6 +1122,14 @@ zfsvfs_init(zfsvfs_t *zfsvfs, objset_t *os)
 	else if (error != 0)
 		return (error);
 
+	error = sa_setup(os, sa_obj, zfs_attr_table, ZPL_END,
+	    &zfsvfs->z_attr_table);
+	if (error != 0)
+		return (error);
+
+	if (zfsvfs->z_version >= ZPL_VERSION_SA)
+		sa_register_update_callback(os, zfs_sa_upgrade);
+
 	return (0);
 }
 
@@ -1142,6 +1156,11 @@ zfsvfs_create(const char *osname, boolean_t readonly, zfsvfs_t **zfvp)
 	return (error);
 }
 
+
+/*
+ * Note: zfsvfs is assumed to be malloc'd, and will be freed by this function
+ * on a failure.  Do not pass in a statically allocated zfsvfs.
+ */
 int
 zfsvfs_create_impl(zfsvfs_t **zfvp, zfsvfs_t *zfsvfs, objset_t *os)
 {
@@ -1174,7 +1193,7 @@ zfsvfs_create_impl(zfsvfs_t **zfvp, zfsvfs_t *zfsvfs, objset_t *os)
 	error = zfsvfs_init(zfsvfs, os);
 	if (error != 0) {
 		*zfvp = NULL;
-		kmem_free(zfsvfs, sizeof (zfsvfs_t));
+		zfsvfs_free(zfsvfs);
 		return (error);
 	}
 

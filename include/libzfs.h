@@ -143,6 +143,10 @@ typedef enum zfs_error {
 	EZFS_INITIALIZING,	/* currently initializing */
 	EZFS_NO_INITIALIZE,	/* no active initialize */
 	EZFS_WRONG_PARENT,	/* invalid parent dataset (e.g ZVOL) */
+	EZFS_TRIMMING,		/* currently trimming */
+	EZFS_NO_TRIM,		/* no active trim */
+	EZFS_TRIM_NOTSUP,	/* device does not support trim */
+	EZFS_NO_RESILVER_DEFER,	/* pool doesn't support resilver_defer */
 	EZFS_UNKNOWN
 } zfs_error_t;
 
@@ -253,12 +257,26 @@ typedef struct splitflags {
 	int name_flags;
 } splitflags_t;
 
+typedef struct trimflags {
+	/* requested vdevs are for the entire pool */
+	boolean_t fullpool;
+
+	/* request a secure trim, requires support from device */
+	boolean_t secure;
+
+	/* trim at the requested rate in bytes/second */
+	uint64_t rate;
+} trimflags_t;
+
 /*
  * Functions to manipulate pool and vdev state
  */
 extern int zpool_scan(zpool_handle_t *, pool_scan_func_t, pool_scrub_cmd_t);
 extern int zpool_initialize(zpool_handle_t *, pool_initialize_func_t,
     nvlist_t *);
+extern int zpool_trim(zpool_handle_t *, pool_trim_func_t, nvlist_t *,
+    trimflags_t *);
+
 extern int zpool_clear(zpool_handle_t *, const char *, nvlist_t *);
 extern int zpool_reguid(zpool_handle_t *);
 extern int zpool_reopen_one(zpool_handle_t *, void *);
@@ -797,6 +815,13 @@ int libzfs_run_process_get_stdout_nopath(const char *path, char *argv[],
 void libzfs_free_str_array(char **strs, int count);
 
 int libzfs_envvar_is_set(char *envvar);
+
+/*
+ * Utility functions for zfs version
+ */
+extern void zfs_version_userland(char *, int);
+extern int zfs_version_kernel(char *, int);
+extern int zfs_version_print(void);
 
 /*
  * Given a device or file, determine if it is part of a pool.

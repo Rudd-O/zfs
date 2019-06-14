@@ -56,12 +56,12 @@
  * corresponding inode.
  *
  * All mounts are handled automatically by an user mode helper which invokes
- * the mount mount procedure.  Unmounts are handled by allowing the mount
+ * the mount procedure.  Unmounts are handled by allowing the mount
  * point to expire so the kernel may automatically unmount it.
  *
  * The '.zfs', '.zfs/snapshot', and all directories created under
  * '.zfs/snapshot' (ie: '.zfs/snapshot/<snapname>') all share the same
- * share the same zfsvfs_t as the head filesystem (what '.zfs' lives under).
+ * zfsvfs_t as the head filesystem (what '.zfs' lives under).
  *
  * File systems mounted on top of the '.zfs/snapshot/<snapname>' paths
  * (ie: snapshots) are complete ZFS filesystems and have their own unique
@@ -85,6 +85,7 @@
 #include <sys/dsl_destroy.h>
 #include <sys/dsl_deleg.h>
 #include <sys/zpl.h>
+#include <sys/mntent.h>
 #include "zfs_namecheck.h"
 
 /*
@@ -148,7 +149,7 @@ zfsctl_snapshot_alloc(char *full_name, char *full_path, spa_t *spa,
 }
 
 /*
- * Free a zfs_snapentry_t the called must ensure there are no active
+ * Free a zfs_snapentry_t the caller must ensure there are no active
  * references.
  */
 static void
@@ -766,8 +767,7 @@ zfsctl_snapshot_path_objset(zfsvfs_t *zfsvfs, uint64_t objsetid,
 			break;
 	}
 
-	memset(full_path, 0, path_len);
-	snprintf(full_path, path_len - 1, "%s/.zfs/snapshot/%s",
+	snprintf(full_path, path_len, "%s/.zfs/snapshot/%s",
 	    zfsvfs->z_vfs->vfs_mntpoint, snapname);
 out:
 	kmem_free(snapname, ZFS_MAX_DATASET_NAME_LEN);
@@ -811,7 +811,6 @@ zfsctl_root_lookup(struct inode *dip, char *name, struct inode **ipp,
 /*
  * Lookup entry point for the 'snapshot' directory.  Try to open the
  * snapshot if it exist, creating the pseudo filesystem inode as necessary.
- * Perform a mount of the associated dataset on top of the inode.
  */
 int
 zfsctl_snapdir_lookup(struct inode *dip, char *name, struct inode **ipp,
@@ -1048,8 +1047,6 @@ zfsctl_snapshot_unmount(char *snapname, int flags)
 
 	return (error);
 }
-
-#define	MOUNT_BUSY 0x80		/* Mount failed due to EBUSY (from mntent.h) */
 
 int
 zfsctl_snapshot_mount(struct path *path, int flags)

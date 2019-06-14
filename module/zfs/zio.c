@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2011, 2018 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2019 by Delphix. All rights reserved.
  * Copyright (c) 2011 Nexenta Systems, Inc. All rights reserved.
  * Copyright (c) 2017, Intel Corporation.
  */
@@ -32,6 +32,7 @@
 #include <sys/txg.h>
 #include <sys/spa_impl.h>
 #include <sys/vdev_impl.h>
+#include <sys/vdev_trim.h>
 #include <sys/zio_impl.h>
 #include <sys/zio_compress.h>
 #include <sys/zio_checksum.h>
@@ -58,7 +59,7 @@ const char *zio_type_name[ZIO_TYPES] = {
 	 * Note: Linux kernel thread name length is limited
 	 * so these names will differ from upstream open zfs.
 	 */
-	"z_null", "z_rd", "z_wr", "z_fr", "z_cl", "z_ioctl"
+	"z_null", "z_rd", "z_wr", "z_fr", "z_cl", "z_ioctl", "z_trim"
 };
 
 int zio_dva_throttle_enabled = B_TRUE;
@@ -95,9 +96,23 @@ int zio_slow_io_ms = (30 * MILLISEC);
  *
  * The 'zfs_sync_pass_deferred_free' pass must be greater than 1 to ensure that
  * regular blocks are not deferred.
+ *
+ * Starting in sync pass 8 (zfs_sync_pass_dont_compress), we disable
+ * compression (including of metadata).  In practice, we don't have this
+ * many sync passes, so this has no effect.
+ *
+ * The original intent was that disabling compression would help the sync
+ * passes to converge. However, in practice disabling compression increases
+ * the average number of sync passes, because when we turn compression off, a
+ * lot of block's size will change and thus we have to re-allocate (not
+ * overwrite) them. It also increases the number of 128KB allocations (e.g.
+ * for indirect blocks and spacemaps) because these will not be compressed.
+ * The 128K allocations are especially detrimental to performance on highly
+ * fragmented systems, which may have very few free segments of this size,
+ * and may need to load new metaslabs to satisfy 128K allocations.
  */
 int zfs_sync_pass_deferred_free = 2; /* defer frees starting in this pass */
-int zfs_sync_pass_dont_compress = 5; /* don't compress starting in this pass */
+int zfs_sync_pass_dont_compress = 8; /* don't compress starting in this pass */
 int zfs_sync_pass_rewrite = 2; /* rewrite new bps starting in this pass */
 
 /*
@@ -329,12 +344,6 @@ zio_push_transform(zio_t *zio, abd_t *data, uint64_t size, uint64_t bufsize,
     zio_transform_func_t *transform)
 {
 	zio_transform_t *zt = kmem_alloc(sizeof (zio_transform_t), KM_SLEEP);
-
-	/*
-	 * Ensure that anyone expecting this zio to contain a linear ABD isn't
-	 * going to get a nasty surprise when they try to access the data.
-	 */
-	IMPLY(abd_is_linear(zio->io_abd), abd_is_linear(data));
 
 	zt->zt_orig_abd = zio->io_abd;
 	zt->zt_orig_size = zio->io_size;
@@ -761,7 +770,7 @@ zio_create(zio_t *pio, spa_t *spa, uint64_t txg, const blkptr_t *bp,
 {
 	zio_t *zio;
 
-	ASSERT3U(psize, <=, SPA_MAXBLOCKSIZE);
+	IMPLY(type != ZIO_TYPE_TRIM, psize <= SPA_MAXBLOCKSIZE);
 	ASSERT(P2PHASE(psize, SPA_MINBLOCKSIZE) == 0);
 	ASSERT(P2PHASE(offset, SPA_MINBLOCKSIZE) == 0);
 
@@ -1207,6 +1216,26 @@ zio_ioctl(zio_t *pio, spa_t *spa, vdev_t *vd, int cmd,
 			zio_nowait(zio_ioctl(zio, spa, vd->vdev_child[c], cmd,
 			    done, private, flags));
 	}
+
+	return (zio);
+}
+
+zio_t *
+zio_trim(zio_t *pio, vdev_t *vd, uint64_t offset, uint64_t size,
+    zio_done_func_t *done, void *private, zio_priority_t priority,
+    enum zio_flag flags, enum trim_flag trim_flags)
+{
+	zio_t *zio;
+
+	ASSERT0(vd->vdev_children);
+	ASSERT0(P2PHASE(offset, 1ULL << vd->vdev_ashift));
+	ASSERT0(P2PHASE(size, 1ULL << vd->vdev_ashift));
+	ASSERT3U(size, !=, 0);
+
+	zio = zio_create(pio, vd->vdev_spa, 0, NULL, NULL, size, size, done,
+	    private, ZIO_TYPE_TRIM, priority, flags | ZIO_FLAG_PHYSICAL,
+	    vd, offset, NULL, ZIO_STAGE_OPEN, ZIO_TRIM_PIPELINE);
+	zio->io_trim_flags = trim_flags;
 
 	return (zio);
 }
@@ -1872,7 +1901,7 @@ zio_deadman_impl(zio_t *pio, int ziodepth)
 		uint64_t delta = gethrtime() - pio->io_timestamp;
 		uint64_t failmode = spa_get_deadman_failmode(pio->io_spa);
 
-		zfs_dbgmsg("slow zio[%d]: zio=%p timestamp=%llu "
+		zfs_dbgmsg("slow zio[%d]: zio=%px timestamp=%llu "
 		    "delta=%llu queued=%llu io=%llu "
 		    "path=%s last=%llu "
 		    "type=%d priority=%d flags=0x%x "
@@ -3423,7 +3452,7 @@ zio_dva_allocate(zio_t *zio)
 	}
 
 	if (error != 0) {
-		zfs_dbgmsg("%s: metaslab allocation failure: zio %p, "
+		zfs_dbgmsg("%s: metaslab allocation failure: zio %px, "
 		    "size %llu, error %d", spa_name(spa), zio, zio->io_size,
 		    error);
 		if (error == ENOSPC && zio->io_size > SPA_MINBLOCKSIZE)
@@ -3562,7 +3591,6 @@ zio_alloc_zil(spa_t *spa, objset_t *os, uint64_t txg, blkptr_t *new_bp,
  * ==========================================================================
  */
 
-
 /*
  * Issue an I/O to the underlying vdev. Typically the issue pipeline
  * stops after this stage and will resume upon I/O completion.
@@ -3685,8 +3713,8 @@ zio_vdev_io_start(zio_t *zio)
 		return (zio);
 	}
 
-	if (vd->vdev_ops->vdev_op_leaf &&
-	    (zio->io_type == ZIO_TYPE_READ || zio->io_type == ZIO_TYPE_WRITE)) {
+	if (vd->vdev_ops->vdev_op_leaf && (zio->io_type == ZIO_TYPE_READ ||
+	    zio->io_type == ZIO_TYPE_WRITE || zio->io_type == ZIO_TYPE_TRIM)) {
 
 		if (zio->io_type == ZIO_TYPE_READ && vdev_cache_read(zio))
 			return (zio);
@@ -3717,7 +3745,8 @@ zio_vdev_io_done(zio_t *zio)
 		return (NULL);
 	}
 
-	ASSERT(zio->io_type == ZIO_TYPE_READ || zio->io_type == ZIO_TYPE_WRITE);
+	ASSERT(zio->io_type == ZIO_TYPE_READ ||
+	    zio->io_type == ZIO_TYPE_WRITE || zio->io_type == ZIO_TYPE_TRIM);
 
 	if (zio->io_delay)
 		zio->io_delay = gethrtime() - zio->io_delay;
@@ -3736,7 +3765,7 @@ zio_vdev_io_done(zio_t *zio)
 		if (zio_injection_enabled && zio->io_error == 0)
 			zio->io_error = zio_handle_label_injection(zio, EIO);
 
-		if (zio->io_error) {
+		if (zio->io_error && zio->io_type != ZIO_TYPE_TRIM) {
 			if (!vdev_accessible(vd, zio)) {
 				zio->io_error = SET_ERROR(ENXIO);
 			} else {
@@ -3866,8 +3895,8 @@ zio_vdev_io_assess(zio_t *zio)
 
 	/*
 	 * If a cache flush returns ENOTSUP or ENOTTY, we know that no future
-	 * attempts will ever succeed. In this case we set a persistent bit so
-	 * that we don't bother with it in the future.
+	 * attempts will ever succeed. In this case we set a persistent
+	 * boolean flag so that we don't bother with it in the future.
 	 */
 	if ((zio->io_error == ENOTSUP || zio->io_error == ENOTTY) &&
 	    zio->io_type == ZIO_TYPE_IOCTL &&
@@ -4132,6 +4161,10 @@ zio_checksum_verify(zio_t *zio)
 		zio->io_error = error;
 		if (error == ECKSUM &&
 		    !(zio->io_flags & ZIO_FLAG_SPECULATIVE)) {
+			mutex_enter(&zio->io_vd->vdev_stat_lock);
+			zio->io_vd->vdev_stat.vs_checksum_errors++;
+			mutex_exit(&zio->io_vd->vdev_stat_lock);
+
 			zfs_ereport_start_checksum(zio->io_spa,
 			    zio->io_vd, &zio->io_bookmark, zio,
 			    zio->io_offset, zio->io_size, NULL, &info);
@@ -4467,9 +4500,18 @@ zio_done(zio_t *zio)
 		 * device is currently unavailable.
 		 */
 		if (zio->io_error != ECKSUM && zio->io_vd != NULL &&
-		    !vdev_is_dead(zio->io_vd))
+		    !vdev_is_dead(zio->io_vd)) {
+			mutex_enter(&zio->io_vd->vdev_stat_lock);
+			if (zio->io_type == ZIO_TYPE_READ) {
+				zio->io_vd->vdev_stat.vs_read_errors++;
+			} else if (zio->io_type == ZIO_TYPE_WRITE) {
+				zio->io_vd->vdev_stat.vs_write_errors++;
+			}
+			mutex_exit(&zio->io_vd->vdev_stat_lock);
+
 			zfs_ereport_post(FM_EREPORT_ZFS_IO, zio->io_spa,
 			    zio->io_vd, &zio->io_bookmark, zio, 0, 0);
+		}
 
 		if ((zio->io_error == EIO || !(zio->io_flags &
 		    (ZIO_FLAG_SPECULATIVE | ZIO_FLAG_DONT_PROPAGATE))) &&

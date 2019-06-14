@@ -625,6 +625,7 @@ typedef struct send_data {
 	const char *tosnap;
 	boolean_t recursive;
 	boolean_t raw;
+	boolean_t doall;
 	boolean_t replicate;
 	boolean_t verbose;
 	boolean_t backup;
@@ -949,14 +950,37 @@ send_iterate_fs(zfs_handle_t *zhp, void *arg)
 	sd->parent_fromsnap_guid = 0;
 	sd->parent_snaps = fnvlist_alloc();
 	sd->snapprops = fnvlist_alloc();
-	if (!sd->replicate && fromsnap_txg != 0)
-		min_txg = fromsnap_txg;
-	if (!sd->replicate && tosnap_txg != 0)
-		max_txg = tosnap_txg;
 	if (sd->holds)
 		VERIFY(0 == nvlist_alloc(&sd->snapholds, NV_UNIQUE_NAME, 0));
-	(void) zfs_iter_snapshots_sorted(zhp, send_iterate_snap, sd,
-	    min_txg, max_txg);
+
+
+	/*
+	 * If this is a "doall" send, a replicate send or we're just trying
+	 * to gather a list of previous snapshots, iterate through all the
+	 * snaps in the txg range. Otherwise just look at the one we're
+	 * interested in.
+	 */
+	if (sd->doall || sd->replicate || sd->tosnap == NULL) {
+		if (!sd->replicate && fromsnap_txg != 0)
+			min_txg = fromsnap_txg;
+		if (!sd->replicate && tosnap_txg != 0)
+			max_txg = tosnap_txg;
+		(void) zfs_iter_snapshots_sorted(zhp, send_iterate_snap, sd,
+		    min_txg, max_txg);
+	} else {
+		char snapname[MAXPATHLEN] = { 0 };
+		zfs_handle_t *snap;
+
+		(void) snprintf(snapname, sizeof (snapname), "%s@%s",
+		    zhp->zfs_name, sd->tosnap);
+		if (sd->fromsnap != NULL)
+			sd->seenfrom = B_TRUE;
+		snap = zfs_open(zhp->zfs_hdl, snapname,
+		    ZFS_TYPE_SNAPSHOT);
+		if (snap != NULL)
+			(void) send_iterate_snap(snap, sd);
+	}
+
 	fnvlist_add_nvlist(nvfs, "snaps", sd->parent_snaps);
 	fnvlist_add_nvlist(nvfs, "snapprops", sd->snapprops);
 	if (sd->holds)
@@ -987,10 +1011,9 @@ out:
 
 static int
 gather_nvlist(libzfs_handle_t *hdl, const char *fsname, const char *fromsnap,
-    const char *tosnap, boolean_t recursive, boolean_t raw, boolean_t replicate,
-    boolean_t verbose, boolean_t backup, boolean_t holds, boolean_t props,
-    nvlist_t **nvlp,
-    avl_tree_t **avlp)
+    const char *tosnap, boolean_t recursive, boolean_t raw, boolean_t doall,
+    boolean_t replicate, boolean_t verbose, boolean_t backup, boolean_t holds,
+    boolean_t props, nvlist_t **nvlp, avl_tree_t **avlp)
 {
 	zfs_handle_t *zhp;
 	send_data_t sd = { 0 };
@@ -1006,6 +1029,7 @@ gather_nvlist(libzfs_handle_t *hdl, const char *fsname, const char *fromsnap,
 	sd.tosnap = tosnap;
 	sd.recursive = recursive;
 	sd.raw = raw;
+	sd.doall = doall;
 	sd.replicate = replicate;
 	sd.verbose = verbose;
 	sd.backup = backup;
@@ -1225,7 +1249,8 @@ send_progress_thread(void *arg)
 	(void) strlcpy(zc.zc_name, zhp->zfs_name, sizeof (zc.zc_name));
 
 	if (!pa->pa_parsable)
-		(void) fprintf(stderr, "TIME        SENT   SNAPSHOT\n");
+		(void) fprintf(stderr, "TIME        SENT   SNAPSHOT %s\n",
+		    zhp->zfs_name);
 
 	/*
 	 * Print the progress from ZFS_IOC_SEND_PROGRESS every second.
@@ -1478,15 +1503,49 @@ dump_filesystem(zfs_handle_t *zhp, void *arg)
 	if (sdd->fromsnap == NULL || missingfrom)
 		sdd->seenfrom = B_TRUE;
 
-	if (!sdd->replicate && sdd->fromsnap != NULL)
-		min_txg = get_snap_txg(zhp->zfs_hdl, zhp->zfs_name,
-		    sdd->fromsnap);
-	if (!sdd->replicate && sdd->tosnap != NULL)
-		max_txg = get_snap_txg(zhp->zfs_hdl, zhp->zfs_name,
-		    sdd->tosnap);
 
-	rv = zfs_iter_snapshots_sorted(zhp, dump_snapshot, arg,
-	    min_txg, max_txg);
+
+	/*
+	 * Iterate through all snapshots and process the ones we will be
+	 * sending. If we only have a "from" and "to" snapshot to deal
+	 * with, we can avoid iterating through all the other snapshots.
+	 */
+	if (sdd->doall || sdd->replicate || sdd->tosnap == NULL) {
+		if (!sdd->replicate && sdd->fromsnap != NULL)
+			min_txg = get_snap_txg(zhp->zfs_hdl, zhp->zfs_name,
+			    sdd->fromsnap);
+		if (!sdd->replicate && sdd->tosnap != NULL)
+			max_txg = get_snap_txg(zhp->zfs_hdl, zhp->zfs_name,
+			    sdd->tosnap);
+		rv = zfs_iter_snapshots_sorted(zhp, dump_snapshot, arg,
+		    min_txg, max_txg);
+	} else {
+		char snapname[MAXPATHLEN] = { 0 };
+		zfs_handle_t *snap;
+
+		if (!sdd->seenfrom) {
+			(void) snprintf(snapname, sizeof (snapname),
+			    "%s@%s", zhp->zfs_name, sdd->fromsnap);
+			snap = zfs_open(zhp->zfs_hdl, snapname,
+			    ZFS_TYPE_SNAPSHOT);
+			if (snap != NULL)
+				rv = dump_snapshot(snap, sdd);
+			else
+				rv = -1;
+		}
+
+		if (rv == 0) {
+			(void) snprintf(snapname, sizeof (snapname),
+			    "%s@%s", zhp->zfs_name, sdd->tosnap);
+			snap = zfs_open(zhp->zfs_hdl, snapname,
+			    ZFS_TYPE_SNAPSHOT);
+			if (snap != NULL)
+				rv = dump_snapshot(snap, sdd);
+			else
+				rv = -1;
+		}
+	}
+
 	if (!sdd->seenfrom) {
 		(void) fprintf(stderr, dgettext(TEXT_DOMAIN,
 		    "WARNING: could not send %s@%s:\n"
@@ -1965,8 +2024,9 @@ zfs_send(zfs_handle_t *zhp, const char *fromsnap, const char *tosnap,
 
 			err = gather_nvlist(zhp->zfs_hdl, zhp->zfs_name,
 			    fromsnap, tosnap, flags->replicate, flags->raw,
-			    flags->replicate, flags->verbose, flags->backup,
-			    flags->holds, flags->props, &fss, &fsavl);
+			    flags->doall, flags->replicate, flags->verbose,
+			    flags->backup, flags->holds, flags->props, &fss,
+			    &fsavl);
 			if (err)
 				goto err_out;
 			VERIFY(0 == nvlist_add_nvlist(hdrnv, "fss", fss));
@@ -2699,13 +2759,13 @@ created_before(libzfs_handle_t *hdl, avl_tree_t *avl,
 }
 
 /*
- * This function reestablishes the heirarchy of encryption roots after a
+ * This function reestablishes the hierarchy of encryption roots after a
  * recursive incremental receive has completed. This must be done after the
  * second call to recv_incremental_replication() has renamed and promoted all
- * sent datasets to their final locations in the dataset heriarchy.
+ * sent datasets to their final locations in the dataset hierarchy.
  */
 static int
-recv_fix_encryption_heirarchy(libzfs_handle_t *hdl, const char *destname,
+recv_fix_encryption_hierarchy(libzfs_handle_t *hdl, const char *destname,
     nvlist_t *stream_nv, avl_tree_t *stream_avl)
 {
 	int err;
@@ -2870,8 +2930,8 @@ again:
 	VERIFY(0 == nvlist_alloc(&deleted, NV_UNIQUE_NAME, 0));
 
 	if ((error = gather_nvlist(hdl, tofs, fromsnap, NULL,
-	    recursive, B_TRUE, recursive, B_FALSE, B_FALSE, B_FALSE, B_TRUE,
-	    &local_nv, &local_avl)) != 0)
+	    recursive, B_TRUE, B_FALSE, recursive, B_FALSE, B_FALSE,
+	    B_FALSE, B_TRUE, &local_nv, &local_avl)) != 0)
 		return (error);
 
 	/*
@@ -3346,7 +3406,7 @@ zfs_receive_package(libzfs_handle_t *hdl, int fd, const char *destname,
 	}
 
 	if (raw && softerr == 0) {
-		softerr = recv_fix_encryption_heirarchy(hdl, destname,
+		softerr = recv_fix_encryption_hierarchy(hdl, destname,
 		    stream_nv, stream_avl);
 	}
 
@@ -3755,7 +3815,7 @@ zfs_receive_one(libzfs_handle_t *hdl, int infd, const char *tosnap,
 		/*
 		 * The keylocation property may only be set on encryption roots,
 		 * but this dataset might not become an encryption root until
-		 * recv_fix_encryption_heirarchy() is called. That function
+		 * recv_fix_encryption_hierarchy() is called. That function
 		 * will fixup the keylocation anyway, so we temporarily unset
 		 * the keylocation for now to avoid any errors from the receive
 		 * ioctl.
@@ -4304,8 +4364,8 @@ zfs_receive_one(libzfs_handle_t *hdl, int infd, const char *tosnap,
 		 */
 		*cp = '\0';
 		if (gather_nvlist(hdl, destsnap, NULL, NULL, B_FALSE, B_TRUE,
-		    B_FALSE, B_FALSE, B_FALSE, B_FALSE, B_TRUE, &local_nv,
-		    &local_avl) == 0) {
+		    B_FALSE, B_FALSE, B_FALSE, B_FALSE, B_FALSE, B_TRUE,
+		    &local_nv, &local_avl) == 0) {
 			*cp = '@';
 			fs = fsavl_find(local_avl, drrb->drr_toguid, NULL);
 			fsavl_destroy(local_avl);
@@ -4394,8 +4454,8 @@ zfs_receive_one(libzfs_handle_t *hdl, int infd, const char *tosnap,
 			break;
 		case ZFS_ERR_FROM_IVSET_GUID_MISSING:
 			zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
-			    "IV set guid missing. See errata %u at"
-			    "http://zfsonlinux.org/msg/ZFS-8000-ER"),
+			    "IV set guid missing. See errata %u at "
+			    "http://zfsonlinux.org/msg/ZFS-8000-ER."),
 			    ZPOOL_ERRATA_ZOL_8308_ENCRYPTION);
 			(void) zfs_error(hdl, EZFS_BADSTREAM, errbuf);
 			break;
@@ -4404,6 +4464,13 @@ zfs_receive_one(libzfs_handle_t *hdl, int infd, const char *tosnap,
 			    "IV set guid mismatch. See the 'zfs receive' "
 			    "man page section\n discussing the limitations "
 			    "of raw encrypted send streams."));
+			(void) zfs_error(hdl, EZFS_BADSTREAM, errbuf);
+			break;
+		case ZFS_ERR_SPILL_BLOCK_FLAG_MISSING:
+			zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
+			    "Spill block flag missing for raw send.\n"
+			    "The zfs software on the sending system must "
+			    "be updated."));
 			(void) zfs_error(hdl, EZFS_BADSTREAM, errbuf);
 			break;
 		case EBUSY:

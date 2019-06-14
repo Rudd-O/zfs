@@ -439,6 +439,7 @@ int
 zfs_read(struct inode *ip, uio_t *uio, int ioflag, cred_t *cr)
 {
 	int error = 0;
+	boolean_t frsync = B_FALSE;
 
 	znode_t *zp = ITOZ(ip);
 	zfsvfs_t *zfsvfs = ITOZSB(ip);
@@ -466,12 +467,19 @@ zfs_read(struct inode *ip, uio_t *uio, int ioflag, cred_t *cr)
 		return (0);
 	}
 
+#ifdef FRSYNC
 	/*
 	 * If we're in FRSYNC mode, sync out this znode before reading it.
 	 * Only do this for non-snapshots.
+	 *
+	 * Some platforms do not support FRSYNC and instead map it
+	 * to FSYNC, which results in unnecessary calls to zil_commit. We
+	 * only honor FRSYNC requests on platforms which support it.
 	 */
+	frsync = !!(ioflag & FRSYNC);
+#endif
 	if (zfsvfs->z_log &&
-	    (ioflag & FRSYNC || zfsvfs->z_os->os_sync == ZFS_SYNC_ALWAYS))
+	    (frsync || zfsvfs->z_os->os_sync == ZFS_SYNC_ALWAYS))
 		zil_commit(zfsvfs->z_log, zp->z_id);
 
 	/*
@@ -814,6 +822,7 @@ zfs_write(struct inode *ip, uio_t *uio, int ioflag, cred_t *cr)
 			uio->uio_fault_disable = B_TRUE;
 			error = dmu_write_uio_dbuf(sa_get_db(zp->z_sa_hdl),
 			    uio, nbytes, tx);
+			uio->uio_fault_disable = B_FALSE;
 			if (error == EFAULT) {
 				dmu_tx_commit(tx);
 				if (uio_prefaultpages(MIN(n, max_blksz), uio)) {
@@ -1283,7 +1292,7 @@ zfs_lookup(struct inode *dip, char *nm, struct inode **ipp, int flags,
  *		excl	- flag indicating exclusive or non-exclusive mode.
  *		mode	- mode to open file with.
  *		cr	- credentials of caller.
- *		flag	- large file flag [UNUSED].
+ *		flag	- file flag.
  *		vsecp	- ACL to be set
  *
  *	OUT:	ipp	- inode of created or trunc'd entry.
@@ -1667,6 +1676,7 @@ out:
  *	IN:	dip	- inode of directory to remove entry from.
  *		name	- name of entry to remove.
  *		cr	- credentials of caller.
+ *		flags	- case flags.
  *
  *	RETURN:	0 if success
  *		error code if failure
@@ -1908,6 +1918,7 @@ out:
  *		dirname	- name of new directory.
  *		vap	- attributes of new directory.
  *		cr	- credentials of caller.
+ *		flags	- case flags.
  *		vsecp	- ACL to be set
  *
  *	OUT:	ipp	- inode of created directory.
@@ -2226,13 +2237,12 @@ out:
 }
 
 /*
- * Read as many directory entries as will fit into the provided
- * dirent buffer from the given directory cursor position.
+ * Read directory entries from the given directory cursor position and emit
+ * name and position for each entry.
  *
  *	IN:	ip	- inode of directory to read.
- *		dirent	- buffer for directory entries.
- *
- *	OUT:	dirent	- filler buffer of directory entries.
+ *		ctx	- directory entry context.
+ *		cr	- credentials of caller.
  *
  *	RETURN:	0 if success
  *		error code if failure
@@ -2648,6 +2658,12 @@ zfs_getattr_fast(struct inode *ip, struct kstat *sp)
 	mutex_enter(&zp->z_lock);
 
 	generic_fillattr(ip, sp);
+	/*
+	 * +1 link count for root inode with visible '.zfs' directory.
+	 */
+	if ((zp->z_id == zfsvfs->z_root) && zfs_show_ctldir(zp))
+		if (sp->nlink < ZFS_LINK_MAX)
+			sp->nlink++;
 
 	sa_object_size(zp->z_sa_hdl, &blksize, &nblocks);
 	sp->blksize = blksize;
@@ -2702,11 +2718,12 @@ zfs_setattr_dir(znode_t *dzp)
 	dmu_tx_t	*tx = NULL;
 	uint64_t	uid, gid;
 	sa_bulk_attr_t	bulk[4];
-	int		count = 0;
+	int		count;
 	int		err;
 
 	zap_cursor_init(&zc, os, dzp->z_id);
 	while ((err = zap_cursor_retrieve(&zc, &zap)) == 0) {
+		count = 0;
 		if (zap.za_integer_length != 8 || zap.za_num_integers != 1) {
 			err = ENXIO;
 			break;
@@ -3990,12 +4007,13 @@ out:
  * Insert the indicated symbolic reference entry into the directory.
  *
  *	IN:	dip	- Directory to contain new symbolic link.
- *		link	- Name for new symlink entry.
+ *		name	- Name of directory entry in dip.
  *		vap	- Attributes of new entry.
- *		target	- Target path of new symlink.
- *
+ *		link	- Name for new symlink entry.
  *		cr	- credentials of caller.
  *		flags	- case flags
+ *
+ *	OUT:	ipp	- Inode for new symbolic link.
  *
  *	RETURN:	0 on success, error code on failure.
  *
@@ -4200,6 +4218,7 @@ zfs_readlink(struct inode *ip, uio_t *uio, cred_t *cr)
  *		sip	- inode of new entry.
  *		name	- name of new entry.
  *		cr	- credentials of caller.
+ *		flags	- case flags.
  *
  *	RETURN:	0 if success
  *		error code if failure
@@ -4510,8 +4529,10 @@ zfs_putpage(struct inode *ip, struct page *pp, struct writeback_control *wbc)
 		unlock_page(pp);
 		rangelock_exit(lr);
 
-		if (wbc->sync_mode != WB_SYNC_NONE)
-			wait_on_page_writeback(pp);
+		if (wbc->sync_mode != WB_SYNC_NONE) {
+			if (PageWriteback(pp))
+				wait_on_page_bit(pp, PG_writeback);
+		}
 
 		ZFS_EXIT(zfsvfs);
 		return (0);
@@ -4711,7 +4732,6 @@ zfs_inactive(struct inode *ip)
  *	IN:	ip	- inode seeking within
  *		ooff	- old file offset
  *		noffp	- pointer to new file offset
- *		ct	- caller context
  *
  *	RETURN:	0 if success
  *		EINVAL if new offset invalid
@@ -4858,19 +4878,19 @@ convoff(struct inode *ip, flock64_t *lckdat, int  whence, offset_t offset)
 	vattr_t vap;
 	int error;
 
-	if ((lckdat->l_whence == 2) || (whence == 2)) {
+	if ((lckdat->l_whence == SEEK_END) || (whence == SEEK_END)) {
 		if ((error = zfs_getattr(ip, &vap, 0, CRED())))
 			return (error);
 	}
 
 	switch (lckdat->l_whence) {
-	case 1:
+	case SEEK_CUR:
 		lckdat->l_start += offset;
 		break;
-	case 2:
+	case SEEK_END:
 		lckdat->l_start += vap.va_size;
 		/* FALLTHRU */
-	case 0:
+	case SEEK_SET:
 		break;
 	default:
 		return (SET_ERROR(EINVAL));
@@ -4880,13 +4900,13 @@ convoff(struct inode *ip, flock64_t *lckdat, int  whence, offset_t offset)
 		return (SET_ERROR(EINVAL));
 
 	switch (whence) {
-	case 1:
+	case SEEK_CUR:
 		lckdat->l_start -= offset;
 		break;
-	case 2:
+	case SEEK_END:
 		lckdat->l_start -= vap.va_size;
 		/* FALLTHRU */
-	case 0:
+	case SEEK_SET:
 		break;
 	default:
 		return (SET_ERROR(EINVAL));
@@ -4907,7 +4927,7 @@ convoff(struct inode *ip, flock64_t *lckdat, int  whence, offset_t offset)
  *		bfp	- section of file to free/alloc.
  *		flag	- current file open mode flags.
  *		offset	- current file offset.
- *		cr	- credentials of caller [UNUSED].
+ *		cr	- credentials of caller.
  *
  *	RETURN:	0 on success, error code on failure.
  *
@@ -4941,7 +4961,7 @@ zfs_space(struct inode *ip, int cmd, flock64_t *bfp, int flag,
 		return (SET_ERROR(EROFS));
 	}
 
-	if ((error = convoff(ip, bfp, 0, offset))) {
+	if ((error = convoff(ip, bfp, SEEK_SET, offset))) {
 		ZFS_EXIT(zfsvfs);
 		return (error);
 	}

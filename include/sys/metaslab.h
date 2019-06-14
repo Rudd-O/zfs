@@ -50,6 +50,7 @@ int metaslab_init(metaslab_group_t *, uint64_t, uint64_t, uint64_t,
 void metaslab_fini(metaslab_t *);
 
 int metaslab_load(metaslab_t *);
+void metaslab_potentially_unload(metaslab_t *, uint64_t);
 void metaslab_unload(metaslab_t *);
 
 uint64_t metaslab_allocated_space(metaslab_t *);
@@ -120,6 +121,8 @@ void metaslab_group_alloc_decrement(spa_t *, uint64_t, void *, int, int,
     boolean_t);
 void metaslab_group_alloc_verify(spa_t *, const blkptr_t *, void *, int);
 void metaslab_recalculate_weight_and_sort(metaslab_t *);
+void metaslab_disable(metaslab_t *);
+void metaslab_enable(metaslab_t *, boolean_t);
 
 #ifdef	__cplusplus
 }

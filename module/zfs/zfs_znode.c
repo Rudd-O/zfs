@@ -67,20 +67,6 @@
 #include "zfs_comutil.h"
 
 /*
- * Define ZNODE_STATS to turn on statistic gathering. By default, it is only
- * turned on when DEBUG is also defined.
- */
-#ifdef	DEBUG
-#define	ZNODE_STATS
-#endif	/* DEBUG */
-
-#ifdef	ZNODE_STATS
-#define	ZNODE_STAT_ADD(stat)			((stat)++)
-#else
-#define	ZNODE_STAT_ADD(stat)			/* nothing */
-#endif	/* ZNODE_STATS */
-
-/*
  * Functions needed for userland (ie: libzpool) are not put under
  * #ifdef_KERNEL; the rest of the functions have dependencies
  * (such as VFS logic) that will not compile easily in userland.
@@ -529,7 +515,7 @@ zfs_inode_update(znode_t *zp)
  */
 static znode_t *
 zfs_znode_alloc(zfsvfs_t *zfsvfs, dmu_buf_t *db, int blksz,
-    dmu_object_type_t obj_type, uint64_t obj, sa_handle_t *hdl)
+    dmu_object_type_t obj_type, sa_handle_t *hdl)
 {
 	znode_t	*zp;
 	struct inode *ip;
@@ -610,7 +596,7 @@ zfs_znode_alloc(zfsvfs_t *zfsvfs, dmu_buf_t *db, int blksz,
 	ZFS_TIME_DECODE(&ip->i_mtime, mtime);
 	ZFS_TIME_DECODE(&ip->i_ctime, ctime);
 
-	ip->i_ino = obj;
+	ip->i_ino = zp->z_id;
 	zfs_inode_update(zp);
 	zfs_inode_set_ops(zfsvfs, ip);
 
@@ -665,12 +651,11 @@ static zfs_acl_phys_t acl_phys;
  *		cr	- credentials of caller
  *		flag	- flags:
  *			  IS_ROOT_NODE	- new object will be root
+ *			  IS_TMPFILE	- new object is of O_TMPFILE
  *			  IS_XATTR	- new object is an attribute
- *		bonuslen - length of bonus buffer
- *		setaclp  - File/Dir initial ACL
- *		fuidp	 - Tracks fuid allocation.
+ *		acl_ids	- ACL related attributes
  *
- *	OUT:	zpp	- allocated znode
+ *	OUT:	zpp	- allocated znode (set to dzp if IS_ROOT_NODE)
  *
  */
 void
@@ -925,8 +910,7 @@ zfs_mknode(znode_t *dzp, vattr_t *vap, dmu_tx_t *tx, cred_t *cr,
 		 * not fail retry until sufficient memory has been reclaimed.
 		 */
 		do {
-			*zpp = zfs_znode_alloc(zfsvfs, db, 0, obj_type, obj,
-			    sa_hdl);
+			*zpp = zfs_znode_alloc(zfsvfs, db, 0, obj_type, sa_hdl);
 		} while (*zpp == NULL);
 
 		VERIFY(*zpp != NULL);
@@ -1149,7 +1133,7 @@ again:
 	 * bonus buffer.
 	 */
 	zp = zfs_znode_alloc(zfsvfs, db, doi.doi_data_block_size,
-	    doi.doi_bonus_type, obj_num, NULL);
+	    doi.doi_bonus_type, NULL);
 	if (zp == NULL) {
 		err = SET_ERROR(ENOENT);
 	} else {
@@ -1269,7 +1253,7 @@ zfs_rezget(znode_t *zp)
 	ZFS_TIME_DECODE(&ZTOI(zp)->i_mtime, mtime);
 	ZFS_TIME_DECODE(&ZTOI(zp)->i_ctime, ctime);
 
-	if (gen != ZTOI(zp)->i_generation) {
+	if ((uint32_t)gen != ZTOI(zp)->i_generation) {
 		zfs_znode_dmu_fini(zp);
 		zfs_znode_hold_exit(zfsvfs, zh);
 		return (SET_ERROR(EIO));
@@ -1359,16 +1343,39 @@ zfs_zinactive(znode_t *zp)
 	zfs_znode_hold_exit(zfsvfs, zh);
 }
 
-static inline int
-zfs_compare_timespec(struct timespec *t1, struct timespec *t2)
+#if defined(HAVE_INODE_TIMESPEC64_TIMES)
+#define	zfs_compare_timespec timespec64_compare
+#else
+#define	zfs_compare_timespec timespec_compare
+#endif
+
+/*
+ * Determine whether the znode's atime must be updated.  The logic mostly
+ * duplicates the Linux kernel's relatime_need_update() functionality.
+ * This function is only called if the underlying filesystem actually has
+ * atime updates enabled.
+ */
+boolean_t
+zfs_relatime_need_update(const struct inode *ip)
 {
-	if (t1->tv_sec < t2->tv_sec)
-		return (-1);
+	inode_timespec_t now;
 
-	if (t1->tv_sec > t2->tv_sec)
-		return (1);
+	gethrestime(&now);
+	/*
+	 * In relatime mode, only update the atime if the previous atime
+	 * is earlier than either the ctime or mtime or if at least a day
+	 * has passed since the last update of atime.
+	 */
+	if (zfs_compare_timespec(&ip->i_mtime, &ip->i_atime) >= 0)
+		return (B_TRUE);
 
-	return (t1->tv_nsec - t2->tv_nsec);
+	if (zfs_compare_timespec(&ip->i_ctime, &ip->i_atime) >= 0)
+		return (B_TRUE);
+
+	if ((hrtime_t)now.tv_sec - (hrtime_t)ip->i_atime.tv_sec >= 24*60*60)
+		return (B_TRUE);
+
+	return (B_FALSE);
 }
 
 /*

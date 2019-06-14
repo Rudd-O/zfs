@@ -58,7 +58,6 @@
 #define	FOFFMAX		O_LARGEFILE
 #define	FSYNC		O_SYNC
 #define	FDSYNC		O_DSYNC
-#define	FRSYNC		O_SYNC
 #define	FEXCL		O_EXCL
 #define	FDIRECT		O_DIRECT
 #define	FAPPEND		O_APPEND
@@ -183,7 +182,6 @@ extern int vn_space(vnode_t *vp, int cmd, struct flock *bfp, int flag,
 extern file_t *vn_getf(int fd);
 extern void vn_releasef(int fd);
 extern void vn_areleasef(int fd, uf_info_t *fip);
-extern int vn_set_pwd(const char *filename);
 
 int spl_vn_init(void);
 void spl_vn_fini(void);
