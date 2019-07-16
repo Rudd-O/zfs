@@ -42,6 +42,7 @@ install() {
 	dracut_install xargs
 	dracut_install mount
 	dracut_install swapon
+	dracut_install lsof
 	dracut_install @sbindir@/zfs
 	dracut_install @sbindir@/zpool
 	# Workaround for zfsonlinux/zfs#4749 by ensuring libgcc_s.so(.1) is included
