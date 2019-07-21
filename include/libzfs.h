@@ -22,7 +22,7 @@
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2011, 2018 by Delphix. All rights reserved.
- * Copyright (c) 2012, Joyent, Inc. All rights reserved.
+ * Copyright Joyent, Inc.
  * Copyright (c) 2013 Steven Hartland. All rights reserved.
  * Copyright (c) 2016, Intel Corporation.
  * Copyright 2016 Nexenta Systems, Inc.
@@ -147,6 +147,7 @@ typedef enum zfs_error {
 	EZFS_NO_TRIM,		/* no active trim */
 	EZFS_TRIM_NOTSUP,	/* device does not support trim */
 	EZFS_NO_RESILVER_DEFER,	/* pool doesn't support resilver_defer */
+	EZFS_EXPORT_IN_PROGRESS,	/* currently exporting the pool */
 	EZFS_UNKNOWN
 } zfs_error_t;
 
@@ -624,8 +625,8 @@ extern int zfs_rollback(zfs_handle_t *, zfs_handle_t *, boolean_t);
 extern int zfs_rename(zfs_handle_t *, const char *, boolean_t, boolean_t);
 
 typedef struct sendflags {
-	/* print informational messages (ie, -v was specified) */
-	boolean_t verbose;
+	/* Amount of extra information to print. */
+	int verbosity;
 
 	/* recursive send  (ie, -R) */
 	boolean_t replicate;
@@ -674,7 +675,9 @@ typedef boolean_t (snapfilter_cb_t)(zfs_handle_t *, void *);
 
 extern int zfs_send(zfs_handle_t *, const char *, const char *,
     sendflags_t *, int, snapfilter_cb_t, void *, nvlist_t **);
-extern int zfs_send_one(zfs_handle_t *, const char *, int, sendflags_t flags);
+extern int zfs_send_one(zfs_handle_t *, const char *, int, sendflags_t *,
+    const char *);
+extern int zfs_send_progress(zfs_handle_t *, int, uint64_t *, uint64_t *);
 extern int zfs_send_resume(libzfs_handle_t *, sendflags_t *, int outfd,
     const char *);
 extern nvlist_t *zfs_send_resume_token_to_nvlist(libzfs_handle_t *hdl,
@@ -686,7 +689,8 @@ extern int zfs_hold(zfs_handle_t *, const char *, const char *,
 extern int zfs_hold_nvl(zfs_handle_t *, int, nvlist_t *);
 extern int zfs_release(zfs_handle_t *, const char *, const char *, boolean_t);
 extern int zfs_get_holds(zfs_handle_t *, nvlist_t **);
-extern uint64_t zvol_volsize_to_reservation(uint64_t, nvlist_t *);
+extern uint64_t zvol_volsize_to_reservation(zpool_handle_t *, uint64_t,
+    nvlist_t *);
 
 typedef int (*zfs_userspace_cb_t)(void *arg, const char *domain,
     uid_t rid, uint64_t space);
@@ -849,8 +853,6 @@ int zfs_smb_acl_rename(libzfs_handle_t *, char *, char *, char *, char *);
  */
 extern int zpool_enable_datasets(zpool_handle_t *, const char *, int);
 extern int zpool_disable_datasets(zpool_handle_t *, boolean_t);
-
-extern int zfs_remap_indirects(libzfs_handle_t *hdl, const char *);
 
 #ifdef	__cplusplus
 }

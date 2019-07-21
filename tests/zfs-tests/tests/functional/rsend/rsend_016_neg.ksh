@@ -1,6 +1,5 @@
-#! /bin/ksh -p
-#
-# CDDL HEADER START
+#!/usr/bin/ksh
+
 #
 # This file and its contents are supplied under the terms of the
 # Common Development and Distribution License ("CDDL"), version 1.0.
@@ -11,22 +10,24 @@
 # source.  A copy of the CDDL is also available via the Internet at
 # http://www.illumos.org/license/CDDL.
 #
-# CDDL HEADER END
-#
 
 #
-# Copyright (c) 2015, 2017 by Delphix. All rights reserved.
+# Copyright (c) 2014, 2018 by Delphix. All rights reserved.
 #
 
 . $STF_SUITE/include/libtest.shlib
-. $STF_SUITE/tests/functional/removal/removal.kshlib
+. $STF_SUITE/tests/functional/rsend/rsend.kshlib
 
-# N.B. The 'zfs remap' command has been disabled and may be removed.
-export ZFS_REMAP_ENABLED=YES
+#
+# Description:
+# Verify that error conditions don't cause panics in zfs send
+#
+# Strategy:
+# 1. Perform a zfs incremental send from a bookmark that doesn't exist
+#
 
-default_setup_noexit "$DISKS"
-log_onexit default_cleanup_noexit
+verify_runnable "both"
 
-test_removal_with_operation zfs remap $TESTPOOL/$TESTFS
+log_neg eval "zfs send -i \#bla $POOl/$FS@final > /dev/null"
 
-log_pass "Can remap a filesystem during removal"
+log_pass "Ensure that error conditions cause appropriate failures."

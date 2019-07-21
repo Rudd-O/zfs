@@ -342,7 +342,6 @@ int dmu_objset_find(char *name, int func(const char *, void *), void *arg,
 void dmu_objset_byteswap(void *buf, size_t size);
 int dsl_dataset_rename_snapshot(const char *fsname,
     const char *oldsnapname, const char *newsnapname, boolean_t recursive);
-int dmu_objset_remap_indirects(const char *fsname);
 
 typedef struct dmu_buf {
 	uint64_t db_object;		/* object that this buffer is part of */
@@ -383,6 +382,7 @@ typedef struct dmu_buf {
 #define	DMU_POOL_OBSOLETE_BPOBJ		"com.delphix:obsolete_bpobj"
 #define	DMU_POOL_CONDENSING_INDIRECT	"com.delphix:condensing_indirect"
 #define	DMU_POOL_ZPOOL_CHECKPOINT	"com.delphix:zpool_checkpoint"
+#define	DMU_POOL_LOG_SPACEMAP_ZAP	"com.delphix:log_spacemap_zap"
 
 /*
  * Allocate an object from this objset.  The range of object numbers
@@ -498,12 +498,11 @@ void dmu_object_set_checksum(objset_t *os, uint64_t object, uint8_t checksum,
 void dmu_object_set_compress(objset_t *os, uint64_t object, uint8_t compress,
     dmu_tx_t *tx);
 
-
-int dmu_object_remap_indirects(objset_t *os, uint64_t object, uint64_t txg);
-
 void dmu_write_embedded(objset_t *os, uint64_t object, uint64_t offset,
     void *data, uint8_t etype, uint8_t comp, int uncompressed_size,
     int compressed_size, int byteorder, dmu_tx_t *tx);
+void dmu_redact(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
+    dmu_tx_t *tx);
 
 /*
  * Decide how to write a block: checksum, compression, number of copies, etc.
@@ -775,7 +774,6 @@ void dmu_tx_hold_free(dmu_tx_t *tx, uint64_t object, uint64_t off,
     uint64_t len);
 void dmu_tx_hold_free_by_dnode(dmu_tx_t *tx, dnode_t *dn, uint64_t off,
     uint64_t len);
-void dmu_tx_hold_remap_l1indirect(dmu_tx_t *tx, uint64_t object);
 void dmu_tx_hold_zap(dmu_tx_t *tx, uint64_t object, int add, const char *name);
 void dmu_tx_hold_zap_by_dnode(dmu_tx_t *tx, dnode_t *dn, int add,
     const char *name);
@@ -951,6 +949,7 @@ typedef struct dmu_objset_stats {
 	dmu_objset_type_t dds_type;
 	uint8_t dds_is_snapshot;
 	uint8_t dds_inconsistent;
+	uint8_t dds_redacted;
 	char dds_origin[ZFS_MAX_DATASET_NAME_LEN];
 } dmu_objset_stats_t;
 

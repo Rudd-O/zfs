@@ -908,7 +908,7 @@ zfs_blkptr_verify(spa_t *spa, const blkptr_t *bp)
 	}
 
 	if (BP_IS_EMBEDDED(bp)) {
-		if (BPE_GET_ETYPE(bp) > NUM_BP_EMBEDDED_TYPES) {
+		if (BPE_GET_ETYPE(bp) >= NUM_BP_EMBEDDED_TYPES) {
 			zfs_panic_recover("blkptr at %p has invalid ETYPE %llu",
 			    bp, (longlong_t)BPE_GET_ETYPE(bp));
 		}
@@ -1117,10 +1117,16 @@ zio_free(spa_t *spa, uint64_t txg, const blkptr_t *bp)
 	 * deferred, and which will not need to do a read (i.e. not GANG or
 	 * DEDUP), can be processed immediately.  Otherwise, put them on the
 	 * in-memory list for later processing.
+	 *
+	 * Note that we only defer frees after zfs_sync_pass_deferred_free
+	 * when the log space map feature is disabled. [see relevant comment
+	 * in spa_sync_iterate_to_convergence()]
 	 */
-	if (BP_IS_GANG(bp) || BP_GET_DEDUP(bp) ||
+	if (BP_IS_GANG(bp) ||
+	    BP_GET_DEDUP(bp) ||
 	    txg != spa->spa_syncing_txg ||
-	    spa_sync_pass(spa) >= zfs_sync_pass_deferred_free) {
+	    (spa_sync_pass(spa) >= zfs_sync_pass_deferred_free &&
+	    !spa_feature_is_active(spa, SPA_FEATURE_LOG_SPACEMAP))) {
 		bplist_append(&spa->spa_free_bplist[txg & TXG_MASK], bp);
 	} else {
 		VERIFY0(zio_wait(zio_free_sync(NULL, spa, txg, bp, 0)));
@@ -1136,7 +1142,6 @@ zio_free_sync(zio_t *pio, spa_t *spa, uint64_t txg, const blkptr_t *bp,
 
 	ASSERT(!BP_IS_HOLE(bp));
 	ASSERT(spa_syncing_txg(spa) == txg);
-	ASSERT(spa_sync_pass(spa) < zfs_sync_pass_deferred_free);
 
 	if (BP_IS_EMBEDDED(bp))
 		return (zio_null(pio, spa, NULL, NULL, NULL, 0));
@@ -2856,6 +2861,20 @@ zio_nop_write(zio_t *zio)
 		ASSERT(bcmp(&bp->blk_prop, &bp_orig->blk_prop,
 		    sizeof (uint64_t)) == 0);
 
+		/*
+		 * If we're overwriting a block that is currently on an
+		 * indirect vdev, then ignore the nopwrite request and
+		 * allow a new block to be allocated on a concrete vdev.
+		 */
+		spa_config_enter(zio->io_spa, SCL_VDEV, FTAG, RW_READER);
+		vdev_t *tvd = vdev_lookup_top(zio->io_spa,
+		    DVA_GET_VDEV(&bp->blk_dva[0]));
+		if (tvd->vdev_ops == &vdev_indirect_ops) {
+			spa_config_exit(zio->io_spa, SCL_VDEV, FTAG);
+			return (zio);
+		}
+		spa_config_exit(zio->io_spa, SCL_VDEV, FTAG);
+
 		*bp = *bp_orig;
 		zio->io_pipeline = ZIO_INTERLOCK_PIPELINE;
 		zio->io_flags |= ZIO_FLAG_NOPWRITE;
@@ -3118,35 +3137,6 @@ zio_ddt_child_write_done(zio_t *zio)
 	ddt_exit(ddt);
 }
 
-static void
-zio_ddt_ditto_write_done(zio_t *zio)
-{
-	int p = DDT_PHYS_DITTO;
-	ASSERTV(zio_prop_t *zp = &zio->io_prop);
-	blkptr_t *bp = zio->io_bp;
-	ddt_t *ddt = ddt_select(zio->io_spa, bp);
-	ddt_entry_t *dde = zio->io_private;
-	ddt_phys_t *ddp = &dde->dde_phys[p];
-	ddt_key_t *ddk = &dde->dde_key;
-
-	ddt_enter(ddt);
-
-	ASSERT(ddp->ddp_refcnt == 0);
-	ASSERT(dde->dde_lead_zio[p] == zio);
-	dde->dde_lead_zio[p] = NULL;
-
-	if (zio->io_error == 0) {
-		ASSERT(ZIO_CHECKSUM_EQUAL(bp->blk_cksum, ddk->ddk_cksum));
-		ASSERT(zp->zp_copies < SPA_DVAS_PER_BP);
-		ASSERT(zp->zp_copies == BP_GET_NDVAS(bp) - BP_IS_GANG(bp));
-		if (ddp->ddp_phys_birth != 0)
-			ddt_phys_free(ddt, ddk, ddp, zio->io_txg);
-		ddt_phys_fill(ddp, bp);
-	}
-
-	ddt_exit(ddt);
-}
-
 static zio_t *
 zio_ddt_write(zio_t *zio)
 {
@@ -3155,9 +3145,7 @@ zio_ddt_write(zio_t *zio)
 	uint64_t txg = zio->io_txg;
 	zio_prop_t *zp = &zio->io_prop;
 	int p = zp->zp_copies;
-	int ditto_copies;
 	zio_t *cio = NULL;
-	zio_t *dio = NULL;
 	ddt_t *ddt = ddt_select(spa, bp);
 	ddt_entry_t *dde;
 	ddt_phys_t *ddp;
@@ -3186,45 +3174,12 @@ zio_ddt_write(zio_t *zio)
 			BP_ZERO(bp);
 		} else {
 			zp->zp_dedup = B_FALSE;
+			BP_SET_DEDUP(bp, B_FALSE);
 		}
+		ASSERT(!BP_GET_DEDUP(bp));
 		zio->io_pipeline = ZIO_WRITE_PIPELINE;
 		ddt_exit(ddt);
 		return (zio);
-	}
-
-	ditto_copies = ddt_ditto_copies_needed(ddt, dde, ddp);
-	ASSERT(ditto_copies < SPA_DVAS_PER_BP);
-
-	if (ditto_copies > ddt_ditto_copies_present(dde) &&
-	    dde->dde_lead_zio[DDT_PHYS_DITTO] == NULL) {
-		zio_prop_t czp = *zp;
-
-		czp.zp_copies = ditto_copies;
-
-		/*
-		 * If we arrived here with an override bp, we won't have run
-		 * the transform stack, so we won't have the data we need to
-		 * generate a child i/o.  So, toss the override bp and restart.
-		 * This is safe, because using the override bp is just an
-		 * optimization; and it's rare, so the cost doesn't matter.
-		 */
-		if (zio->io_bp_override) {
-			zio_pop_transforms(zio);
-			zio->io_stage = ZIO_STAGE_OPEN;
-			zio->io_pipeline = ZIO_WRITE_PIPELINE;
-			zio->io_bp_override = NULL;
-			BP_ZERO(bp);
-			ddt_exit(ddt);
-			return (zio);
-		}
-
-		dio = zio_write(zio, spa, txg, bp, zio->io_orig_abd,
-		    zio->io_orig_size, zio->io_orig_size, &czp, NULL, NULL,
-		    NULL, zio_ddt_ditto_write_done, dde, zio->io_priority,
-		    ZIO_DDT_CHILD_FLAGS(zio), &zio->io_bookmark);
-
-		zio_push_transform(dio, zio->io_abd, zio->io_size, 0, NULL);
-		dde->dde_lead_zio[DDT_PHYS_DITTO] = dio;
 	}
 
 	if (ddp->ddp_phys_birth != 0 || dde->dde_lead_zio[p] != NULL) {
@@ -3254,8 +3209,6 @@ zio_ddt_write(zio_t *zio)
 
 	if (cio)
 		zio_nowait(cio);
-	if (dio)
-		zio_nowait(dio);
 
 	return (zio);
 }
@@ -4798,6 +4751,9 @@ zbookmark_compare(uint16_t dbss1, uint8_t ibs1, uint16_t dbss2, uint8_t ibs2,
 	    zb1->zb_level == zb2->zb_level &&
 	    zb1->zb_blkid == zb2->zb_blkid)
 		return (0);
+
+	IMPLY(zb1->zb_level > 0, ibs1 >= SPA_MINBLOCKSHIFT);
+	IMPLY(zb2->zb_level > 0, ibs2 >= SPA_MINBLOCKSHIFT);
 
 	/*
 	 * BP_SPANB calculates the span in blocks.

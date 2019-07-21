@@ -22,7 +22,7 @@
 /*
  * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2014, 2017 by Delphix. All rights reserved.
+ * Copyright (c) 2014, 2019 by Delphix. All rights reserved.
  * Copyright 2016 Igor Kozhukhov <ikozhukhov@gmail.com>
  * Copyright 2017 RackTop Systems.
  * Copyright (c) 2018 Datto Inc.
@@ -306,7 +306,7 @@ zfs_is_mounted(zfs_handle_t *zhp, char **where)
  */
 static boolean_t
 zfs_is_mountable(zfs_handle_t *zhp, char *buf, size_t buflen,
-    zprop_source_t *source)
+    zprop_source_t *source, int flags)
 {
 	char sourceloc[MAXNAMELEN];
 	zprop_source_t sourcetype;
@@ -327,6 +327,13 @@ zfs_is_mountable(zfs_handle_t *zhp, char *buf, size_t buflen,
 
 	if (zfs_prop_get_int(zhp, ZFS_PROP_ZONED) &&
 	    getzoneid() == GLOBAL_ZONEID)
+		return (B_FALSE);
+
+	if (zfs_prop_get_int(zhp, ZFS_PROP_ZONED) &&
+	    getzoneid() == GLOBAL_ZONEID)
+		return (B_FALSE);
+
+	if (zfs_prop_get_int(zhp, ZFS_PROP_REDACTED) && !(flags & MS_FORCE))
 		return (B_FALSE);
 
 	if (source)
@@ -495,8 +502,10 @@ zfs_mount(zfs_handle_t *zhp, const char *options, int flags)
 	if (zpool_get_prop_int(zhp->zpool_hdl, ZPOOL_PROP_READONLY, NULL))
 		(void) strlcat(mntopts, "," MNTOPT_RO, sizeof (mntopts));
 
-	if (!zfs_is_mountable(zhp, mountpoint, sizeof (mountpoint), NULL))
+	if (!zfs_is_mountable(zhp, mountpoint, sizeof (mountpoint), NULL,
+	    flags)) {
 		return (0);
+	}
 
 	/*
 	 * Append default mount options which apply to the mount point.
@@ -659,6 +668,7 @@ zfs_unmount(zfs_handle_t *zhp, const char *mountpoint, int flags)
 	libzfs_handle_t *hdl = zhp->zfs_hdl;
 	struct mnttab entry;
 	char *mntpt = NULL;
+	boolean_t encroot, unmounted = B_FALSE;
 
 	/* check to see if we need to unmount the filesystem */
 	if (mountpoint != NULL || ((zfs_get_type(zhp) == ZFS_TYPE_FILESYSTEM) &&
@@ -687,8 +697,33 @@ zfs_unmount(zfs_handle_t *zhp, const char *mountpoint, int flags)
 			(void) zfs_shareall(zhp);
 			return (-1);
 		}
+
 		libzfs_mnttab_remove(hdl, zhp->zfs_name);
 		free(mntpt);
+		unmounted = B_TRUE;
+	}
+
+	/*
+	 * If the MS_CRYPT flag is provided we must ensure we attempt to
+	 * unload the dataset's key regardless of whether we did any work
+	 * to unmount it. We only do this for encryption roots.
+	 */
+	if ((flags & MS_CRYPT) != 0 &&
+	    zfs_prop_get_int(zhp, ZFS_PROP_ENCRYPTION) != ZIO_CRYPT_OFF) {
+		zfs_refresh_properties(zhp);
+
+		if (zfs_crypto_get_encryption_root(zhp, &encroot, NULL) != 0 &&
+		    unmounted) {
+			(void) zfs_mount(zhp, NULL, 0);
+			return (-1);
+		}
+
+		if (encroot && zfs_prop_get_int(zhp, ZFS_PROP_KEYSTATUS) ==
+		    ZFS_KEYSTATUS_AVAILABLE &&
+		    zfs_crypto_unload_key(zhp) != 0) {
+			(void) zfs_mount(zhp, NULL, 0);
+			return (-1);
+		}
 	}
 
 	return (0);
@@ -706,7 +741,7 @@ zfs_unmountall(zfs_handle_t *zhp, int flags)
 	int ret;
 
 	clp = changelist_gather(zhp, ZFS_PROP_MOUNTPOINT,
-	    CL_GATHER_ITER_MOUNTED, 0);
+	    CL_GATHER_ITER_MOUNTED, flags);
 	if (clp == NULL)
 		return (-1);
 
@@ -868,7 +903,7 @@ zfs_share_proto(zfs_handle_t *zhp, zfs_share_proto_t *proto)
 	zprop_source_t sourcetype;
 	int ret;
 
-	if (!zfs_is_mountable(zhp, mountpoint, sizeof (mountpoint), NULL))
+	if (!zfs_is_mountable(zhp, mountpoint, sizeof (mountpoint), NULL, 0))
 		return (0);
 
 	for (curr_proto = proto; *curr_proto != PROTO_END; curr_proto++) {
@@ -1135,8 +1170,7 @@ remove_mountpoint(zfs_handle_t *zhp)
 	char mountpoint[ZFS_MAXPROPLEN];
 	zprop_source_t source;
 
-	if (!zfs_is_mountable(zhp, mountpoint, sizeof (mountpoint),
-	    &source))
+	if (!zfs_is_mountable(zhp, mountpoint, sizeof (mountpoint), &source, 0))
 		return;
 
 	if (source == ZPROP_SRC_DEFAULT ||
@@ -1302,12 +1336,14 @@ mountpoint_cmp(const void *arga, const void *argb)
 }
 
 /*
- * Return true if path2 is a child of path1.
+ * Return true if path2 is a child of path1 or path2 equals path1 or
+ * path1 is "/" (path2 is always a child of "/").
  */
 static boolean_t
 libzfs_path_contains(const char *path1, const char *path2)
 {
-	return (strstr(path2, path1) == path2 && path2[strlen(path1)] == '/');
+	return (strcmp(path1, path2) == 0 || strcmp(path1, "/") == 0 ||
+	    (strstr(path2, path1) == path2 && path2[strlen(path1)] == '/'));
 }
 
 /*

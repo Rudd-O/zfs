@@ -162,7 +162,7 @@ typedef enum aes_mech_type {
 #endif /* _AES_IMPL */
 
 /*
- * Methods used to define aes implementation
+ * Methods used to define AES implementation
  *
  * @aes_gen_f Key generation
  * @aes_enc_f Function encrypts one block
@@ -198,12 +198,12 @@ extern const aes_impl_ops_t aes_aesni_impl;
 /*
  * Initializes fastest implementation
  */
-void aes_impl_init(void);
+void aes_impl_init(void *arg);
 
 /*
- * Get selected aes implementation
+ * Returns optimal allowed AES implementation
  */
-struct aes_impl_ops *aes_impl_get_ops(void);
+const struct aes_impl_ops *aes_impl_get_ops(void);
 
 #ifdef	__cplusplus
 }

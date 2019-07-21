@@ -349,6 +349,19 @@ zpool_feature_init(void)
 	    ZFEATURE_TYPE_BOOLEAN, NULL);
 
 	{
+	static const spa_feature_t log_spacemap_deps[] = {
+		SPA_FEATURE_SPACEMAP_V2,
+		SPA_FEATURE_NONE
+	};
+	zfeature_register(SPA_FEATURE_LOG_SPACEMAP,
+	    "com.delphix:log_spacemap", "log_spacemap",
+	    "Log metaslab changes on a single spacemap and "
+	    "flush them periodically.",
+	    ZFEATURE_FLAG_READONLY_COMPAT, ZFEATURE_TYPE_BOOLEAN,
+	    log_spacemap_deps);
+	}
+
+	{
 	static const spa_feature_t large_blocks_deps[] = {
 		SPA_FEATURE_EXTENSIBLE_DATASET,
 		SPA_FEATURE_NONE
@@ -406,6 +419,47 @@ zpool_feature_init(void)
 	    "Edon-R hash algorithm.",
 	    ZFEATURE_FLAG_PER_DATASET, ZFEATURE_TYPE_BOOLEAN,
 	    edonr_deps);
+	}
+
+	{
+	static const spa_feature_t redact_books_deps[] = {
+		SPA_FEATURE_BOOKMARK_V2,
+		SPA_FEATURE_EXTENSIBLE_DATASET,
+		SPA_FEATURE_BOOKMARKS,
+		SPA_FEATURE_NONE
+	};
+	zfeature_register(SPA_FEATURE_REDACTION_BOOKMARKS,
+	    "com.delphix:redaction_bookmarks", "redaction_bookmarks",
+	    "Support for bookmarks which store redaction lists for zfs "
+	    "redacted send/recv.", 0, ZFEATURE_TYPE_BOOLEAN,
+	    redact_books_deps);
+	}
+
+	{
+	static const spa_feature_t redact_datasets_deps[] = {
+		SPA_FEATURE_EXTENSIBLE_DATASET,
+		SPA_FEATURE_NONE
+	};
+	zfeature_register(SPA_FEATURE_REDACTED_DATASETS,
+	    "com.delphix:redacted_datasets", "redacted_datasets", "Support for "
+	    "redacted datasets, produced by receiving a redacted zfs send "
+	    "stream.", ZFEATURE_FLAG_PER_DATASET, ZFEATURE_TYPE_UINT64_ARRAY,
+	    redact_datasets_deps);
+	}
+
+	{
+	static const spa_feature_t bookmark_written_deps[] = {
+		SPA_FEATURE_BOOKMARK_V2,
+		SPA_FEATURE_EXTENSIBLE_DATASET,
+		SPA_FEATURE_BOOKMARKS,
+		SPA_FEATURE_NONE
+	};
+	zfeature_register(SPA_FEATURE_BOOKMARK_WRITTEN,
+	    "com.delphix:bookmark_written", "bookmark_written",
+	    "Additional accounting, enabling the written#<bookmark> property"
+	    "(space written since a bookmark), and estimates of send stream "
+	    "sizes for incrementals from bookmarks.",
+	    0, ZFEATURE_TYPE_BOOLEAN, bookmark_written_deps);
 	}
 
 	zfeature_register(SPA_FEATURE_DEVICE_REMOVAL,

@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2011, 2018 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2019 by Delphix. All rights reserved.
  * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2014 Spectra Logic Corporation, All rights reserved.
  * Copyright 2013 Saso Kiselkov. All rights reserved.
@@ -42,6 +42,7 @@
 #include <sys/fs/zfs.h>
 #include <sys/spa_checksum.h>
 #include <sys/dmu.h>
+#include <sys/space_map.h>
 
 #ifdef	__cplusplus
 extern "C" {
@@ -94,13 +95,19 @@ _NOTE(CONSTCOND) } while (0)
 #define	BF64_GET_SB(x, low, len, shift, bias)	\
 	((BF64_GET(x, low, len) + (bias)) << (shift))
 
+/*
+ * We use ASSERT3U instead of ASSERT in these macros to prevent a lint error in
+ * the case where val is a constant.  We can't fix ASSERT because it's used as
+ * an expression in several places in the kernel; as a result, changing it to
+ * the do{} while() syntax to allow us to _NOTE the CONSTCOND is not an option.
+ */
 #define	BF32_SET_SB(x, low, len, shift, bias, val) do { \
-	ASSERT(IS_P2ALIGNED(val, 1U << shift)); \
+	ASSERT3U(IS_P2ALIGNED(val, 1U << shift), !=, B_FALSE); \
 	ASSERT3S((val) >> (shift), >=, bias); \
 	BF32_SET(x, low, len, ((val) >> (shift)) - (bias)); \
 _NOTE(CONSTCOND) } while (0)
 #define	BF64_SET_SB(x, low, len, shift, bias, val) do { \
-	ASSERT(IS_P2ALIGNED(val, 1ULL << shift)); \
+	ASSERT3U(IS_P2ALIGNED(val, 1ULL << shift), !=, B_FALSE); \
 	ASSERT3S((val) >> (shift), >=, bias); \
 	BF64_SET(x, low, len, ((val) >> (shift)) - (bias)); \
 _NOTE(CONSTCOND) } while (0)
@@ -401,8 +408,9 @@ _NOTE(CONSTCOND) } while (0)
 
 typedef enum bp_embedded_type {
 	BP_EMBEDDED_TYPE_DATA,
-	BP_EMBEDDED_TYPE_RESERVED, /* Reserved for an unintegrated feature. */
-	NUM_BP_EMBEDDED_TYPES = BP_EMBEDDED_TYPE_RESERVED
+	BP_EMBEDDED_TYPE_RESERVED, /* Reserved for Delphix byteswap feature. */
+	BP_EMBEDDED_TYPE_REDACTED,
+	NUM_BP_EMBEDDED_TYPES
 } bp_embedded_type_t;
 
 #define	BPE_NUM_WORDS 14
@@ -602,6 +610,14 @@ _NOTE(CONSTCOND) } while (0)
 #define	BP_IS_HOLE(bp) \
 	(!BP_IS_EMBEDDED(bp) && DVA_IS_EMPTY(BP_IDENTITY(bp)))
 
+#define	BP_SET_REDACTED(bp) \
+{							\
+	BP_SET_EMBEDDED(bp, B_TRUE);			\
+	BPE_SET_ETYPE(bp, BP_EMBEDDED_TYPE_REDACTED);	\
+}
+#define	BP_IS_REDACTED(bp) \
+	(BP_IS_EMBEDDED(bp) && BPE_GET_ETYPE(bp) == BP_EMBEDDED_TYPE_REDACTED)
+
 /* BP_IS_RAIDZ(bp) assumes no block compression */
 #define	BP_IS_RAIDZ(bp)		(DVA_GET_ASIZE(&(bp)->blk_dva[0]) > \
 				BP_GET_PSIZE(bp))
@@ -677,6 +693,13 @@ _NOTE(CONSTCOND) } while (0)
 		    compress,						\
 		    (u_longlong_t)BPE_GET_LSIZE(bp),			\
 		    (u_longlong_t)BPE_GET_PSIZE(bp),			\
+		    (u_longlong_t)bp->blk_birth);			\
+	} else if (BP_IS_REDACTED(bp)) {				\
+		len += func(buf + len, size - len,			\
+		    "REDACTED [L%llu %s] size=%llxL birth=%lluL",	\
+		    (u_longlong_t)BP_GET_LEVEL(bp),			\
+		    type,						\
+		    (u_longlong_t)BP_GET_LSIZE(bp),			\
 		    (u_longlong_t)bp->blk_birth);			\
 	} else {							\
 		for (int d = 0; d < BP_GET_NDVAS(bp); d++) {		\
@@ -1053,6 +1076,7 @@ extern boolean_t spa_suspended(spa_t *spa);
 extern uint64_t spa_bootfs(spa_t *spa);
 extern uint64_t spa_delegation(spa_t *spa);
 extern objset_t *spa_meta_objset(spa_t *spa);
+extern space_map_t *spa_syncing_log_sm(spa_t *spa);
 extern uint64_t spa_deadman_synctime(spa_t *spa);
 extern uint64_t spa_deadman_ziotime(spa_t *spa);
 extern uint64_t spa_dirty_data(spa_t *spa);
@@ -1103,6 +1127,7 @@ extern boolean_t spa_trust_config(spa_t *spa);
 extern uint64_t spa_missing_tvds_allowed(spa_t *spa);
 extern void spa_set_missing_tvds(spa_t *spa, uint64_t missing);
 extern boolean_t spa_top_vdevs_spacemap_addressable(spa_t *spa);
+extern uint64_t spa_total_metaslabs(spa_t *spa);
 extern boolean_t spa_multihost(spa_t *spa);
 extern unsigned long spa_get_hostid(void);
 extern void spa_activate_allocation_classes(spa_t *, dmu_tx_t *);

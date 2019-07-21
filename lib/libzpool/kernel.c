@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2018 by Delphix. All rights reserved.
  * Copyright (c) 2016 Actifio, Inc. All rights reserved.
  */
 
@@ -337,6 +338,13 @@ cv_wait(kcondvar_t *cv, kmutex_t *mp)
 	memset(&mp->m_owner, 0, sizeof (pthread_t));
 	VERIFY0(pthread_cond_wait(cv, &mp->m_lock));
 	mp->m_owner = pthread_self();
+}
+
+int
+cv_wait_sig(kcondvar_t *cv, kmutex_t *mp)
+{
+	cv_wait(cv, mp);
+	return (1);
 }
 
 clock_t

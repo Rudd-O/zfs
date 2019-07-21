@@ -59,6 +59,7 @@ KERNEL_C = \
 	dmu_object.c \
 	dmu_objset.c \
 	dmu_recv.c \
+	dmu_redact.c \
 	dmu_send.c \
 	dmu_traverse.c \
 	dmu_tx.c \
@@ -86,6 +87,7 @@ KERNEL_C = \
 	metaslab.c \
 	mmp.c \
 	multilist.c \
+	objlist.c \
 	pathname.c \
 	range_tree.c \
 	refcount.c \
@@ -99,6 +101,7 @@ KERNEL_C = \
 	spa_config.c \
 	spa_errlog.c \
 	spa_history.c \
+	spa_log_spacemap.c \
 	spa_misc.c \
 	spa_stats.c \
 	space_map.c \

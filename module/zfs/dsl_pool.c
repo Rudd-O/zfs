@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2011, 2017 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2019 by Delphix. All rights reserved.
  * Copyright (c) 2013 Steven Hartland. All rights reserved.
  * Copyright (c) 2014 Spectra Logic Corporation, All rights reserved.
  * Copyright 2016 Nexenta Systems, Inc.  All rights reserved.
@@ -42,7 +42,6 @@
 #include <sys/fs/zfs.h>
 #include <sys/zfs_znode.h>
 #include <sys/spa_impl.h>
-#include <sys/dsl_deadlist.h>
 #include <sys/vdev_impl.h>
 #include <sys/metaslab_impl.h>
 #include <sys/bptree.h>
@@ -758,7 +757,7 @@ dsl_pool_sync(dsl_pool_t *dp, uint64_t txg)
 		dp->dp_mos_uncompressed_delta = 0;
 	}
 
-	if (!multilist_is_empty(mos->os_dirty_dnodes[txg & TXG_MASK])) {
+	if (dmu_objset_is_dirty(mos, txg)) {
 		dsl_pool_sync_mos(dp, tx);
 	}
 
