@@ -11,7 +11,7 @@ _do_zpool_export() {
 	errs=$(export_all -F 2>&1)
 	ret=$?
 	[ -z "${errs}" ] || echo "${errs}" | vwarn
-	[ -z "${errs}" ] || (echo '====        ACTIVE SWAP DEVICES         ====' ; swapon -s ; 'echo ==== OPEN FILES ON MOUNTED FILE SYSTEMS ====' ; mount | awk ' { print $3 } ' | egrep -v '^/($|proc|sys|run|dev)($|/)' | xargs -n 1 lsof +D) | vwarn
+	[ -z "${errs}" ] || (echo '====        ACTIVE SWAP DEVICES         ====' ; swapon -s ; echo '==== OPEN FILES ON MOUNTED FILE SYSTEMS ====' ; mount | awk ' { print $3 } ' | egrep -v '^/($|proc|sys|run|dev)($|/)' | xargs -n 1 lsof +D) | vwarn
 	if [ "x${ret}" != "x0" ]; then
 		info "ZFS: There was a problem exporting pools."
 	fi
