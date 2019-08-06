@@ -373,6 +373,22 @@ Use \fB1\fR for yes and \fB0\fR for no (default).
 .sp
 .ne 2
 .na
+\fBzfs_metaslab_max_size_cache_sec\fR (ulong)
+.ad
+.RS 12n
+When we unload a metaslab, we cache the size of the largest free chunk. We use
+that cached size to determine whether or not to load a metaslab for a given
+allocation. As more frees accumulate in that metaslab while it's unloaded, the
+cached max size becomes less and less accurate. After a number of seconds
+controlled by this tunable, we stop considering the cached max size and start
+considering only the histogram instead.
+.sp
+Default value: \fB3600 seconds\fR (one hour)
+.RE
+
+.sp
+.ne 2
+.na
 \fBzfs_vdev_default_ms_count\fR (int)
 .ad
 .RS 12n
@@ -1907,6 +1923,98 @@ Default value: \fB32,768\fR.
 Pattern written to vdev free space by \fBzpool initialize\fR.
 .sp
 Default value: \fB16,045,690,984,833,335,022\fR (0xdeadbeefdeadbeee).
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs_livelist_max_entries\fR (ulong)
+.ad
+.RS 12n
+The threshold size (in block pointers) at which we create a new sub-livelist.
+Larger sublists are more costly from a memory perspective but the fewer
+sublists there are, the lower the cost of insertion.
+.sp
+Default value: \fB500,000\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs_livelist_min_percent_shared\fR (int)
+.ad
+.RS 12n
+If the amount of shared space between a snapshot and its clone drops below
+this threshold, the clone turns off the livelist and reverts to the old deletion
+method. This is in place because once a clone has been overwritten enough
+livelists no long give us a benefit.
+.sp
+Default value: \fB75\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs_livelist_condense_new_alloc\fR (int)
+.ad
+.RS 12n
+Incremented each time an extra ALLOC blkptr is added to a livelist entry while
+it is being condensed.
+This option is used by the test suite to track race conditions.
+.sp
+Default value: \fB0\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs_livelist_condense_sync_cancel\fR (int)
+.ad
+.RS 12n
+Incremented each time livelist condensing is canceled while in
+spa_livelist_condense_sync.
+This option is used by the test suite to track race conditions.
+.sp
+Default value: \fB0\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs_livelist_condense_sync_pause\fR (int)
+.ad
+.RS 12n
+When set, the livelist condense process pauses indefinitely before
+executing the synctask - spa_livelist_condense_sync.
+This option is used by the test suite to trigger race conditions.
+.sp
+Default value: \fB0\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs_livelist_condense_zthr_cancel\fR (int)
+.ad
+.RS 12n
+Incremented each time livelist condensing is canceled while in
+spa_livelist_condense_cb.
+This option is used by the test suite to track race conditions.
+.sp
+Default value: \fB0\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs_livelist_condense_zthr_pause\fR (int)
+.ad
+.RS 12n
+When set, the livelist condense process pauses indefinitely before
+executing the open context condensing work in spa_livelist_condense_cb.
+This option is used by the test suite to trigger race conditions.
+.sp
+Default value: \fB0\fR.
 .RE
 
 .sp
