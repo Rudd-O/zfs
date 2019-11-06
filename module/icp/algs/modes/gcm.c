@@ -28,8 +28,8 @@
 #include <sys/crypto/icp.h>
 #include <sys/crypto/impl.h>
 #include <sys/byteorder.h>
+#include <sys/simd.h>
 #include <modes/gcm_impl.h>
-#include <linux/simd.h>
 
 #define	GHASH(c, d, t, o) \
 	xor_block((uint8_t *)(d), (uint8_t *)(c)->gcm_ghash); \
@@ -703,9 +703,8 @@ gcm_impl_get_ops()
 /*
  * Initialize all supported implementations.
  */
-/* ARGSUSED */
 void
-gcm_impl_init(void *arg)
+gcm_impl_init(void)
 {
 	gcm_impl_ops_t *curr_impl;
 	int i, c;
@@ -810,7 +809,6 @@ gcm_impl_set(const char *val)
 }
 
 #if defined(_KERNEL)
-#include <linux/mod_compat.h>
 
 static int
 icp_gcm_impl_set(const char *val, zfs_kernel_param_t *kp)

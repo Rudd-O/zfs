@@ -4,6 +4,7 @@ VPATH = \
 	$(top_srcdir)/module/zfs \
 	$(top_srcdir)/module/zcommon \
 	$(top_srcdir)/module/lua \
+	$(top_srcdir)/module/os/linux/zfs \
 	$(top_srcdir)/lib/libzpool
 
 # Suppress unused but set variable warnings often due to ASSERTs
@@ -13,10 +14,6 @@ AM_CFLAGS += $(NO_UNUSED_BUT_SET_VARIABLE)
 AM_CFLAGS += $(FRAME_LARGER_THAN)
 
 AM_CFLAGS += -DLIB_ZPOOL_BUILD
-
-DEFAULT_INCLUDES += \
-	-I$(top_srcdir)/include \
-	-I$(top_srcdir)/lib/libspl/include
 
 lib_LTLIBRARIES = libzpool.la
 
@@ -44,10 +41,12 @@ KERNEL_C = \
 	abd.c \
 	aggsum.c \
 	arc.c \
+	arc_os.c \
 	blkptr.c \
 	bplist.c \
 	bpobj.c \
 	bptree.c \
+	btree.c \
 	bqueue.c \
 	cityhash.c \
 	dbuf.c \
@@ -153,6 +152,7 @@ KERNEL_C = \
 	zfs_rlock.c \
 	zil.c \
 	zio.c \
+	zio_os.c \
 	zio_checksum.c \
 	zio_compress.c \
 	zio_crypt.c \

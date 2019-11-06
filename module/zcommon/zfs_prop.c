@@ -865,10 +865,23 @@ zfs_prop_align_right(zfs_prop_t prop)
 #endif
 
 #if defined(_KERNEL)
+
+#include <sys/simd.h>
+
+#if defined(HAVE_KERNEL_FPU_INTERNAL)
+union fpregs_state **zfs_kfpu_fpregs;
+EXPORT_SYMBOL(zfs_kfpu_fpregs);
+#endif /* HAVE_KERNEL_FPU_INTERNAL */
+
 static int __init
 zcommon_init(void)
 {
+	int error = kfpu_init();
+	if (error)
+		return (error);
+
 	fletcher_4_init();
+
 	return (0);
 }
 
@@ -876,15 +889,18 @@ static void __exit
 zcommon_fini(void)
 {
 	fletcher_4_fini();
+	kfpu_fini();
 }
 
 module_init(zcommon_init);
 module_exit(zcommon_fini);
 
-MODULE_DESCRIPTION("Generic ZFS support");
-MODULE_AUTHOR(ZFS_META_AUTHOR);
-MODULE_LICENSE(ZFS_META_LICENSE);
-MODULE_VERSION(ZFS_META_VERSION "-" ZFS_META_RELEASE);
+#endif
+
+ZFS_MODULE_DESCRIPTION("Generic ZFS support");
+ZFS_MODULE_AUTHOR(ZFS_META_AUTHOR);
+ZFS_MODULE_LICENSE(ZFS_META_LICENSE);
+ZFS_MODULE_VERSION(ZFS_META_VERSION "-" ZFS_META_RELEASE);
 
 /* zfs dataset property functions */
 EXPORT_SYMBOL(zfs_userquota_prop_prefixes);
@@ -910,5 +926,3 @@ EXPORT_SYMBOL(zfs_prop_index_to_string);
 EXPORT_SYMBOL(zfs_prop_string_to_index);
 EXPORT_SYMBOL(zfs_prop_valid_for_type);
 EXPORT_SYMBOL(zfs_prop_written);
-
-#endif

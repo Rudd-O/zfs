@@ -31,7 +31,7 @@
  * Name-Value Pair Lists
  *
  * The embodiment of an FMA protocol element (event, fmri or authority) is a
- * name-value pair list (nvlist_t).  FMA-specific nvlist construtor and
+ * name-value pair list (nvlist_t).  FMA-specific nvlist constructor and
  * destructor functions, fm_nvlist_create() and fm_nvlist_destroy(), are used
  * to create an nvpair list using custom allocators.  Callers may choose to
  * allocate either from the kernel memory allocator, or from a preallocated
@@ -582,14 +582,9 @@ zfs_zevent_minor_to_state(minor_t minor, zfs_zevent_t **ze)
 int
 zfs_zevent_fd_hold(int fd, minor_t *minorp, zfs_zevent_t **ze)
 {
-	file_t *fp;
 	int error;
 
-	fp = getf(fd);
-	if (fp == NULL)
-		return (SET_ERROR(EBADF));
-
-	error = zfsdev_getminor(fp->f_file, minorp);
+	error = zfsdev_getminor(fd, minorp);
 	if (error == 0)
 		error = zfs_zevent_minor_to_state(*minorp, ze);
 
@@ -784,7 +779,7 @@ zfs_zevent_destroy(zfs_zevent_t *ze)
 #endif /* _KERNEL */
 
 /*
- * Wrapppers for FM nvlist allocators
+ * Wrappers for FM nvlist allocators
  */
 /* ARGSUSED */
 static void *

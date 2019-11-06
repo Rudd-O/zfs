@@ -112,17 +112,6 @@ overflow_multiply(uint64_t a, uint64_t b, uint64_t *c)
 	return (B_TRUE);
 }
 
-/*
- * Return B_TRUE and modifies *out to the span if the span is less than 2^64,
- * returns B_FALSE otherwise.
- */
-static inline boolean_t
-bp_span(uint32_t datablksz, uint8_t indblkshift, uint64_t level, uint64_t *out)
-{
-	uint64_t spanb = bp_span_in_blocks(indblkshift, level);
-	return (overflow_multiply(spanb, datablksz, out));
-}
-
 struct send_thread_arg {
 	bqueue_t	q;
 	dsl_dataset_t	*ds;		/* Dataset to traverse */
@@ -302,7 +291,7 @@ dump_record(dmu_send_cookie_t *dscp, void *payload, int payload_len)
 	if (payload_len != 0) {
 		*dscp->dsc_off += payload_len;
 		/*
-		 * payload is null when dso->ryrun == B_TRUE (i.e. when we're
+		 * payload is null when dso_dryrun == B_TRUE (i.e. when we're
 		 * doing a send size calculation)
 		 */
 		if (payload != NULL) {
@@ -468,7 +457,7 @@ dump_redact(dmu_send_cookie_t *dscp, uint64_t object, uint64_t offset,
 }
 
 static int
-dump_write(dmu_send_cookie_t *dscp, dmu_object_type_t type, uint64_t object,
+dmu_dump_write(dmu_send_cookie_t *dscp, dmu_object_type_t type, uint64_t object,
     uint64_t offset, int lsize, int psize, const blkptr_t *bp, void *data)
 {
 	uint64_t payload_size;
@@ -548,7 +537,7 @@ dump_write(dmu_send_cookie_t *dscp, dmu_object_type_t type, uint64_t object,
 		/*
 		 * There's no pre-computed checksum for partial-block writes,
 		 * embedded BP's, or encrypted BP's that are being sent as
-		 * plaintext, so (like fletcher4-checkummed blocks) userland
+		 * plaintext, so (like fletcher4-checksummed blocks) userland
 		 * will have to compute a dedup-capable checksum itself.
 		 */
 		drrw->drr_checksumtype = ZIO_CHECKSUM_OFF;
@@ -935,6 +924,7 @@ do_dump(dmu_send_cookie_t *dscp, struct send_range *range)
 		blkptr_t *bp = &srdp->bp;
 		spa_t *spa =
 		    dmu_objset_spa(dscp->dsc_os);
+		arc_buf_t *abuf = NULL;
 
 		ASSERT3U(srdp->datablksz, ==, BP_GET_LSIZE(bp));
 		ASSERT3U(range->start_blkid + 1, ==, range->end_blkid);
@@ -947,7 +937,6 @@ do_dump(dmu_send_cookie_t *dscp, struct send_range *range)
 				zioflags |= ZIO_FLAG_RAW;
 			}
 
-			arc_buf_t *abuf;
 			zbookmark_phys_t zb;
 			ASSERT3U(range->start_blkid, ==, DMU_SPILL_BLKID);
 			zb.zb_objset = dmu_objset_id(dscp->dsc_os);
@@ -960,8 +949,10 @@ do_dump(dmu_send_cookie_t *dscp, struct send_range *range)
 			    zioflags, &aflags, &zb) != 0)
 				return (SET_ERROR(EIO));
 
-			err = dump_spill(dscp, bp, zb.zb_object, abuf->b_data);
-			arc_buf_destroy(abuf, &abuf);
+			err = dump_spill(dscp, bp, zb.zb_object,
+			    (abuf == NULL ? NULL : abuf->b_data));
+			if (abuf != NULL)
+				arc_buf_destroy(abuf, &abuf);
 			return (err);
 		}
 		if (send_do_embed(dscp, bp)) {
@@ -976,7 +967,6 @@ do_dump(dmu_send_cookie_t *dscp, struct send_range *range)
 		    dscp->dsc_resume_offset));
 		/* it's a level-0 block of a regular object */
 		arc_flags_t aflags = ARC_FLAG_WAIT;
-		arc_buf_t *abuf = NULL;
 		uint64_t offset;
 
 		/*
@@ -1057,7 +1047,7 @@ do_dump(dmu_send_cookie_t *dscp, struct send_range *range)
 			while (srdp->datablksz > 0 && err == 0) {
 				int n = MIN(srdp->datablksz,
 				    SPA_OLD_MAXBLOCKSIZE);
-				err = dump_write(dscp, srdp->obj_type,
+				err = dmu_dump_write(dscp, srdp->obj_type,
 				    range->object, offset, n, n, NULL, buf);
 				offset += n;
 				buf += n;
@@ -1076,8 +1066,8 @@ do_dump(dmu_send_cookie_t *dscp, struct send_range *range)
 			} else {
 				psize = BP_GET_PSIZE(bp);
 			}
-			err = dump_write(dscp, srdp->obj_type, range->object,
-			    offset, srdp->datablksz, psize, bp,
+			err = dmu_dump_write(dscp, srdp->obj_type,
+			    range->object, offset, srdp->datablksz, psize, bp,
 			    (abuf == NULL ? NULL : abuf->b_data));
 		}
 		if (abuf != NULL)
@@ -1116,7 +1106,7 @@ do_dump(dmu_send_cookie_t *dscp, struct send_range *range)
 	return (err);
 }
 
-struct send_range *
+static struct send_range *
 range_alloc(enum type type, uint64_t object, uint64_t start_blkid,
     uint64_t end_blkid, boolean_t eos)
 {
@@ -1329,11 +1319,11 @@ send_range_after(const struct send_range *from, const struct send_range *to)
 		return (-1);
 	if (from_obj >= to_end_obj)
 		return (1);
-	int64_t cmp = AVL_CMP(to->type == OBJECT_RANGE, from->type ==
+	int64_t cmp = TREE_CMP(to->type == OBJECT_RANGE, from->type ==
 	    OBJECT_RANGE);
 	if (unlikely(cmp))
 		return (cmp);
-	cmp = AVL_CMP(to->type == OBJECT, from->type == OBJECT);
+	cmp = TREE_CMP(to->type == OBJECT, from->type == OBJECT);
 	if (unlikely(cmp))
 		return (cmp);
 	if (from->end_blkid <= to->start_blkid)
@@ -1402,7 +1392,7 @@ send_range_start_compare(struct send_range *r1, struct send_range *r2)
 	uint64_t r1_l0equiv = r1->start_blkid;
 	uint64_t r2_objequiv = r2->object;
 	uint64_t r2_l0equiv = r2->start_blkid;
-	int64_t cmp = AVL_CMP(r1->eos_marker, r2->eos_marker);
+	int64_t cmp = TREE_CMP(r1->eos_marker, r2->eos_marker);
 	if (unlikely(cmp))
 		return (cmp);
 	if (r1->object == 0) {
@@ -1414,17 +1404,17 @@ send_range_start_compare(struct send_range *r1, struct send_range *r2)
 		r2_l0equiv = 0;
 	}
 
-	cmp = AVL_CMP(r1_objequiv, r2_objequiv);
+	cmp = TREE_CMP(r1_objequiv, r2_objequiv);
 	if (likely(cmp))
 		return (cmp);
-	cmp = AVL_CMP(r2->type == OBJECT_RANGE, r1->type == OBJECT_RANGE);
+	cmp = TREE_CMP(r2->type == OBJECT_RANGE, r1->type == OBJECT_RANGE);
 	if (unlikely(cmp))
 		return (cmp);
-	cmp = AVL_CMP(r2->type == OBJECT, r1->type == OBJECT);
+	cmp = TREE_CMP(r2->type == OBJECT, r1->type == OBJECT);
 	if (unlikely(cmp))
 		return (cmp);
 
-	return (AVL_CMP(r1_l0equiv, r2_l0equiv));
+	return (TREE_CMP(r1_l0equiv, r2_l0equiv));
 }
 
 enum q_idx {
@@ -2262,7 +2252,7 @@ setup_send_progress(struct dmu_send_params *dspp)
  *
  * The final case is a simple zfs full or incremental send.  The to_ds traversal
  * thread behaves the same as always. The redact list thread is never started.
- * The send merge thread takes all the blocks that the to_ds traveral thread
+ * The send merge thread takes all the blocks that the to_ds traversal thread
  * sends it, prefetches the data, and sends the blocks on to the main thread.
  * The main thread sends the data over the wire.
  *
@@ -2925,29 +2915,25 @@ dmu_send_estimate_fast(dsl_dataset_t *ds, dsl_dataset_t *fromds,
 	return (err);
 }
 
-#if defined(_KERNEL)
-module_param(zfs_send_corrupt_data, int, 0644);
-MODULE_PARM_DESC(zfs_send_corrupt_data, "Allow sending corrupt data");
+/* BEGIN CSTYLED */
+ZFS_MODULE_PARAM(zfs_send, zfs_send_, corrupt_data, INT, ZMOD_RW,
+	"Allow sending corrupt data");
 
-module_param(zfs_send_queue_length, int, 0644);
-MODULE_PARM_DESC(zfs_send_queue_length, "Maximum send queue length");
+ZFS_MODULE_PARAM(zfs_send, zfs_send_, queue_length, INT, ZMOD_RW,
+	"Maximum send queue length");
 
-module_param(zfs_send_unmodified_spill_blocks, int, 0644);
-MODULE_PARM_DESC(zfs_send_unmodified_spill_blocks,
+ZFS_MODULE_PARAM(zfs_send, zfs_send_, unmodified_spill_blocks, INT, ZMOD_RW,
 	"Send unmodified spill blocks");
 
-module_param(zfs_send_no_prefetch_queue_length, int, 0644);
-MODULE_PARM_DESC(zfs_send_no_prefetch_queue_length,
+ZFS_MODULE_PARAM(zfs_send, zfs_send_, no_prefetch_queue_length, INT, ZMOD_RW,
 	"Maximum send queue length for non-prefetch queues");
 
-module_param(zfs_send_queue_ff, int, 0644);
-MODULE_PARM_DESC(zfs_send_queue_ff, "Send queue fill fraction");
+ZFS_MODULE_PARAM(zfs_send, zfs_send_, queue_ff, INT, ZMOD_RW,
+	"Send queue fill fraction");
 
-module_param(zfs_send_no_prefetch_queue_ff, int, 0644);
-MODULE_PARM_DESC(zfs_send_no_prefetch_queue_ff,
+ZFS_MODULE_PARAM(zfs_send, zfs_send_, no_prefetch_queue_ff, INT, ZMOD_RW,
 	"Send queue fill fraction for non-prefetch queues");
 
-module_param(zfs_override_estimate_recordsize, int, 0644);
-MODULE_PARM_DESC(zfs_override_estimate_recordsize,
+ZFS_MODULE_PARAM(zfs_send, zfs_, override_estimate_recordsize, INT, ZMOD_RW,
 	"Override block size estimate with fixed size");
-#endif
+/* END CSTYLED */

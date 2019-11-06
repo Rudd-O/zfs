@@ -25,9 +25,9 @@
 #include <sys/zfs_context.h>
 #include <sys/crypto/icp.h>
 #include <sys/crypto/spi.h>
+#include <sys/simd.h>
 #include <modes/modes.h>
 #include <aes/aes_impl.h>
-#include <linux/simd.h>
 
 /*
  * Initialize AES encryption and decryption key schedules.
@@ -295,9 +295,8 @@ aes_impl_get_ops(void)
 /*
  * Initialize all supported implementations.
  */
-/* ARGSUSED */
 void
-aes_impl_init(void *arg)
+aes_impl_init(void)
 {
 	aes_impl_ops_t *curr_impl;
 	int i, c;
@@ -407,7 +406,6 @@ aes_impl_set(const char *val)
 }
 
 #if defined(_KERNEL)
-#include <linux/mod_compat.h>
 
 static int
 icp_aes_impl_set(const char *val, zfs_kernel_param_t *kp)

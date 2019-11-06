@@ -69,7 +69,7 @@ zfs_do_list_ioctl(zfs_handle_t *zhp, int arg, zfs_cmd_t *zc)
 	orig_cookie = zc->zc_cookie;
 top:
 	(void) strlcpy(zc->zc_name, zhp->zfs_name, sizeof (zc->zc_name));
-	rc = ioctl(zhp->zfs_hdl->libzfs_fd, arg, zc);
+	rc = zfs_ioctl(zhp->zfs_hdl, arg, zc);
 
 	if (rc == -1) {
 		switch (errno) {
@@ -302,7 +302,7 @@ zfs_snapshot_compare(const void *larg, const void *rarg)
 	lcreate = zfs_prop_get_int(l, ZFS_PROP_CREATETXG);
 	rcreate = zfs_prop_get_int(r, ZFS_PROP_CREATETXG);
 
-	return (AVL_CMP(lcreate, rcreate));
+	return (TREE_CMP(lcreate, rcreate));
 }
 
 int

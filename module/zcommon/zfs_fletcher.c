@@ -137,10 +137,10 @@
 #include <sys/sysmacros.h>
 #include <sys/byteorder.h>
 #include <sys/spa.h>
+#include <sys/simd.h>
 #include <sys/zio_checksum.h>
 #include <sys/zfs_context.h>
 #include <zfs_fletcher.h>
-#include <linux/simd.h>
 
 #define	FLETCHER_MIN_SIMD_SIZE	64
 
@@ -183,6 +183,9 @@ static const fletcher_4_ops_t *fletcher_4_impls[] = {
 #endif
 #if defined(__x86_64) && defined(HAVE_AVX512F)
 	&fletcher_4_avx512f_ops,
+#endif
+#if defined(__x86_64) && defined(HAVE_AVX512BW)
+	&fletcher_4_avx512bw_ops,
 #endif
 #if defined(__aarch64__)
 	&fletcher_4_aarch64_neon_ops,
@@ -726,7 +729,7 @@ fletcher_4_benchmark_impl(boolean_t native, char *data, uint64_t data_size)
  * Initialize and benchmark all supported implementations.
  */
 static void
-fletcher_4_benchmark(void *arg)
+fletcher_4_benchmark(void)
 {
 	fletcher_4_ops_t *curr_impl;
 	int i, c;
@@ -769,20 +772,10 @@ fletcher_4_benchmark(void *arg)
 void
 fletcher_4_init(void)
 {
-#if defined(_KERNEL)
-	/*
-	 * For 5.0 and latter Linux kernels the fletcher 4 benchmarks are
-	 * run in a kernel threads.  This is needed to take advantage of the
-	 * SIMD functionality, see include/linux/simd_x86.h for details.
-	 */
-	taskqid_t id = taskq_dispatch(system_taskq, fletcher_4_benchmark,
-	    NULL, TQ_SLEEP);
-	if (id != TASKQID_INVALID) {
-		taskq_wait_id(system_taskq, id);
-	} else {
-		fletcher_4_benchmark(NULL);
-	}
+	/* Determine the fastest available implementation. */
+	fletcher_4_benchmark();
 
+#if defined(_KERNEL)
 	/* Install kstats for all implementations */
 	fletcher_4_kstat = kstat_create("zfs", 0, "fletcher_4_bench", "misc",
 	    KSTAT_TYPE_RAW, 0, KSTAT_FLAG_VIRTUAL);
@@ -795,8 +788,6 @@ fletcher_4_init(void)
 		    fletcher_4_kstat_addr);
 		kstat_install(fletcher_4_kstat);
 	}
-#else
-	fletcher_4_benchmark(NULL);
 #endif
 
 	/* Finish initialization */
@@ -896,7 +887,6 @@ zio_abd_checksum_func_t fletcher_4_abd_ops = {
 
 
 #if defined(_KERNEL)
-#include <linux/mod_compat.h>
 
 static int
 fletcher_4_param_get(char *buffer, zfs_kernel_param_t *unused)

@@ -194,6 +194,10 @@ typedef struct zfs_handle zfs_handle_t;
 typedef struct zpool_handle zpool_handle_t;
 typedef struct libzfs_handle libzfs_handle_t;
 
+extern int zpool_wait(zpool_handle_t *, zpool_wait_activity_t);
+extern int zpool_wait_status(zpool_handle_t *, zpool_wait_activity_t,
+    boolean_t *, boolean_t *);
+
 /*
  * Library initialization
  */
@@ -275,6 +279,8 @@ typedef struct trimflags {
 extern int zpool_scan(zpool_handle_t *, pool_scan_func_t, pool_scrub_cmd_t);
 extern int zpool_initialize(zpool_handle_t *, pool_initialize_func_t,
     nvlist_t *);
+extern int zpool_initialize_wait(zpool_handle_t *, pool_initialize_func_t,
+    nvlist_t *);
 extern int zpool_trim(zpool_handle_t *, pool_trim_func_t, nvlist_t *,
     trimflags_t *);
 
@@ -317,6 +323,7 @@ extern int zpool_get_prop(zpool_handle_t *, zpool_prop_t, char *,
     size_t proplen, zprop_source_t *, boolean_t literal);
 extern uint64_t zpool_get_prop_int(zpool_handle_t *, zpool_prop_t,
     zprop_source_t *);
+extern int zpool_props_refresh(zpool_handle_t *);
 
 extern const char *zpool_prop_to_name(zpool_prop_t);
 extern const char *zpool_prop_values(zpool_prop_t);
@@ -425,7 +432,8 @@ typedef enum {
 extern char *zpool_vdev_name(libzfs_handle_t *, zpool_handle_t *, nvlist_t *,
     int name_flags);
 extern int zpool_upgrade(zpool_handle_t *, uint64_t);
-extern int zpool_get_history(zpool_handle_t *, nvlist_t **);
+extern int zpool_get_history(zpool_handle_t *, nvlist_t **, uint64_t *,
+    boolean_t *);
 extern int zpool_events_next(libzfs_handle_t *, nvlist_t **, int *, unsigned,
     int);
 extern int zpool_events_clear(libzfs_handle_t *, int *);
@@ -740,6 +748,9 @@ typedef struct recvflags {
 
 	/* skip receive of snapshot holds */
 	boolean_t skipholds;
+
+	/* mount the filesystem unless nomount is specified */
+	boolean_t domount;
 } recvflags_t;
 
 extern int zfs_receive(libzfs_handle_t *, const char *, nvlist_t *,
