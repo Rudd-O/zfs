@@ -144,7 +144,7 @@ proc_doslab(struct ctl_table *table, int write,
 	int rc = 0;
 	unsigned long min = 0, max = ~0, val = 0, mask;
 	spl_ctl_table dummy = *table;
-	spl_kmem_cache_t *skc;
+	spl_kmem_cache_t *skc = NULL;
 
 	dummy.data = &val;
 	dummy.proc_handler = &proc_dointvec;
@@ -249,7 +249,7 @@ static int
 taskq_seq_show_impl(struct seq_file *f, void *p, boolean_t allflag)
 {
 	taskq_t *tq = p;
-	taskq_thread_t *tqt;
+	taskq_thread_t *tqt = NULL;
 	spl_wait_queue_entry_t *wq;
 	struct task_struct *tsk;
 	taskq_ent_t *tqe;
@@ -662,6 +662,33 @@ static struct ctl_table spl_kmem_table[] = {
 		.mode		= 0444,
 		.proc_handler	= &proc_doslab,
 	},
+	{
+		.procname	= "slab_kvmem_total",
+		.data		= (void *)(KMC_KVMEM | KMC_TOTAL),
+		.maxlen		= sizeof (unsigned long),
+		.extra1		= &table_min,
+		.extra2		= &table_max,
+		.mode		= 0444,
+		.proc_handler	= &proc_doslab,
+	},
+	{
+		.procname	= "slab_kvmem_alloc",
+		.data		= (void *)(KMC_KVMEM | KMC_ALLOC),
+		.maxlen		= sizeof (unsigned long),
+		.extra1		= &table_min,
+		.extra2		= &table_max,
+		.mode		= 0444,
+		.proc_handler	= &proc_doslab,
+	},
+	{
+		.procname	= "slab_kvmem_max",
+		.data		= (void *)(KMC_KVMEM | KMC_MAX),
+		.maxlen		= sizeof (unsigned long),
+		.extra1		= &table_min,
+		.extra2		= &table_max,
+		.mode		= 0444,
+		.proc_handler	= &proc_doslab,
+	},
 	{},
 };
 
@@ -712,9 +739,6 @@ static struct ctl_table spl_dir[] = {
 
 static struct ctl_table spl_root[] = {
 	{
-#ifdef HAVE_CTL_NAME
-	.ctl_name = CTL_KERN,
-#endif
 	.procname = "kernel",
 	.mode = 0555,
 	.child = spl_dir,

@@ -4,6 +4,7 @@ SUBDIRS = \
 	arc \
 	atime \
 	bootfs \
+	btree \
 	cache \
 	cachefile \
 	casenorm \
@@ -61,6 +62,7 @@ SUBDIRS = \
 	rename_dirs \
 	replacement \
 	reservation \
+	resilver \
 	rootpool \
 	rsend \
 	scrub_mirror \

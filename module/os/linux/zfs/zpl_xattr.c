@@ -77,9 +77,9 @@
  * largely avoids the issue except in the overflow case.
  */
 
+#include <sys/zfs_znode.h>
 #include <sys/zfs_vfsops.h>
 #include <sys/zfs_vnops.h>
-#include <sys/zfs_znode.h>
 #include <sys/zap.h>
 #include <sys/vfs.h>
 #include <sys/zpl.h>
@@ -112,9 +112,6 @@ zpl_xattr_permission(xattr_filldir_t *xf, const char *name, int name_len)
 			return (0);
 #elif defined(HAVE_XATTR_LIST_HANDLER)
 		if (!handler->list(handler, d, NULL, 0, name, name_len))
-			return (0);
-#elif defined(HAVE_XATTR_LIST_INODE)
-		if (!handler->list(d->d_inode, NULL, 0, name, name_len))
 			return (0);
 #endif
 	}
@@ -187,10 +184,12 @@ zpl_xattr_list_dir(xattr_filldir_t *xf, cred_t *cr)
 {
 	struct inode *ip = xf->dentry->d_inode;
 	struct inode *dxip = NULL;
+	znode_t *dxzp;
 	int error;
 
 	/* Lookup the xattr directory */
-	error = -zfs_lookup(ip, NULL, &dxip, LOOKUP_XATTR, cr, NULL, NULL);
+	error = -zfs_lookup(ITOZ(ip), NULL, &dxzp, LOOKUP_XATTR,
+	    cr, NULL, NULL);
 	if (error) {
 		if (error == -ENOENT)
 			error = 0;
@@ -198,6 +197,7 @@ zpl_xattr_list_dir(xattr_filldir_t *xf, cred_t *cr)
 		return (error);
 	}
 
+	dxip = ZTOI(dxzp);
 	error = zpl_xattr_readdir(dxip, xf);
 	iput(dxip);
 
@@ -274,21 +274,24 @@ static int
 zpl_xattr_get_dir(struct inode *ip, const char *name, void *value,
     size_t size, cred_t *cr)
 {
-	struct inode *dxip = NULL;
 	struct inode *xip = NULL;
+	znode_t *dxzp = NULL;
+	znode_t *xzp = NULL;
 	loff_t pos = 0;
 	int error;
 
 	/* Lookup the xattr directory */
-	error = -zfs_lookup(ip, NULL, &dxip, LOOKUP_XATTR, cr, NULL, NULL);
+	error = -zfs_lookup(ITOZ(ip), NULL, &dxzp, LOOKUP_XATTR,
+	    cr, NULL, NULL);
 	if (error)
 		goto out;
 
 	/* Lookup a specific xattr name in the directory */
-	error = -zfs_lookup(dxip, (char *)name, &xip, 0, cr, NULL, NULL);
+	error = -zfs_lookup(dxzp, (char *)name, &xzp, 0, cr, NULL, NULL);
 	if (error)
 		goto out;
 
+	xip = ZTOI(xzp);
 	if (!size) {
 		error = i_size_read(xip);
 		goto out;
@@ -301,11 +304,11 @@ zpl_xattr_get_dir(struct inode *ip, const char *name, void *value,
 
 	error = zpl_read_common(xip, value, size, &pos, UIO_SYSSPACE, 0, cr);
 out:
-	if (xip)
-		iput(xip);
+	if (xzp)
+		zrele(xzp);
 
-	if (dxip)
-		iput(dxip);
+	if (dxzp)
+		zrele(dxzp);
 
 	return (error);
 }
@@ -435,8 +438,8 @@ static int
 zpl_xattr_set_dir(struct inode *ip, const char *name, const void *value,
     size_t size, int flags, cred_t *cr)
 {
-	struct inode *dxip = NULL;
-	struct inode *xip = NULL;
+	znode_t *dxzp = NULL;
+	znode_t *xzp = NULL;
 	vattr_t *vap = NULL;
 	ssize_t wrote;
 	int lookup_flags, error;
@@ -453,12 +456,13 @@ zpl_xattr_set_dir(struct inode *ip, const char *name, const void *value,
 	if (value != NULL)
 		lookup_flags |= CREATE_XATTR_DIR;
 
-	error = -zfs_lookup(ip, NULL, &dxip, lookup_flags, cr, NULL, NULL);
+	error = -zfs_lookup(ITOZ(ip), NULL, &dxzp, lookup_flags,
+	    cr, NULL, NULL);
 	if (error)
 		goto out;
 
 	/* Lookup a specific xattr name in the directory */
-	error = -zfs_lookup(dxip, (char *)name, &xip, 0, cr, NULL, NULL);
+	error = -zfs_lookup(dxzp, (char *)name, &xzp, 0, cr, NULL, NULL);
 	if (error && (error != -ENOENT))
 		goto out;
 
@@ -466,33 +470,34 @@ zpl_xattr_set_dir(struct inode *ip, const char *name, const void *value,
 
 	/* Remove a specific name xattr when value is set to NULL. */
 	if (value == NULL) {
-		if (xip)
-			error = -zfs_remove(dxip, (char *)name, cr, 0);
+		if (xzp)
+			error = -zfs_remove(dxzp, (char *)name, cr, 0);
 
 		goto out;
 	}
 
 	/* Lookup failed create a new xattr. */
-	if (xip == NULL) {
+	if (xzp == NULL) {
 		vap = kmem_zalloc(sizeof (vattr_t), KM_SLEEP);
 		vap->va_mode = xattr_mode;
 		vap->va_mask = ATTR_MODE;
 		vap->va_uid = crgetfsuid(cr);
 		vap->va_gid = crgetfsgid(cr);
 
-		error = -zfs_create(dxip, (char *)name, vap, 0, 0644, &xip,
+		error = -zfs_create(dxzp, (char *)name, vap, 0, 0644, &xzp,
 		    cr, 0, NULL);
 		if (error)
 			goto out;
 	}
 
-	ASSERT(xip != NULL);
+	ASSERT(xzp != NULL);
 
-	error = -zfs_freesp(ITOZ(xip), 0, 0, xattr_mode, TRUE);
+	error = -zfs_freesp(xzp, 0, 0, xattr_mode, TRUE);
 	if (error)
 		goto out;
 
-	wrote = zpl_write_common(xip, value, size, &pos, UIO_SYSSPACE, 0, cr);
+	wrote = zpl_write_common(ZTOI(xzp), value, size, &pos,
+	    UIO_SYSSPACE, 0, cr);
 	if (wrote < 0)
 		error = wrote;
 
@@ -506,11 +511,11 @@ out:
 	if (vap)
 		kmem_free(vap, sizeof (vattr_t));
 
-	if (xip)
-		iput(xip);
+	if (xzp)
+		zrele(xzp);
 
-	if (dxip)
-		iput(dxip);
+	if (dxzp)
+		zrele(dxzp);
 
 	if (error == -ENOENT)
 		error = -ENODATA;
@@ -870,9 +875,8 @@ __zpl_xattr_security_set(struct inode *ip, const char *name,
 }
 ZPL_XATTR_SET_WRAPPER(zpl_xattr_security_set);
 
-#ifdef HAVE_CALLBACK_SECURITY_INODE_INIT_SECURITY
 static int
-__zpl_xattr_security_init(struct inode *ip, const struct xattr *xattrs,
+zpl_xattr_security_init_impl(struct inode *ip, const struct xattr *xattrs,
     void *fs_info)
 {
 	const struct xattr *xattr;
@@ -894,36 +898,8 @@ zpl_xattr_security_init(struct inode *ip, struct inode *dip,
     const struct qstr *qstr)
 {
 	return security_inode_init_security(ip, dip, qstr,
-	    &__zpl_xattr_security_init, NULL);
+	    &zpl_xattr_security_init_impl, NULL);
 }
-
-#else
-int
-zpl_xattr_security_init(struct inode *ip, struct inode *dip,
-    const struct qstr *qstr)
-{
-	int error;
-	size_t len;
-	void *value;
-	char *name;
-
-	error = zpl_security_inode_init_security(ip, dip, qstr,
-	    &name, &value, &len);
-	if (error) {
-		if (error == -EOPNOTSUPP)
-			return (0);
-
-		return (error);
-	}
-
-	error = __zpl_xattr_security_set(ip, name, value, len, 0);
-
-	kfree(name);
-	kfree(value);
-
-	return (error);
-}
-#endif /* HAVE_CALLBACK_SECURITY_INODE_INIT_SECURITY */
 
 /*
  * Security xattr namespace handlers.
@@ -958,7 +934,7 @@ zpl_set_acl(struct inode *ip, struct posix_acl *acl, int type)
 	case ACL_TYPE_ACCESS:
 		name = XATTR_NAME_POSIX_ACL_ACCESS;
 		if (acl) {
-			zpl_equivmode_t mode = ip->i_mode;
+			umode_t mode = ip->i_mode;
 			error = posix_acl_equiv_mode(acl, &mode);
 			if (error < 0) {
 				return (error);
@@ -1072,53 +1048,6 @@ zpl_get_acl(struct inode *ip, int type)
 
 	return (acl);
 }
-
-#if !defined(HAVE_GET_ACL)
-static int
-__zpl_check_acl(struct inode *ip, int mask)
-{
-	struct posix_acl *acl;
-	int error;
-
-	acl = zpl_get_acl(ip, ACL_TYPE_ACCESS);
-	if (IS_ERR(acl))
-		return (PTR_ERR(acl));
-
-	if (acl) {
-		error = posix_acl_permission(ip, acl, mask);
-		zpl_posix_acl_release(acl);
-		return (error);
-	}
-
-	return (-EAGAIN);
-}
-
-#if defined(HAVE_CHECK_ACL_WITH_FLAGS)
-int
-zpl_check_acl(struct inode *ip, int mask, unsigned int flags)
-{
-	return (__zpl_check_acl(ip, mask));
-}
-#elif defined(HAVE_CHECK_ACL)
-int
-zpl_check_acl(struct inode *ip, int mask)
-{
-	return (__zpl_check_acl(ip, mask));
-}
-#elif defined(HAVE_PERMISSION_WITH_NAMEIDATA)
-int
-zpl_permission(struct inode *ip, int mask, struct nameidata *nd)
-{
-	return (generic_permission(ip, mask, __zpl_check_acl));
-}
-#elif defined(HAVE_PERMISSION)
-int
-zpl_permission(struct inode *ip, int mask)
-{
-	return (generic_permission(ip, mask, __zpl_check_acl));
-}
-#endif /* HAVE_CHECK_ACL | HAVE_PERMISSION */
-#endif /* !HAVE_GET_ACL */
 
 int
 zpl_init_acl(struct inode *ip, struct inode *dir)
@@ -1295,7 +1224,7 @@ __zpl_xattr_acl_set_access(struct inode *ip, const char *name,
 	if (ITOZSB(ip)->z_acl_type != ZFS_ACLTYPE_POSIXACL)
 		return (-EOPNOTSUPP);
 
-	if (!zpl_inode_owner_or_capable(ip))
+	if (!inode_owner_or_capable(ip))
 		return (-EPERM);
 
 	if (value) {
@@ -1335,7 +1264,7 @@ __zpl_xattr_acl_set_default(struct inode *ip, const char *name,
 	if (ITOZSB(ip)->z_acl_type != ZFS_ACLTYPE_POSIXACL)
 		return (-EOPNOTSUPP);
 
-	if (!zpl_inode_owner_or_capable(ip))
+	if (!inode_owner_or_capable(ip))
 		return (-EPERM);
 
 	if (value) {

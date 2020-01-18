@@ -3,9 +3,7 @@
 #
 
 # Suppress unused-value warnings in sparc64 architecture headers
-ifeq ($(target_cpu),sparc64)
-ccflags-y += -Wno-unused-value
-endif
+ccflags-$(CONFIG_SPARC64) += -Wno-unused-value
 
 ccflags-y += -I@abs_top_srcdir@/module/os/linux/zfs
 
@@ -26,6 +24,7 @@ $(MODULE)-objs += ../os/linux/zfs/zfs_acl.o
 $(MODULE)-objs += ../os/linux/zfs/zfs_ctldir.o
 $(MODULE)-objs += ../os/linux/zfs/zfs_debug.o
 $(MODULE)-objs += ../os/linux/zfs/zfs_dir.o
+$(MODULE)-objs += ../os/linux/zfs/zfs_file_os.o
 $(MODULE)-objs += ../os/linux/zfs/zfs_ioctl_os.o
 $(MODULE)-objs += ../os/linux/zfs/zfs_onexit_os.o
 $(MODULE)-objs += ../os/linux/zfs/zfs_sysfs.o

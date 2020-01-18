@@ -85,7 +85,9 @@ enum zio_checksum {
 	ZIO_CHECKSUM_NOPARITY,
 	ZIO_CHECKSUM_SHA512,
 	ZIO_CHECKSUM_SKEIN,
+#if !defined(__FreeBSD__)
 	ZIO_CHECKSUM_EDONR,
+#endif
 	ZIO_CHECKSUM_FUNCTIONS
 };
 
@@ -267,6 +269,7 @@ enum zio_wait_type {
 
 typedef void zio_done_func_t(zio_t *zio);
 
+extern int zio_exclude_metadata;
 extern int zio_dva_throttle_enabled;
 extern const char *zio_type_name[ZIO_TYPES];
 
@@ -500,6 +503,7 @@ struct zio {
 	zio_gang_node_t	*io_gang_tree;
 	void		*io_executor;
 	void		*io_waiter;
+	void		*io_bio;
 	kmutex_t	io_lock;
 	kcondvar_t	io_cv;
 	int		io_allocator;

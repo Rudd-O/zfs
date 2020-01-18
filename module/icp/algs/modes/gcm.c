@@ -67,7 +67,9 @@ gcm_mode_encrypt_contiguous_blocks(gcm_ctx_t *ctx, char *data, size_t length,
 		    (uint8_t *)ctx->gcm_remainder + ctx->gcm_remainder_len,
 		    length);
 		ctx->gcm_remainder_len += length;
-		ctx->gcm_copy_to = datap;
+		if (ctx->gcm_copy_to == NULL) {
+			ctx->gcm_copy_to = datap;
+		}
 		return (CRYPTO_SUCCESS);
 	}
 
@@ -300,11 +302,13 @@ gcm_mode_decrypt_contiguous_blocks(gcm_ctx_t *ctx, char *data, size_t length,
 	if (length > 0) {
 		new_len = ctx->gcm_pt_buf_len + length;
 		new = vmem_alloc(new_len, ctx->gcm_kmflag);
+		if (new == NULL) {
+			vmem_free(ctx->gcm_pt_buf, ctx->gcm_pt_buf_len);
+			ctx->gcm_pt_buf = NULL;
+			return (CRYPTO_HOST_MEMORY);
+		}
 		bcopy(ctx->gcm_pt_buf, new, ctx->gcm_pt_buf_len);
 		vmem_free(ctx->gcm_pt_buf, ctx->gcm_pt_buf_len);
-		if (new == NULL)
-			return (CRYPTO_HOST_MEMORY);
-
 		ctx->gcm_pt_buf = new;
 		ctx->gcm_pt_buf_len = new_len;
 		bcopy(data, &ctx->gcm_pt_buf[ctx->gcm_processed_data_len],
@@ -553,8 +557,7 @@ gcm_init_ctx(gcm_ctx_t *gcm_ctx, char *param, size_t block_size,
 		rv = CRYPTO_SUCCESS;
 		gcm_ctx->gcm_flags |= GCM_MODE;
 	} else {
-		rv = CRYPTO_MECHANISM_PARAM_INVALID;
-		goto out;
+		return (CRYPTO_MECHANISM_PARAM_INVALID);
 	}
 
 	if (gcm_init(gcm_ctx, gcm_param->pIv, gcm_param->ulIvLen,
@@ -562,7 +565,7 @@ gcm_init_ctx(gcm_ctx_t *gcm_ctx, char *param, size_t block_size,
 	    encrypt_block, copy_block, xor_block) != 0) {
 		rv = CRYPTO_MECHANISM_PARAM_INVALID;
 	}
-out:
+
 	return (rv);
 }
 
@@ -588,8 +591,7 @@ gmac_init_ctx(gcm_ctx_t *gcm_ctx, char *param, size_t block_size,
 		rv = CRYPTO_SUCCESS;
 		gcm_ctx->gcm_flags |= GMAC_MODE;
 	} else {
-		rv = CRYPTO_MECHANISM_PARAM_INVALID;
-		goto out;
+		return (CRYPTO_MECHANISM_PARAM_INVALID);
 	}
 
 	if (gcm_init(gcm_ctx, gmac_param->pIv, AES_GMAC_IV_LEN,
@@ -597,7 +599,7 @@ gmac_init_ctx(gcm_ctx_t *gcm_ctx, char *param, size_t block_size,
 	    encrypt_block, copy_block, xor_block) != 0) {
 		rv = CRYPTO_MECHANISM_PARAM_INVALID;
 	}
-out:
+
 	return (rv);
 }
 

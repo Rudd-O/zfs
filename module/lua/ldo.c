@@ -63,6 +63,8 @@
 #define JMP_BUF_CNT	12
 #elif defined(__s390x__)
 #define JMP_BUF_CNT	18
+#elif defined(__riscv)
+#define JMP_BUF_CNT     64
 #else
 #define	JMP_BUF_CNT	1
 #endif
@@ -174,6 +176,7 @@ int luaD_rawrunprotected (lua_State *L, Pfunc f, void *ud) {
   struct lua_longjmp lj;
   lj.status = LUA_OK;
   lj.previous = L->errorJmp;  /* chain new error handler */
+  // cppcheck-suppress autoVariables
   L->errorJmp = &lj;
   LUAI_TRY(L, &lj,
     (*f)(L, ud);

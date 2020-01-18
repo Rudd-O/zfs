@@ -39,7 +39,6 @@
 #include <sys/byteorder.h>
 #include <sys/policy.h>
 #include <sys/stat.h>
-#include <sys/mode.h>
 #include <sys/acl.h>
 #include <sys/dmu.h>
 #include <sys/dbuf.h>
@@ -232,7 +231,14 @@ zfs_xattr_owner_unlinked(znode_t *zp)
 {
 	int unlinked = 0;
 	znode_t *dzp;
-	igrab(ZTOI(zp));
+
+	/*
+	 * zrele drops the vnode lock which violates the VOP locking contract
+	 * on FreeBSD. See comment at the top of zfs_replay.c for more detail.
+	 */
+#ifndef __FreeBSD__
+	zhold(zp);
+#endif
 	/*
 	 * if zp is XATTR node, keep walking up via z_xattr_parent until we
 	 * get the owner
@@ -243,11 +249,13 @@ zfs_xattr_owner_unlinked(znode_t *zp)
 			unlinked = 1;
 			break;
 		}
-		iput(ZTOI(zp));
+		zrele(zp);
 		zp = dzp;
 		unlinked = zp->z_unlinked;
 	}
-	iput(ZTOI(zp));
+#ifndef __FreeBSD__
+	zrele(zp);
+#endif
 	return (unlinked);
 }
 
@@ -528,7 +536,7 @@ zfs_log_write(zilog_t *zilog, dmu_tx_t *tx, int txtype,
 	else if (!spa_has_slogs(zilog->zl_spa) &&
 	    resid >= zfs_immediate_write_sz)
 		write_state = WR_INDIRECT;
-	else if (ioflag & (FSYNC | FDSYNC))
+	else if (ioflag & (O_SYNC | O_DSYNC))
 		write_state = WR_COPIED;
 	else
 		write_state = WR_NEED_COPY;
@@ -578,7 +586,7 @@ zfs_log_write(zilog_t *zilog, dmu_tx_t *tx, int txtype,
 
 		itx->itx_private = ZTOZSB(zp);
 
-		if (!(ioflag & (FSYNC | FDSYNC)) && (zp->z_sync_cnt == 0) &&
+		if (!(ioflag & (O_SYNC | O_DSYNC)) && (zp->z_sync_cnt == 0) &&
 		    (fsync_cnt == 0))
 			itx->itx_sync = B_FALSE;
 

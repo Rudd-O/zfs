@@ -242,7 +242,7 @@ static kmutex_t spa_l2cache_lock;
 static avl_tree_t spa_l2cache_avl;
 
 kmem_cache_t *spa_buffer_pool;
-int spa_mode_global;
+spa_mode_t spa_mode_global = SPA_MODE_UNINIT;
 
 #ifdef ZFS_DEBUG
 /*
@@ -2282,7 +2282,7 @@ spa_boot_init(void)
 }
 
 void
-spa_init(int mode)
+spa_init(spa_mode_t mode)
 {
 	mutex_init(&spa_namespace_lock, NULL, MUTEX_DEFAULT, NULL);
 	mutex_init(&spa_spare_lock, NULL, MUTEX_DEFAULT, NULL);
@@ -2301,7 +2301,7 @@ spa_init(int mode)
 	spa_mode_global = mode;
 
 #ifndef _KERNEL
-	if (spa_mode_global != FREAD && dprintf_find_string("watch")) {
+	if (spa_mode_global != SPA_MODE_READ && dprintf_find_string("watch")) {
 		struct sigaction sa;
 
 		sa.sa_flags = SA_SIGINFO;
@@ -2406,7 +2406,7 @@ spa_is_root(spa_t *spa)
 boolean_t
 spa_writeable(spa_t *spa)
 {
-	return (!!(spa->spa_mode & FWRITE) && spa->spa_trust_config);
+	return (!!(spa->spa_mode & SPA_MODE_WRITE) && spa->spa_trust_config);
 }
 
 /*
@@ -2420,7 +2420,7 @@ spa_has_pending_synctask(spa_t *spa)
 	    !txg_all_lists_empty(&spa->spa_dsl_pool->dp_early_sync_tasks));
 }
 
-int
+spa_mode_t
 spa_mode(spa_t *spa)
 {
 	return (spa->spa_mode);
@@ -2670,7 +2670,7 @@ boolean_t
 spa_importing_readonly_checkpoint(spa_t *spa)
 {
 	return ((spa->spa_import_flags & ZFS_IMPORT_CHECKPOINT) &&
-	    spa->spa_mode == FREAD);
+	    spa->spa_mode == SPA_MODE_READ);
 }
 
 uint64_t
@@ -2708,30 +2708,30 @@ spa_suspend_async_destroy(spa_t *spa)
 
 #if defined(_KERNEL)
 
-static int
-param_set_deadman_failmode(const char *val, zfs_kernel_param_t *kp)
+int
+param_set_deadman_failmode_common(const char *val)
 {
 	spa_t *spa = NULL;
 	char *p;
 
 	if (val == NULL)
-		return (SET_ERROR(-EINVAL));
+		return (SET_ERROR(EINVAL));
 
 	if ((p = strchr(val, '\n')) != NULL)
 		*p = '\0';
 
 	if (strcmp(val, "wait") != 0 && strcmp(val, "continue") != 0 &&
 	    strcmp(val, "panic"))
-		return (SET_ERROR(-EINVAL));
+		return (SET_ERROR(EINVAL));
 
-	if (spa_mode_global != 0) {
+	if (spa_mode_global != SPA_MODE_UNINIT) {
 		mutex_enter(&spa_namespace_lock);
 		while ((spa = spa_next(spa)) != NULL)
 			spa_set_deadman_failmode(spa, val);
 		mutex_exit(&spa_namespace_lock);
 	}
 
-	return (param_set_charp(val, kp));
+	return (0);
 }
 #endif
 
@@ -2847,13 +2847,11 @@ ZFS_MODULE_PARAM(zfs, zfs_, ddt_data_is_special, INT, ZMOD_RW,
 ZFS_MODULE_PARAM(zfs, zfs_, user_indirect_is_special, INT, ZMOD_RW,
 	"Place user data indirect blocks into the special class");
 
-#ifdef _KERNEL
-module_param_call(zfs_deadman_failmode, param_set_deadman_failmode,
-	param_get_charp, &zfs_deadman_failmode, 0644);
-MODULE_PARM_DESC(zfs_deadman_failmode, "Failmode for deadman timer");
-#endif
-
 /* BEGIN CSTYLED */
+ZFS_MODULE_PARAM_CALL(zfs_deadman, zfs_deadman_, failmode,
+	param_set_deadman_failmode, param_get_charp, ZMOD_RW,
+	"Failmode for deadman timer");
+
 ZFS_MODULE_PARAM_CALL(zfs_deadman, zfs_deadman_, synctime_ms,
 	param_set_deadman_synctime, param_get_ulong, ZMOD_RW,
 	"Pool sync expiration time in milliseconds");

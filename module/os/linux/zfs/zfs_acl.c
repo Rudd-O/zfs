@@ -37,12 +37,12 @@
 #include <sys/cmn_err.h>
 #include <sys/errno.h>
 #include <sys/fs/zfs.h>
-#include <sys/mode.h>
 #include <sys/policy.h>
 #include <sys/zfs_znode.h>
 #include <sys/zfs_fuid.h>
 #include <sys/zfs_acl.h>
 #include <sys/zfs_dir.h>
+#include <sys/zfs_quota.h>
 #include <sys/zfs_vfsops.h>
 #include <sys/dmu.h>
 #include <sys/dnode.h>
@@ -2159,8 +2159,8 @@ static int
 zfs_zaccess_dataset_check(znode_t *zp, uint32_t v4_mode)
 {
 	if ((v4_mode & WRITE_MASK) && (zfs_is_readonly(ZTOZSB(zp))) &&
-	    (!S_ISDEV(ZTOI(zp)->i_mode) ||
-	    (S_ISDEV(ZTOI(zp)->i_mode) && (v4_mode & WRITE_MASK_ATTRS)))) {
+	    (!Z_ISDEV(ZTOI(zp)->i_mode) ||
+	    (Z_ISDEV(ZTOI(zp)->i_mode) && (v4_mode & WRITE_MASK_ATTRS)))) {
 		return (SET_ERROR(EROFS));
 	}
 
@@ -2541,14 +2541,14 @@ zfs_zaccess(znode_t *zp, int mode, int flags, boolean_t skipaclchk, cred_t *cr)
 	if ((error = zfs_zaccess_common(check_zp, mode, &working_mode,
 	    &check_privs, skipaclchk, cr)) == 0) {
 		if (is_attr)
-			iput(ZTOI(xzp));
+			zrele(xzp);
 		return (secpolicy_vnode_access2(cr, ZTOI(zp), owner,
 		    needed_bits, needed_bits));
 	}
 
 	if (error && !check_privs) {
 		if (is_attr)
-			iput(ZTOI(xzp));
+			zrele(xzp);
 		return (error);
 	}
 
@@ -2610,7 +2610,7 @@ zfs_zaccess(znode_t *zp, int mode, int flags, boolean_t skipaclchk, cred_t *cr)
 	}
 
 	if (is_attr)
-		iput(ZTOI(xzp));
+		zrele(xzp);
 
 	return (error);
 }

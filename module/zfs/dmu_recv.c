@@ -61,6 +61,7 @@
 #ifdef _KERNEL
 #include <sys/zfs_vfsops.h>
 #endif
+#include <sys/zfs_file.h>
 
 int zfs_recv_queue_length = SPA_MAXBLOCKSIZE;
 int zfs_recv_queue_ff = 20;
@@ -886,7 +887,6 @@ dmu_recv_begin_sync(void *arg, dmu_tx_t *tx)
 		drba->drba_cookie->drc_raw = B_TRUE;
 	}
 
-
 	if (featureflags & DMU_BACKUP_FEATURE_REDACTED) {
 		uint64_t *redact_snaps;
 		uint_t numredactsnaps;
@@ -1018,6 +1018,9 @@ dmu_recv_resume_begin_check(void *arg, dmu_tx_t *tx)
 		return (SET_ERROR(EINVAL));
 	}
 
+	if (ds->ds_prev != NULL)
+		drc->drc_fromsnapobj = ds->ds_prev->ds_object;
+
 	/*
 	 * If we're resuming, and the send is redacted, then the original send
 	 * must have been redacted, and must have been redacted with respect to
@@ -1092,6 +1095,7 @@ dmu_recv_resume_begin_sync(void *arg, dmu_tx_t *tx)
 	rrw_exit(&ds->ds_bp_rwlock, FTAG);
 
 	drba->drba_cookie->drc_ds = ds;
+	drba->drba_cookie->drc_should_save = B_TRUE;
 
 	spa_history_log_internal_ds(ds, "resume receive", tx, " ");
 }
@@ -1103,8 +1107,8 @@ dmu_recv_resume_begin_sync(void *arg, dmu_tx_t *tx)
 int
 dmu_recv_begin(char *tofs, char *tosnap, dmu_replay_record_t *drr_begin,
     boolean_t force, boolean_t resumable, nvlist_t *localprops,
-    nvlist_t *hidden_args, char *origin, dmu_recv_cookie_t *drc, vnode_t *vp,
-    offset_t *voffp)
+    nvlist_t *hidden_args, char *origin, dmu_recv_cookie_t *drc,
+    zfs_file_t *fp, offset_t *voffp)
 {
 	dmu_recv_begin_arg_t drba = { 0 };
 	int err;
@@ -1131,7 +1135,7 @@ dmu_recv_begin(char *tofs, char *tosnap, dmu_replay_record_t *drr_begin,
 		return (SET_ERROR(EINVAL));
 	}
 
-	drc->drc_vp = vp;
+	drc->drc_fp = fp;
 	drc->drc_voff = *voffp;
 	drc->drc_featureflags =
 	    DMU_GET_FEATUREFLAGS(drc->drc_drrb->drr_versioninfo);
@@ -1248,12 +1252,11 @@ receive_read(dmu_recv_cookie_t *drc, int len, void *buf)
 
 	while (done < len) {
 		ssize_t resid;
+		zfs_file_t *fp;
 
-		drc->drc_err = vn_rdwr(UIO_READ, drc->drc_vp,
-		    (char *)buf + done, len - done,
-		    drc->drc_voff, UIO_SYSSPACE, FAPPEND,
-		    RLIM64_INFINITY, CRED(), &resid);
-
+		fp = drc->drc_fp;
+		drc->drc_err = zfs_file_read(fp, (char *)buf + done,
+		    len - done, &resid);
 		if (resid == len - done) {
 			/*
 			 * Note: ECKSUM indicates that the receive
@@ -2069,7 +2072,8 @@ dmu_recv_cleanup_ds(dmu_recv_cookie_t *drc)
 	ds->ds_objset->os_raw_receive = B_FALSE;
 
 	rrw_enter(&ds->ds_bp_rwlock, RW_READER, FTAG);
-	if (drc->drc_resumable && !BP_IS_HOLE(dsl_dataset_get_blkptr(ds))) {
+	if (drc->drc_resumable && drc->drc_should_save &&
+	    !BP_IS_HOLE(dsl_dataset_get_blkptr(ds))) {
 		rrw_exit(&ds->ds_bp_rwlock, FTAG);
 		dsl_dataset_disown(ds, dsflags, dmu_recv_tag);
 	} else {
@@ -2738,6 +2742,13 @@ dmu_recv_stream(dmu_recv_cookie_t *drc, int cleanup_fd,
 		if (err != 0)
 			goto out;
 	}
+
+	/*
+	 * If we failed before this point we will clean up any new resume
+	 * state that was created. Now that we've gotten past the initial
+	 * checks we are ok to retain that resume state.
+	 */
+	drc->drc_should_save = B_TRUE;
 
 	(void) bqueue_init(&rwa->q, zfs_recv_queue_ff,
 	    MAX(zfs_recv_queue_length, 2 * zfs_max_recordsize),

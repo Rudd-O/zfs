@@ -38,7 +38,6 @@
 #include <sys/file.h>
 #include <sys/kmem.h>
 #include <sys/errno.h>
-#include <sys/mode.h>
 #include <sys/atomic.h>
 #include <sys/zfs_dir.h>
 #include <sys/zfs_acl.h>
@@ -319,6 +318,12 @@ zfs_znode_hold_exit(zfsvfs_t *zfsvfs, znode_hold_t *zh)
 
 	if (remove == B_TRUE)
 		kmem_cache_free(znode_hold_cache, zh);
+}
+
+dev_t
+zfs_cmpldev(uint64_t dev)
+{
+	return (dev);
 }
 
 static void
@@ -1094,6 +1099,10 @@ again:
 		mutex_enter(&zp->z_lock);
 		ASSERT3U(zp->z_id, ==, obj_num);
 		/*
+		 * If zp->z_unlinked is set, the znode is already marked
+		 * for deletion and should not be discovered. Check this
+		 * after checking igrab() due to fsetxattr() & O_TMPFILE.
+		 *
 		 * If igrab() returns NULL the VFS has independently
 		 * determined the inode should be evicted and has
 		 * called iput_final() to start the eviction process.
@@ -1108,18 +1117,24 @@ again:
 		 * the VFS that this inode should not be evicted.
 		 */
 		if (igrab(ZTOI(zp)) == NULL) {
-			mutex_exit(&zp->z_lock);
-			sa_buf_rele(db, NULL);
-			zfs_znode_hold_exit(zfsvfs, zh);
+			if (zp->z_unlinked)
+				err = SET_ERROR(ENOENT);
+			else
+				err = SET_ERROR(EAGAIN);
+		} else {
+			*zpp = zp;
+			err = 0;
+		}
+
+		mutex_exit(&zp->z_lock);
+		sa_buf_rele(db, NULL);
+		zfs_znode_hold_exit(zfsvfs, zh);
+
+		if (err == EAGAIN) {
 			/* inode might need this to finish evict */
 			cond_resched();
 			goto again;
 		}
-		*zpp = zp;
-		err = 0;
-		mutex_exit(&zp->z_lock);
-		sa_buf_rele(db, NULL);
-		zfs_znode_hold_exit(zfsvfs, zh);
 		return (err);
 	}
 

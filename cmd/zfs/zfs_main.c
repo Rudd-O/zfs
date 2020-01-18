@@ -122,6 +122,11 @@ static int zfs_do_project(int argc, char **argv);
 static int zfs_do_version(int argc, char **argv);
 static int zfs_do_redact(int argc, char **argv);
 
+#ifdef __FreeBSD__
+static int zfs_do_jail(int argc, char **argv);
+static int zfs_do_unjail(int argc, char **argv);
+#endif
+
 /*
  * Enable a reasonable set of defaults for libumem debugging on DEBUG builds.
  */
@@ -176,6 +181,8 @@ typedef enum {
 	HELP_CHANGE_KEY,
 	HELP_VERSION,
 	HELP_REDACT,
+	HELP_JAIL,
+	HELP_UNJAIL
 } zfs_help_t;
 
 typedef struct zfs_command {
@@ -240,6 +247,11 @@ static zfs_command_t command_table[] = {
 	{ "unload-key",	zfs_do_unload_key,	HELP_UNLOAD_KEY		},
 	{ "change-key",	zfs_do_change_key,	HELP_CHANGE_KEY		},
 	{ "redact",	zfs_do_redact,		HELP_REDACT		},
+
+#ifdef __FreeBSD__
+	{ "jail",	zfs_do_jail,		HELP_JAIL		},
+	{ "unjail",	zfs_do_unjail,		HELP_UNJAIL		},
+#endif
 };
 
 #define	NCOMMAND	(sizeof (command_table) / sizeof (command_table[0]))
@@ -306,7 +318,8 @@ get_usage(zfs_help_t idx)
 		    "<filesystem|volume|snapshot>\n"
 		    "\tsend [-DnPpvLec] [-i bookmark|snapshot] "
 		    "--redact <bookmark> <snapshot>\n"
-		    "\tsend [-nvPe] -t <receive_resume_token>\n"));
+		    "\tsend [-nvPe] -t <receive_resume_token>\n"
+		    "\tsend [-Pnv] --saved filesystem\n"));
 	case HELP_SET:
 		return (gettext("\tset <property=value> ... "
 		    "<filesystem|volume|snapshot> ...\n"));
@@ -391,6 +404,10 @@ get_usage(zfs_help_t idx)
 	case HELP_REDACT:
 		return (gettext("\tredact <snapshot> <bookmark> "
 		    "<redaction_snapshot> ..."));
+	case HELP_JAIL:
+		return (gettext("\tjail <jailid|jailname> <filesystem>\n"));
+	case HELP_UNJAIL:
+		return (gettext("\tunjail <jailid|jailname> <filesystem>\n"));
 	}
 
 	abort();
@@ -734,7 +751,7 @@ zfs_mount_and_share(libzfs_handle_t *hdl, const char *dataset, zfs_type_t type)
 	 */
 	if (zfs_prop_valid_for_type(ZFS_PROP_CANMOUNT, type, B_FALSE) &&
 	    zfs_prop_get_int(zhp, ZFS_PROP_CANMOUNT) == ZFS_CANMOUNT_ON) {
-		if (geteuid() != 0) {
+		if (zfs_mount_delegation_check()) {
 			(void) fprintf(stderr, gettext("filesystem "
 			    "successfully created, but it may only be "
 			    "mounted by root\n"));
@@ -1965,7 +1982,7 @@ zfs_do_get(int argc, char **argv)
 			flags &= ~ZFS_ITER_PROP_LISTSNAPS;
 			while (*optarg != '\0') {
 				static char *type_subopts[] = { "filesystem",
-				    "volume", "snapshot", "bookmark",
+				    "volume", "snapshot", "snap", "bookmark",
 				    "all", NULL };
 
 				switch (getsubopt(&optarg, type_subopts,
@@ -1977,12 +1994,13 @@ zfs_do_get(int argc, char **argv)
 					types |= ZFS_TYPE_VOLUME;
 					break;
 				case 2:
+				case 3:
 					types |= ZFS_TYPE_SNAPSHOT;
 					break;
-				case 3:
+				case 4:
 					types |= ZFS_TYPE_BOOKMARK;
 					break;
-				case 4:
+				case 5:
 					types = ZFS_TYPE_DATASET |
 					    ZFS_TYPE_BOOKMARK;
 					break;
@@ -2015,11 +2033,11 @@ zfs_do_get(int argc, char **argv)
 	fields = argv[0];
 
 	/*
-	 * Handle users who want to get all snapshots of the current
-	 * dataset (ex. 'zfs get -t snapshot refer <dataset>').
+	 * Handle users who want to get all snapshots or bookmarks
+	 * of a dataset (ex. 'zfs get -t snapshot refer <dataset>').
 	 */
-	if (types == ZFS_TYPE_SNAPSHOT && argc > 1 &&
-	    (flags & ZFS_ITER_RECURSE) == 0 && limit == 0) {
+	if ((types == ZFS_TYPE_SNAPSHOT || types == ZFS_TYPE_BOOKMARK) &&
+	    argc > 1 && (flags & ZFS_ITER_RECURSE) == 0 && limit == 0) {
 		flags |= (ZFS_ITER_DEPTH_LIMIT | ZFS_ITER_RECURSE);
 		limit = 1;
 	}
@@ -3519,11 +3537,11 @@ zfs_do_list(int argc, char **argv)
 		types &= ~ZFS_TYPE_SNAPSHOT;
 
 	/*
-	 * Handle users who want to list all snapshots of the current
-	 * dataset (ex. 'zfs list -t snapshot <dataset>').
+	 * Handle users who want to list all snapshots or bookmarks
+	 * of the current dataset (ex. 'zfs list -t snapshot <dataset>').
 	 */
-	if (types == ZFS_TYPE_SNAPSHOT && argc > 0 &&
-	    (flags & ZFS_ITER_RECURSE) == 0 && limit == 0) {
+	if ((types == ZFS_TYPE_SNAPSHOT || types == ZFS_TYPE_BOOKMARK) &&
+	    argc > 0 && (flags & ZFS_ITER_RECURSE) == 0 && limit == 0) {
 		flags |= (ZFS_ITER_DEPTH_LIMIT | ZFS_ITER_RECURSE);
 		limit = 1;
 	}
@@ -4190,11 +4208,12 @@ zfs_do_send(int argc, char **argv)
 		{"raw",		no_argument,		NULL, 'w'},
 		{"backup",	no_argument,		NULL, 'b'},
 		{"holds",	no_argument,		NULL, 'h'},
+		{"saved",	no_argument,		NULL, 'S'},
 		{0, 0, 0, 0}
 	};
 
 	/* check options */
-	while ((c = getopt_long(argc, argv, ":i:I:RDpvnPLeht:cwbd:",
+	while ((c = getopt_long(argc, argv, ":i:I:RDpvnPLeht:cwbd:S",
 	    long_options, NULL)) != -1) {
 		switch (c) {
 		case 'i':
@@ -4254,6 +4273,9 @@ zfs_do_send(int argc, char **argv)
 			flags.embed_data = B_TRUE;
 			flags.largeblock = B_TRUE;
 			break;
+		case 'S':
+			flags.saved = B_TRUE;
+			break;
 		case ':':
 			/*
 			 * If a parameter was not passed, optopt contains the
@@ -4304,7 +4326,7 @@ zfs_do_send(int argc, char **argv)
 	if (resume_token != NULL) {
 		if (fromname != NULL || flags.replicate || flags.props ||
 		    flags.backup || flags.dedup || flags.holds ||
-		    redactbook != NULL) {
+		    flags.saved || redactbook != NULL) {
 			(void) fprintf(stderr,
 			    gettext("invalid flags combined with -t\n"));
 			usage(B_FALSE);
@@ -4325,6 +4347,23 @@ zfs_do_send(int argc, char **argv)
 		}
 	}
 
+	if (flags.saved) {
+		if (fromname != NULL || flags.replicate || flags.props ||
+		    flags.doall || flags.backup || flags.dedup ||
+		    flags.holds || flags.largeblock || flags.embed_data ||
+		    flags.compress || flags.raw || redactbook != NULL) {
+			(void) fprintf(stderr, gettext("incompatible flags "
+			    "combined with saved send flag\n"));
+			usage(B_FALSE);
+		}
+		if (strchr(argv[0], '@') != NULL) {
+			(void) fprintf(stderr, gettext("saved send must "
+			    "specify the dataset with partially-received "
+			    "state\n"));
+			usage(B_FALSE);
+		}
+	}
+
 	if (flags.raw && redactbook != NULL) {
 		(void) fprintf(stderr,
 		    gettext("Error: raw sends may not be redacted.\n"));
@@ -4338,7 +4377,16 @@ zfs_do_send(int argc, char **argv)
 		return (1);
 	}
 
-	if (resume_token != NULL) {
+	if (flags.saved) {
+		zhp = zfs_open(g_zfs, argv[0], ZFS_TYPE_DATASET);
+		if (zhp == NULL)
+			return (1);
+
+		err = zfs_send_saved(zhp, &flags, STDOUT_FILENO,
+		    resume_token);
+		zfs_close(zhp);
+		return (err != 0);
+	} else if (resume_token != NULL) {
 		return (zfs_send_resume(g_zfs, &flags, STDOUT_FILENO,
 		    resume_token));
 	}
@@ -5085,7 +5133,6 @@ parse_fs_perm(fs_perm_t *fsperm, nvlist_t *nvl)
 		zfs_deleg_who_type_t perm_type = name[0];
 		char perm_locality = name[1];
 		const char *perm_name = name + 3;
-		boolean_t is_set = B_TRUE;
 		who_perm_t *who_perm = NULL;
 
 		assert('$' == name[2]);
@@ -5115,57 +5162,56 @@ parse_fs_perm(fs_perm_t *fsperm, nvlist_t *nvl)
 			assert(!"unhandled zfs_deleg_who_type_t");
 		}
 
-		if (is_set) {
-			who_perm_node_t *found_node = NULL;
-			who_perm_node_t *node = safe_malloc(
-			    sizeof (who_perm_node_t));
-			who_perm = &node->who_perm;
-			uu_avl_index_t idx = 0;
+		who_perm_node_t *found_node = NULL;
+		who_perm_node_t *node = safe_malloc(
+		    sizeof (who_perm_node_t));
+		who_perm = &node->who_perm;
+		uu_avl_index_t idx = 0;
 
-			uu_avl_node_init(node, &node->who_avl_node, avl_pool);
-			who_perm_init(who_perm, fsperm, perm_type, perm_name);
+		uu_avl_node_init(node, &node->who_avl_node, avl_pool);
+		who_perm_init(who_perm, fsperm, perm_type, perm_name);
 
-			if ((found_node = uu_avl_find(avl, node, NULL, &idx))
-			    == NULL) {
-				if (avl == fsperm->fsp_uge_avl) {
-					uid_t rid = 0;
-					struct passwd *p = NULL;
-					struct group *g = NULL;
-					const char *nice_name = NULL;
+		if ((found_node = uu_avl_find(avl, node, NULL, &idx))
+		    == NULL) {
+			if (avl == fsperm->fsp_uge_avl) {
+				uid_t rid = 0;
+				struct passwd *p = NULL;
+				struct group *g = NULL;
+				const char *nice_name = NULL;
 
-					switch (perm_type) {
-					case ZFS_DELEG_USER_SETS:
-					case ZFS_DELEG_USER:
-						rid = atoi(perm_name);
-						p = getpwuid(rid);
-						if (p)
-							nice_name = p->pw_name;
-						break;
-					case ZFS_DELEG_GROUP_SETS:
-					case ZFS_DELEG_GROUP:
-						rid = atoi(perm_name);
-						g = getgrgid(rid);
-						if (g)
-							nice_name = g->gr_name;
-						break;
+				switch (perm_type) {
+				case ZFS_DELEG_USER_SETS:
+				case ZFS_DELEG_USER:
+					rid = atoi(perm_name);
+					p = getpwuid(rid);
+					if (p)
+						nice_name = p->pw_name;
+					break;
+				case ZFS_DELEG_GROUP_SETS:
+				case ZFS_DELEG_GROUP:
+					rid = atoi(perm_name);
+					g = getgrgid(rid);
+					if (g)
+						nice_name = g->gr_name;
+					break;
 
-					default:
-						break;
-					}
-
-					if (nice_name != NULL)
-						(void) strlcpy(
-						    node->who_perm.who_ug_name,
-						    nice_name, 256);
+				default:
+					break;
 				}
 
-				uu_avl_insert(avl, node, idx);
-			} else {
-				node = found_node;
-				who_perm = &node->who_perm;
+				if (nice_name != NULL)
+					(void) strlcpy(
+					    node->who_perm.who_ug_name,
+					    nice_name, 256);
 			}
+
+			uu_avl_insert(avl, node, idx);
+		} else {
+			node = found_node;
+			who_perm = &node->who_perm;
 		}
-		VERIFY3P(who_perm, !=, NULL);
+
+		assert(who_perm != NULL);
 		(void) parse_who_perm(who_perm, nvl2, perm_locality);
 	}
 
@@ -6969,7 +7015,6 @@ unshare_unmount_path(int op, char *path, int flags, boolean_t is_manual)
 	const char *cmdname = (op == OP_SHARE) ? "unshare" : "unmount";
 	ino_t path_inode;
 
-
 	/*
 	 * Search for the given (major,minor) pair in the mount table.
 	 */
@@ -7232,8 +7277,12 @@ unshare_unmount(int op, int argc, char **argv)
 			nomem();
 
 		while ((node = uu_avl_walk_next(walk)) != NULL) {
-			uu_avl_remove(tree, node);
+			const char *mntarg = NULL;
 
+			uu_avl_remove(tree, node);
+#ifndef __FreeBSD__
+			mntarg = node->un_zhp->zfs_name;
+#endif
 			switch (op) {
 			case OP_SHARE:
 				if (zfs_unshareall_bytype(node->un_zhp,
@@ -7243,7 +7292,7 @@ unshare_unmount(int op, int argc, char **argv)
 
 			case OP_MOUNT:
 				if (zfs_unmount(node->un_zhp,
-				    node->un_zhp->zfs_name, flags) != 0)
+				    mntarg, flags) != 0)
 					ret = 1;
 				break;
 			}
@@ -8349,3 +8398,67 @@ main(int argc, char **argv)
 
 	return (ret);
 }
+
+#ifdef __FreeBSD__
+#include <sys/jail.h>
+#include <jail.h>
+/*
+ * Attach/detach the given dataset to/from the given jail
+ */
+/* ARGSUSED */
+static int
+zfs_do_jail_impl(int argc, char **argv, boolean_t attach)
+{
+	zfs_handle_t *zhp;
+	int jailid, ret;
+
+	/* check number of arguments */
+	if (argc < 3) {
+		(void) fprintf(stderr, gettext("missing argument(s)\n"));
+		usage(B_FALSE);
+	}
+	if (argc > 3) {
+		(void) fprintf(stderr, gettext("too many arguments\n"));
+		usage(B_FALSE);
+	}
+
+	jailid = jail_getid(argv[1]);
+	if (jailid < 0) {
+		(void) fprintf(stderr, gettext("invalid jail id or name\n"));
+		usage(B_FALSE);
+	}
+
+	zhp = zfs_open(g_zfs, argv[2], ZFS_TYPE_FILESYSTEM);
+	if (zhp == NULL)
+		return (1);
+
+	ret = (zfs_jail(zhp, jailid, attach) != 0);
+
+	zfs_close(zhp);
+	return (ret);
+}
+
+/*
+ * zfs jail jailid filesystem
+ *
+ * Attach the given dataset to the given jail
+ */
+/* ARGSUSED */
+static int
+zfs_do_jail(int argc, char **argv)
+{
+	return (zfs_do_jail_impl(argc, argv, B_TRUE));
+}
+
+/*
+ * zfs unjail jailid filesystem
+ *
+ * Detach the given dataset from the given jail
+ */
+/* ARGSUSED */
+static int
+zfs_do_unjail(int argc, char **argv)
+{
+	return (zfs_do_jail_impl(argc, argv, B_FALSE));
+}
+#endif

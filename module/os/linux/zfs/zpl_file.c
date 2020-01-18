@@ -29,9 +29,9 @@
 #endif
 #include <sys/file.h>
 #include <sys/dmu_objset.h>
+#include <sys/zfs_znode.h>
 #include <sys/zfs_vfsops.h>
 #include <sys/zfs_vnops.h>
-#include <sys/zfs_znode.h>
 #include <sys/zfs_project.h>
 
 
@@ -108,40 +108,7 @@ zpl_readdir(struct file *filp, void *dirent, filldir_t filldir)
 }
 #endif /* !HAVE_VFS_ITERATE && !HAVE_VFS_ITERATE_SHARED */
 
-#if defined(HAVE_FSYNC_WITH_DENTRY)
-/*
- * Linux 2.6.x - 2.6.34 API,
- * Through 2.6.34 the nfsd kernel server would pass a NULL 'file struct *'
- * to the fops->fsync() hook.  For this reason, we must be careful not to
- * use filp unconditionally.
- */
-static int
-zpl_fsync(struct file *filp, struct dentry *dentry, int datasync)
-{
-	cred_t *cr = CRED();
-	int error;
-	fstrans_cookie_t cookie;
-
-	crhold(cr);
-	cookie = spl_fstrans_mark();
-	error = -zfs_fsync(dentry->d_inode, datasync, cr);
-	spl_fstrans_unmark(cookie);
-	crfree(cr);
-	ASSERT3S(error, <=, 0);
-
-	return (error);
-}
-
-#ifdef HAVE_FILE_AIO_FSYNC
-static int
-zpl_aio_fsync(struct kiocb *kiocb, int datasync)
-{
-	struct file *filp = kiocb->ki_filp;
-	return (zpl_fsync(filp, file_dentry(filp), datasync));
-}
-#endif
-
-#elif defined(HAVE_FSYNC_WITHOUT_DENTRY)
+#if defined(HAVE_FSYNC_WITHOUT_DENTRY)
 /*
  * Linux 2.6.35 - 3.0 API,
  * As of 2.6.35 the dentry argument to the fops->fsync() hook was deemed
@@ -158,7 +125,7 @@ zpl_fsync(struct file *filp, int datasync)
 
 	crhold(cr);
 	cookie = spl_fstrans_mark();
-	error = -zfs_fsync(inode, datasync, cr);
+	error = -zfs_fsync(ITOZ(inode), datasync, cr);
 	spl_fstrans_unmark(cookie);
 	crfree(cr);
 	ASSERT3S(error, <=, 0);
@@ -196,7 +163,7 @@ zpl_fsync(struct file *filp, loff_t start, loff_t end, int datasync)
 
 	crhold(cr);
 	cookie = spl_fstrans_mark();
-	error = -zfs_fsync(inode, datasync, cr);
+	error = -zfs_fsync(ITOZ(inode), datasync, cr);
 	spl_fstrans_unmark(cookie);
 	crfree(cr);
 	ASSERT3S(error, <=, 0);
@@ -223,19 +190,19 @@ zfs_io_flags(struct kiocb *kiocb)
 
 #if defined(IOCB_DSYNC)
 	if (kiocb->ki_flags & IOCB_DSYNC)
-		flags |= FDSYNC;
+		flags |= O_DSYNC;
 #endif
 #if defined(IOCB_SYNC)
 	if (kiocb->ki_flags & IOCB_SYNC)
-		flags |= FSYNC;
+		flags |= O_SYNC;
 #endif
 #if defined(IOCB_APPEND)
 	if (kiocb->ki_flags & IOCB_APPEND)
-		flags |= FAPPEND;
+		flags |= O_APPEND;
 #endif
 #if defined(IOCB_DIRECT)
 	if (kiocb->ki_flags & IOCB_DIRECT)
-		flags |= FDIRECT;
+		flags |= O_DIRECT;
 #endif
 	return (flags);
 }
@@ -758,20 +725,17 @@ zpl_writepage(struct page *pp, struct writeback_control *wbc)
  * is FALLOC_FL_KEEP_SIZE | FALLOC_FL_PUNCH_HOLE.  The FALLOC_FL_PUNCH_HOLE
  * flag was introduced in the 2.6.38 kernel.
  */
-#if defined(HAVE_FILE_FALLOCATE) || defined(HAVE_INODE_FALLOCATE)
-long
+static long
 zpl_fallocate_common(struct inode *ip, int mode, loff_t offset, loff_t len)
 {
-	int error = -EOPNOTSUPP;
-
-#if defined(FALLOC_FL_PUNCH_HOLE) && defined(FALLOC_FL_KEEP_SIZE)
 	cred_t *cr = CRED();
 	flock64_t bf;
 	loff_t olen;
 	fstrans_cookie_t cookie;
+	int error;
 
 	if (mode != (FALLOC_FL_KEEP_SIZE | FALLOC_FL_PUNCH_HOLE))
-		return (error);
+		return (-EOPNOTSUPP);
 
 	if (offset < 0 || len <= 0)
 		return (-EINVAL);
@@ -793,26 +757,21 @@ zpl_fallocate_common(struct inode *ip, int mode, loff_t offset, loff_t len)
 
 	crhold(cr);
 	cookie = spl_fstrans_mark();
-	error = -zfs_space(ip, F_FREESP, &bf, FWRITE, offset, cr);
+	error = -zfs_space(ITOZ(ip), F_FREESP, &bf, O_RDWR, offset, cr);
 	spl_fstrans_unmark(cookie);
 	spl_inode_unlock(ip);
 
 	crfree(cr);
-#endif /* defined(FALLOC_FL_PUNCH_HOLE) && defined(FALLOC_FL_KEEP_SIZE) */
 
-	ASSERT3S(error, <=, 0);
 	return (error);
 }
-#endif /* defined(HAVE_FILE_FALLOCATE) || defined(HAVE_INODE_FALLOCATE) */
 
-#ifdef HAVE_FILE_FALLOCATE
 static long
 zpl_fallocate(struct file *filp, int mode, loff_t offset, loff_t len)
 {
 	return zpl_fallocate_common(file_inode(filp),
 	    mode, offset, len);
 }
-#endif /* HAVE_FILE_FALLOCATE */
 
 #define	ZFS_FL_USER_VISIBLE	(FS_FL_USER_VISIBLE | ZFS_PROJINHERIT_FL)
 #define	ZFS_FL_USER_MODIFIABLE	(FS_FL_USER_MODIFIABLE | ZFS_PROJINHERIT_FL)
@@ -883,7 +842,7 @@ __zpl_ioctl_setflags(struct inode *ip, uint32_t ioctl_flags, xvattr_t *xva)
 	    !capable(CAP_LINUX_IMMUTABLE))
 		return (-EACCES);
 
-	if (!zpl_inode_owner_or_capable(ip))
+	if (!inode_owner_or_capable(ip))
 		return (-EACCES);
 
 	xva_init(xva);
@@ -927,7 +886,7 @@ zpl_ioctl_setflags(struct file *filp, void __user *arg)
 
 	crhold(cr);
 	cookie = spl_fstrans_mark();
-	err = -zfs_setattr(ip, (vattr_t *)&xva, 0, cr);
+	err = -zfs_setattr(ITOZ(ip), (vattr_t *)&xva, 0, cr);
 	spl_fstrans_unmark(cookie);
 	crfree(cr);
 
@@ -975,7 +934,7 @@ zpl_ioctl_setxattr(struct file *filp, void __user *arg)
 
 	crhold(cr);
 	cookie = spl_fstrans_mark();
-	err = -zfs_setattr(ip, (vattr_t *)&xva, 0, cr);
+	err = -zfs_setattr(ITOZ(ip), (vattr_t *)&xva, 0, cr);
 	spl_fstrans_unmark(cookie);
 	crfree(cr);
 
@@ -1048,9 +1007,7 @@ const struct file_operations zpl_file_operations = {
 #ifdef HAVE_FILE_AIO_FSYNC
 	.aio_fsync	= zpl_aio_fsync,
 #endif
-#ifdef HAVE_FILE_FALLOCATE
 	.fallocate	= zpl_fallocate,
-#endif /* HAVE_FILE_FALLOCATE */
 	.unlocked_ioctl	= zpl_ioctl,
 #ifdef CONFIG_COMPAT
 	.compat_ioctl	= zpl_compat_ioctl,

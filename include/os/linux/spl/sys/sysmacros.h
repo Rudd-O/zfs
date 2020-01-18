@@ -27,15 +27,13 @@
 
 #include <linux/module.h>
 #include <linux/sched.h>
+#include <linux/sched/rt.h>
 #include <linux/cpumask.h>
 #include <sys/debug.h>
 #include <sys/zone.h>
 #include <sys/signal.h>
 #include <asm/page.h>
 
-#ifdef HAVE_SCHED_RT_HEADER
-#include <linux/sched/rt.h>
-#endif
 
 #ifndef _KERNEL
 #define	_KERNEL				__KERNEL__
@@ -194,7 +192,11 @@ extern void spl_cleanup(void);
 #define	SET_ERROR(err) \
 	(__set_error(__FILE__, __func__, __LINE__, err), err)
 
-#if defined(_KERNEL) && !defined(_KMEMUSER) && !defined(offsetof)
+#include <linux/sort.h>
+#define	qsort(base, num, size, cmp)		\
+	sort(base, num, size, cmp, NULL)
+
+#if !defined(_KMEMUSER) && !defined(offsetof)
 
 /* avoid any possibility of clashing with <stddef.h> version */
 

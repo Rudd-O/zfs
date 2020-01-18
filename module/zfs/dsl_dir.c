@@ -141,7 +141,7 @@ dsl_dir_evict_async(void *dbu)
 {
 	dsl_dir_t *dd = dbu;
 	int t;
-	ASSERTV(dsl_pool_t *dp = dd->dd_pool);
+	dsl_pool_t *dp __maybe_unused = dd->dd_pool;
 
 	dd->dd_dbuf = NULL;
 
@@ -743,6 +743,7 @@ dsl_enforce_ds_ss_limits(dsl_dir_t *dd, zfs_prop_t prop, cred_t *cr)
 	uint64_t obj;
 	dsl_dataset_t *ds;
 	uint64_t zoned;
+	const char *zonedstr;
 
 	ASSERT(prop == ZFS_PROP_FILESYSTEM_LIMIT ||
 	    prop == ZFS_PROP_SNAPSHOT_LIMIT);
@@ -763,7 +764,8 @@ dsl_enforce_ds_ss_limits(dsl_dir_t *dd, zfs_prop_t prop, cred_t *cr)
 	if (dsl_dataset_hold_obj(dd->dd_pool, obj, FTAG, &ds) != 0)
 		return (ENFORCE_ALWAYS);
 
-	if (dsl_prop_get_ds(ds, "zoned", 8, 1, &zoned, NULL) || zoned) {
+	zonedstr = zfs_prop_to_name(ZFS_PROP_ZONED);
+	if (dsl_prop_get_ds(ds, zonedstr, 8, 1, &zoned, NULL) || zoned) {
 		/* Only root can access zoned fs's from the GZ */
 		enforce = ENFORCE_ALWAYS;
 	} else {

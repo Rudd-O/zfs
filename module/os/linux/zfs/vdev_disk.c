@@ -37,10 +37,21 @@
 #include <linux/msdos_fs.h>
 #include <linux/vfs_compat.h>
 
-char *zfs_vdev_scheduler = VDEV_SCHEDULER;
+/*
+ * Unique identifier for the exclusive vdev holder.
+ */
 static void *zfs_vdev_holder = VDEV_HOLDER;
 
-/* size of the "reserved" partition, in blocks */
+/*
+ * Wait up to zfs_vdev_open_timeout_ms milliseconds before determining the
+ * device is missing. The missing path may be transient since the links
+ * can be briefly removed and recreated in response to udev events.
+ */
+static unsigned zfs_vdev_open_timeout_ms = 1000;
+
+/*
+ * Size of the "reserved" partition, in blocks.
+ */
 #define	EFI_MIN_RESV_SIZE	(16 * 1024)
 
 /*
@@ -54,37 +65,19 @@ typedef struct dio_request {
 	struct bio		*dr_bio[0];	/* Attached bio's */
 } dio_request_t;
 
-
-#if defined(HAVE_OPEN_BDEV_EXCLUSIVE) || defined(HAVE_BLKDEV_GET_BY_PATH)
 static fmode_t
-vdev_bdev_mode(int smode)
+vdev_bdev_mode(spa_mode_t spa_mode)
 {
 	fmode_t mode = 0;
 
-	ASSERT3S(smode & (FREAD | FWRITE), !=, 0);
-
-	if (smode & FREAD)
+	if (spa_mode & SPA_MODE_READ)
 		mode |= FMODE_READ;
 
-	if (smode & FWRITE)
+	if (spa_mode & SPA_MODE_WRITE)
 		mode |= FMODE_WRITE;
 
 	return (mode);
 }
-#else
-static int
-vdev_bdev_mode(int smode)
-{
-	int mode = 0;
-
-	ASSERT3S(smode & (FREAD | FWRITE), !=, 0);
-
-	if ((smode & FREAD) && !(smode & FWRITE))
-		mode = SB_RDONLY;
-
-	return (mode);
-}
-#endif /* HAVE_OPEN_BDEV_EXCLUSIVE */
 
 /*
  * Returns the usable capacity (in bytes) for the partition or disk.
@@ -159,83 +152,13 @@ vdev_disk_error(zio_t *zio)
 	    zio->io_flags);
 }
 
-/*
- * Use the Linux 'noop' elevator for zfs managed block devices.  This
- * strikes the ideal balance by allowing the zfs elevator to do all
- * request ordering and prioritization.  While allowing the Linux
- * elevator to do the maximum front/back merging allowed by the
- * physical device.  This yields the largest possible requests for
- * the device with the lowest total overhead.
- */
-static void
-vdev_elevator_switch(vdev_t *v, char *elevator)
-{
-	vdev_disk_t *vd = v->vdev_tsd;
-	struct request_queue *q;
-	char *device;
-	int error;
-
-	for (int c = 0; c < v->vdev_children; c++)
-		vdev_elevator_switch(v->vdev_child[c], elevator);
-
-	if (!v->vdev_ops->vdev_op_leaf || vd->vd_bdev == NULL)
-		return;
-
-	q = bdev_get_queue(vd->vd_bdev);
-	device = vd->vd_bdev->bd_disk->disk_name;
-
-	/*
-	 * Skip devices which are not whole disks (partitions).
-	 * Device-mapper devices are excepted since they may be whole
-	 * disks despite the vdev_wholedisk flag, in which case we can
-	 * and should switch the elevator. If the device-mapper device
-	 * does not have an elevator (i.e. dm-raid, dm-crypt, etc.) the
-	 * "Skip devices without schedulers" check below will fail.
-	 */
-	if (!v->vdev_wholedisk && strncmp(device, "dm-", 3) != 0)
-		return;
-
-	/* Leave existing scheduler when set to "none" */
-	if ((strncmp(elevator, "none", 4) == 0) && (strlen(elevator) == 4))
-		return;
-
-	/*
-	 * The elevator_change() function was available in kernels from
-	 * 2.6.36 to 4.11.  When not available fall back to using the user
-	 * mode helper functionality to set the elevator via sysfs.  This
-	 * requires /bin/echo and sysfs to be mounted which may not be true
-	 * early in the boot process.
-	 */
-#ifdef HAVE_ELEVATOR_CHANGE
-	error = elevator_change(q, elevator);
-#else
-#define	SET_SCHEDULER_CMD \
-	"exec 0</dev/null " \
-	"     1>/sys/block/%s/queue/scheduler " \
-	"     2>/dev/null; " \
-	"echo %s"
-
-	char *argv[] = { "/bin/sh", "-c", NULL, NULL };
-	char *envp[] = { NULL };
-
-	argv[2] = kmem_asprintf(SET_SCHEDULER_CMD, device, elevator);
-	error = call_usermodehelper(argv[0], argv, envp, UMH_NO_WAIT);
-	kmem_strfree(argv[2]);
-#endif /* HAVE_ELEVATOR_CHANGE */
-	if (error) {
-		zfs_dbgmsg("Unable to set \"%s\" scheduler for %s (%s): %d",
-		    elevator, v->vdev_path, device, error);
-	}
-}
-
 static int
 vdev_disk_open(vdev_t *v, uint64_t *psize, uint64_t *max_psize,
     uint64_t *ashift)
 {
 	struct block_device *bdev;
 	fmode_t mode = vdev_bdev_mode(spa_mode(v->vdev_spa));
-	int count = 0, block_size;
-	int bdev_retry_count = 50;
+	hrtime_t timeout = MSEC2NSEC(zfs_vdev_open_timeout_ms);
 	vdev_disk_t *vd;
 
 	/* Must have a pathname and it must be absolute. */
@@ -250,7 +173,7 @@ vdev_disk_open(vdev_t *v, uint64_t *psize, uint64_t *max_psize,
 	 * partition force re-scanning the partition table while closed
 	 * in order to get an accurate updated block device size.  Then
 	 * since udev may need to recreate the device links increase the
-	 * open retry count before reporting the device as unavailable.
+	 * open retry timeout before reporting the device as unavailable.
 	 */
 	vd = v->vdev_tsd;
 	if (vd) {
@@ -267,16 +190,19 @@ vdev_disk_open(vdev_t *v, uint64_t *psize, uint64_t *max_psize,
 				reread_part = B_TRUE;
 			}
 
-			vdev_bdev_close(bdev, mode);
+			blkdev_put(bdev, mode | FMODE_EXCL);
 		}
 
 		if (reread_part) {
-			bdev = vdev_bdev_open(disk_name, mode, zfs_vdev_holder);
+			bdev = blkdev_get_by_path(disk_name, mode | FMODE_EXCL,
+			    zfs_vdev_holder);
 			if (!IS_ERR(bdev)) {
 				int error = vdev_bdev_reread_part(bdev);
-				vdev_bdev_close(bdev, mode);
-				if (error == 0)
-					bdev_retry_count = 100;
+				blkdev_put(bdev, mode | FMODE_EXCL);
+				if (error == 0) {
+					timeout = MSEC2NSEC(
+					    zfs_vdev_open_timeout_ms * 2);
+				}
 			}
 		}
 	} else {
@@ -309,12 +235,13 @@ vdev_disk_open(vdev_t *v, uint64_t *psize, uint64_t *max_psize,
 	 * and it is reasonable to sleep and retry before giving up.  In
 	 * practice delays have been observed to be on the order of 100ms.
 	 */
+	hrtime_t start = gethrtime();
 	bdev = ERR_PTR(-ENXIO);
-	while (IS_ERR(bdev) && count < bdev_retry_count) {
-		bdev = vdev_bdev_open(v->vdev_path, mode, zfs_vdev_holder);
+	while (IS_ERR(bdev) && ((gethrtime() - start) < timeout)) {
+		bdev = blkdev_get_by_path(v->vdev_path, mode | FMODE_EXCL,
+		    zfs_vdev_holder);
 		if (unlikely(PTR_ERR(bdev) == -ENOENT)) {
 			schedule_timeout(MSEC_TO_TICK(10));
-			count++;
 		} else if (IS_ERR(bdev)) {
 			break;
 		}
@@ -322,7 +249,9 @@ vdev_disk_open(vdev_t *v, uint64_t *psize, uint64_t *max_psize,
 
 	if (IS_ERR(bdev)) {
 		int error = -PTR_ERR(bdev);
-		vdev_dbgmsg(v, "open error=%d count=%d", error, count);
+		vdev_dbgmsg(v, "open error=%d timeout=%llu/%llu", error,
+		    (u_longlong_t)(gethrtime() - start),
+		    (u_longlong_t)timeout);
 		vd->vd_bdev = NULL;
 		v->vdev_tsd = vd;
 		rw_exit(&vd->vd_lock);
@@ -336,7 +265,7 @@ vdev_disk_open(vdev_t *v, uint64_t *psize, uint64_t *max_psize,
 	struct request_queue *q = bdev_get_queue(vd->vd_bdev);
 
 	/*  Determine the physical block size */
-	block_size = vdev_bdev_block_size(vd->vd_bdev);
+	int block_size = bdev_physical_block_size(vd->vd_bdev);
 
 	/* Clear the nowritecache bit, causes vdev_reopen() to try again. */
 	v->vdev_nowritecache = B_FALSE;
@@ -359,9 +288,6 @@ vdev_disk_open(vdev_t *v, uint64_t *psize, uint64_t *max_psize,
 	/* Based on the minimum sector size set the block size */
 	*ashift = highbit64(MAX(block_size, SPA_MINBLOCKSIZE)) - 1;
 
-	/* Try to set the io scheduler elevator algorithm */
-	(void) vdev_elevator_switch(v, zfs_vdev_scheduler);
-
 	return (0);
 }
 
@@ -374,8 +300,8 @@ vdev_disk_close(vdev_t *v)
 		return;
 
 	if (vd->vd_bdev != NULL) {
-		vdev_bdev_close(vd->vd_bdev,
-		    vdev_bdev_mode(spa_mode(v->vdev_spa)));
+		blkdev_put(vd->vd_bdev,
+		    vdev_bdev_mode(spa_mode(v->vdev_spa)) | FMODE_EXCL);
 	}
 
 	rw_destroy(&vd->vd_lock);
@@ -544,7 +470,7 @@ vdev_bio_associate_blkg(struct bio *bio)
 	ASSERT3P(q, !=, NULL);
 	ASSERT3P(bio->bi_blkg, ==, NULL);
 
-	if (blkg_tryget(q->root_blkg))
+	if (q->root_blkg && blkg_tryget(q->root_blkg))
 		bio->bi_blkg = q->root_blkg;
 }
 #define	bio_associate_blkg vdev_bio_associate_blkg
@@ -563,17 +489,10 @@ bio_set_dev(struct bio *bio, struct block_device *bdev)
 static inline void
 vdev_submit_bio(struct bio *bio)
 {
-#ifdef HAVE_CURRENT_BIO_TAIL
-	struct bio **bio_tail = current->bio_tail;
-	current->bio_tail = NULL;
-	vdev_submit_bio_impl(bio);
-	current->bio_tail = bio_tail;
-#else
 	struct bio_list *bio_list = current->bio_list;
 	current->bio_list = NULL;
 	vdev_submit_bio_impl(bio);
 	current->bio_list = bio_list;
-#endif
 }
 
 static int
@@ -585,9 +504,8 @@ __vdev_disk_physio(struct block_device *bdev, zio_t *zio,
 	uint64_t bio_offset;
 	int bio_size, bio_count = 16;
 	int i = 0, error = 0;
-#if defined(HAVE_BLK_QUEUE_HAVE_BLK_PLUG)
 	struct blk_plug plug;
-#endif
+
 	/*
 	 * Accessing outside the block device is never allowed.
 	 */
@@ -666,20 +584,16 @@ retry:
 	/* Extra reference to protect dio_request during vdev_submit_bio */
 	vdev_disk_dio_get(dr);
 
-#if defined(HAVE_BLK_QUEUE_HAVE_BLK_PLUG)
 	if (dr->dr_bio_count > 1)
 		blk_start_plug(&plug);
-#endif
 
 	/* Submit all bio's associated with this dio */
 	for (i = 0; i < dr->dr_bio_count; i++)
 		if (dr->dr_bio[i])
 			vdev_submit_bio(dr->dr_bio[i]);
 
-#if defined(HAVE_BLK_QUEUE_HAVE_BLK_PLUG)
 	if (dr->dr_bio_count > 1)
 		blk_finish_plug(&plug);
-#endif
 
 	(void) vdev_disk_dio_put(dr);
 
@@ -736,7 +650,7 @@ vdev_disk_io_start(zio_t *zio)
 	vdev_t *v = zio->io_vd;
 	vdev_disk_t *vd = v->vdev_tsd;
 	unsigned long trim_flags = 0;
-	int rw, flags, error;
+	int rw, error;
 
 	/*
 	 * If the vdev is closed, it's likely in the REMOVED or FAULTED state.
@@ -801,24 +715,10 @@ vdev_disk_io_start(zio_t *zio)
 		return;
 	case ZIO_TYPE_WRITE:
 		rw = WRITE;
-#if defined(HAVE_BLK_QUEUE_HAVE_BIO_RW_UNPLUG)
-		flags = (1 << BIO_RW_UNPLUG);
-#elif defined(REQ_UNPLUG)
-		flags = REQ_UNPLUG;
-#else
-		flags = 0;
-#endif
 		break;
 
 	case ZIO_TYPE_READ:
 		rw = READ;
-#if defined(HAVE_BLK_QUEUE_HAVE_BIO_RW_UNPLUG)
-		flags = (1 << BIO_RW_UNPLUG);
-#elif defined(REQ_UNPLUG)
-		flags = REQ_UNPLUG;
-#else
-		flags = 0;
-#endif
 		break;
 
 	case ZIO_TYPE_TRIM:
@@ -843,7 +743,7 @@ vdev_disk_io_start(zio_t *zio)
 
 	zio->io_target_timestamp = zio_handle_io_delay(zio);
 	error = __vdev_disk_physio(vd->vd_bdev, zio,
-	    zio->io_size, zio->io_offset, rw, flags);
+	    zio->io_size, zio->io_offset, rw, 0);
 	rw_exit(&vd->vd_lock);
 
 	if (error) {
@@ -866,7 +766,7 @@ vdev_disk_io_done(zio_t *zio)
 		vdev_disk_t *vd = v->vdev_tsd;
 
 		if (check_disk_change(vd->vd_bdev)) {
-			vdev_bdev_invalidate(vd->vd_bdev);
+			invalidate_bdev(vd->vd_bdev);
 			v->vdev_remove_wanted = B_TRUE;
 			spa_async_request(zio->io_spa, SPA_ASYNC_REMOVE);
 		}
@@ -889,9 +789,6 @@ vdev_disk_hold(vdev_t *vd)
 	if (vd->vdev_tsd != NULL)
 		return;
 
-	/* XXX: Implement me as a vnode lookup for the device */
-	vd->vdev_name_vp = NULL;
-	vd->vdev_devid_vp = NULL;
 }
 
 static void
@@ -900,44 +797,6 @@ vdev_disk_rele(vdev_t *vd)
 	ASSERT(spa_config_held(vd->vdev_spa, SCL_STATE, RW_WRITER));
 
 	/* XXX: Implement me as a vnode rele for the device */
-}
-
-static int
-param_set_vdev_scheduler(const char *val, zfs_kernel_param_t *kp)
-{
-	spa_t *spa = NULL;
-	char *p;
-
-	if (val == NULL)
-		return (SET_ERROR(-EINVAL));
-
-	if ((p = strchr(val, '\n')) != NULL)
-		*p = '\0';
-
-	if (spa_mode_global != 0) {
-		mutex_enter(&spa_namespace_lock);
-		while ((spa = spa_next(spa)) != NULL) {
-			if (spa_state(spa) != POOL_STATE_ACTIVE ||
-			    !spa_writeable(spa) || spa_suspended(spa))
-				continue;
-
-			spa_open_ref(spa, FTAG);
-			mutex_exit(&spa_namespace_lock);
-			vdev_elevator_switch(spa->spa_root_vdev, (char *)val);
-			mutex_enter(&spa_namespace_lock);
-			spa_close(spa, FTAG);
-		}
-		mutex_exit(&spa_namespace_lock);
-	}
-
-
-	int error = param_set_charp(val, kp);
-	if (error == 0) {
-		printk(KERN_INFO "The 'zfs_vdev_scheduler' module option "
-		    "will be removed in a future release.\n");
-	}
-
-	return (error);
 }
 
 vdev_ops_t vdev_disk_ops = {
@@ -956,6 +815,25 @@ vdev_ops_t vdev_disk_ops = {
 	.vdev_op_leaf = B_TRUE			/* leaf vdev */
 };
 
+/*
+ * The zfs_vdev_scheduler module option has been deprecated. Setting this
+ * value no longer has any effect.  It has not yet been entirely removed
+ * to allow the module to be loaded if this option is specified in the
+ * /etc/modprobe.d/zfs.conf file.  The following warning will be logged.
+ */
+static int
+param_set_vdev_scheduler(const char *val, zfs_kernel_param_t *kp)
+{
+	int error = param_set_charp(val, kp);
+	if (error == 0) {
+		printk(KERN_INFO "The 'zfs_vdev_scheduler' module option "
+		    "is not supported.\n");
+	}
+
+	return (error);
+}
+
+char *zfs_vdev_scheduler = "unused";
 module_param_call(zfs_vdev_scheduler, param_set_vdev_scheduler,
     param_get_charp, &zfs_vdev_scheduler, 0644);
 MODULE_PARM_DESC(zfs_vdev_scheduler, "I/O scheduler");

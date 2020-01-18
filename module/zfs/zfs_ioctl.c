@@ -162,6 +162,7 @@
 #include <sys/cmn_err.h>
 #include <sys/stat.h>
 #include <sys/zfs_ioctl.h>
+#include <sys/zfs_quota.h>
 #include <sys/zfs_vfsops.h>
 #include <sys/zfs_znode.h>
 #include <sys/zap.h>
@@ -192,6 +193,7 @@
 #include <sys/fm/util.h>
 #include <sys/dsl_crypt.h>
 #include <sys/rrwlock.h>
+#include <sys/zfs_file.h>
 
 #include <sys/dmu_recv.h>
 #include <sys/dmu_send.h>
@@ -1441,8 +1443,8 @@ zfsvfs_rele(zfsvfs_t *zfsvfs, void *tag)
 {
 	rrm_exit(&zfsvfs->z_teardown_lock, tag);
 
-	if (zfsvfs->z_sb) {
-		deactivate_super(zfsvfs->z_sb);
+	if (zfs_vfs_held(zfsvfs)) {
+		zfs_vfs_rele(zfsvfs);
 	} else {
 		dmu_objset_disown(zfsvfs->z_os, B_TRUE, zfsvfs);
 		zfsvfs_free(zfsvfs);
@@ -4132,7 +4134,7 @@ zfs_ioc_rollback(const char *fsname, nvlist_t *innvl, nvlist_t *outnvl)
 			resume_err = zfs_resume_fs(zfsvfs, ds);
 			error = error ? error : resume_err;
 		}
-		deactivate_super(zfsvfs->z_sb);
+		zfs_vfs_rele(zfsvfs);
 	} else if ((zv = zvol_suspend(fsname)) != NULL) {
 		error = dsl_dataset_rollback(fsname, target, zvol_tag(zv),
 		    outnvl);
@@ -4708,26 +4710,26 @@ zfs_ioc_recv_impl(char *tofs, char *tosnap, char *origin, nvlist_t *recvprops,
 	dmu_recv_cookie_t drc;
 	int error = 0;
 	int props_error = 0;
-	offset_t off;
+	offset_t off, noff;
 	nvlist_t *local_delayprops = NULL;
 	nvlist_t *recv_delayprops = NULL;
 	nvlist_t *origprops = NULL; /* existing properties */
 	nvlist_t *origrecvd = NULL; /* existing received properties */
 	boolean_t first_recvd_props = B_FALSE;
 	boolean_t tofs_was_redacted;
-	file_t *input_fp;
+	zfs_file_t *input_fp;
 
 	*read_bytes = 0;
 	*errflags = 0;
 	*errors = fnvlist_alloc();
+	off = 0;
 
-	input_fp = getf(input_fd);
-	if (input_fp == NULL)
-		return (SET_ERROR(EBADF));
+	if ((error = zfs_file_get(input_fd, &input_fp)))
+		return (error);
 
-	off = input_fp->f_offset;
+	noff = off = zfs_file_off(input_fp);
 	error = dmu_recv_begin(tofs, tosnap, begin_record, force,
-	    resumable, localprops, hidden_args, origin, &drc, input_fp->f_vnode,
+	    resumable, localprops, hidden_args, origin, &drc, input_fp,
 	    &off);
 	if (error != 0)
 		goto out;
@@ -4865,7 +4867,7 @@ zfs_ioc_recv_impl(char *tofs, char *tosnap, char *origin, nvlist_t *recvprops,
 				error = zfs_resume_fs(zfsvfs, ds);
 			}
 			error = error ? error : end_err;
-			deactivate_super(zfsvfs->z_sb);
+			zfs_vfs_rele(zfsvfs);
 		} else if ((zv = zvol_suspend(tofs)) != NULL) {
 			error = dmu_recv_end(&drc, zvol_tag(zv));
 			zvol_resume(zv);
@@ -4901,10 +4903,7 @@ zfs_ioc_recv_impl(char *tofs, char *tosnap, char *origin, nvlist_t *recvprops,
 		ASSERT(nvlist_merge(localprops, local_delayprops, 0) == 0);
 		nvlist_free(local_delayprops);
 	}
-
-	*read_bytes = off - input_fp->f_offset;
-	if (VOP_SEEK(input_fp->f_vnode, input_fp->f_offset, &off, NULL) == 0)
-		input_fp->f_offset = off;
+	*read_bytes = off - noff;
 
 #ifdef	DEBUG
 	if (zfs_ioc_recv_inject_err) {
@@ -5006,7 +5005,7 @@ zfs_ioc_recv_impl(char *tofs, char *tosnap, char *origin, nvlist_t *recvprops,
 		nvlist_free(inheritprops);
 	}
 out:
-	releasef(input_fd);
+	zfs_file_put(input_fd);
 	nvlist_free(origrecvd);
 	nvlist_free(origprops);
 
@@ -5221,8 +5220,8 @@ zfs_ioc_recv_new(const char *fsname, nvlist_t *innvl, nvlist_t *outnvl)
 }
 
 typedef struct dump_bytes_io {
-	vnode_t		*dbi_vp;
-	void		*dbi_buf;
+	zfs_file_t	*dbi_fp;
+	caddr_t		dbi_buf;
 	int		dbi_len;
 	int		dbi_err;
 } dump_bytes_io_t;
@@ -5231,11 +5230,13 @@ static void
 dump_bytes_cb(void *arg)
 {
 	dump_bytes_io_t *dbi = (dump_bytes_io_t *)arg;
-	ssize_t resid; /* have to get resid to get detailed errno */
+	zfs_file_t *fp;
+	caddr_t buf;
 
-	dbi->dbi_err = vn_rdwr(UIO_WRITE, dbi->dbi_vp,
-	    (caddr_t)dbi->dbi_buf, dbi->dbi_len,
-	    0, UIO_SYSSPACE, FAPPEND, RLIM64_INFINITY, CRED(), &resid);
+	fp = dbi->dbi_fp;
+	buf = dbi->dbi_buf;
+
+	dbi->dbi_err = zfs_file_write(fp, buf, dbi->dbi_len, NULL);
 }
 
 static int
@@ -5243,7 +5244,7 @@ dump_bytes(objset_t *os, void *buf, int len, void *arg)
 {
 	dump_bytes_io_t dbi;
 
-	dbi.dbi_vp = arg;
+	dbi.dbi_fp = arg;
 	dbi.dbi_buf = buf;
 	dbi.dbi_len = len;
 
@@ -5290,6 +5291,7 @@ zfs_ioc_send(zfs_cmd_t *zc)
 	boolean_t large_block_ok = (zc->zc_flags & 0x2);
 	boolean_t compressok = (zc->zc_flags & 0x4);
 	boolean_t rawok = (zc->zc_flags & 0x8);
+	boolean_t savedok = (zc->zc_flags & 0x10);
 
 	if (zc->zc_obj != 0) {
 		dsl_pool_t *dp;
@@ -5339,29 +5341,28 @@ zfs_ioc_send(zfs_cmd_t *zc)
 		}
 
 		error = dmu_send_estimate_fast(tosnap, fromsnap, NULL,
-		    compressok || rawok, &zc->zc_objset_type);
+		    compressok || rawok, savedok, &zc->zc_objset_type);
 
 		if (fromsnap != NULL)
 			dsl_dataset_rele(fromsnap, FTAG);
 		dsl_dataset_rele(tosnap, FTAG);
 		dsl_pool_rele(dp, FTAG);
 	} else {
-		file_t *fp = getf(zc->zc_cookie);
-		if (fp == NULL)
-			return (SET_ERROR(EBADF));
-
-		off = fp->f_offset;
+		zfs_file_t *fp;
 		dmu_send_outparams_t out = {0};
+
+		if ((error = zfs_file_get(zc->zc_cookie, &fp)))
+			return (error);
+
+		off = zfs_file_off(fp);
 		out.dso_outfunc = dump_bytes;
-		out.dso_arg = fp->f_vnode;
+		out.dso_arg = fp;
 		out.dso_dryrun = B_FALSE;
 		error = dmu_send_obj(zc->zc_name, zc->zc_sendobj,
-		    zc->zc_fromobj, embedok, large_block_ok, compressok, rawok,
-		    zc->zc_cookie, &off, &out);
+		    zc->zc_fromobj, embedok, large_block_ok, compressok,
+		    rawok, savedok, zc->zc_cookie, &off, &out);
 
-		if (VOP_SEEK(fp->f_vnode, fp->f_offset, &off, NULL) == 0)
-			fp->f_offset = off;
-		releasef(zc->zc_cookie);
+		zfs_file_put(zc->zc_cookie);
 	}
 	return (error);
 }
@@ -5785,7 +5786,7 @@ zfs_ioc_userspace_upgrade(zfs_cmd_t *zc)
 		}
 		if (error == 0)
 			error = dmu_objset_userspace_upgrade(zfsvfs->z_os);
-		deactivate_super(zfsvfs->z_sb);
+		zfs_vfs_rele(zfsvfs);
 	} else {
 		/* XXX kind of reading contents without owning */
 		error = dmu_objset_hold_flags(zc->zc_name, B_TRUE, FTAG, &os);
@@ -5924,21 +5925,17 @@ zfs_ioc_tmp_snapshot(zfs_cmd_t *zc)
 static int
 zfs_ioc_diff(zfs_cmd_t *zc)
 {
-	file_t *fp;
+	zfs_file_t *fp;
 	offset_t off;
 	int error;
 
-	fp = getf(zc->zc_cookie);
-	if (fp == NULL)
-		return (SET_ERROR(EBADF));
+	if ((error = zfs_file_get(zc->zc_cookie, &fp)))
+		return (error);
 
-	off = fp->f_offset;
+	off = zfs_file_off(fp);
+	error = dmu_diff(zc->zc_name, zc->zc_value, fp, &off);
 
-	error = dmu_diff(zc->zc_name, zc->zc_value, fp->f_vnode, &off);
-
-	if (VOP_SEEK(fp->f_vnode, fp->f_offset, &off, NULL) == 0)
-		fp->f_offset = off;
-	releasef(zc->zc_cookie);
+	zfs_file_put(zc->zc_cookie);
 
 	return (error);
 }
@@ -6249,6 +6246,8 @@ zfs_ioc_space_snaps(const char *lastsnap, nvlist_t *innvl, nvlist_t *outnvl)
  *         presence indicates compressed DRR_WRITE records are permitted
  *     (optional) "rawok" -> (value ignored)
  *         presence indicates raw encrypted records should be used.
+ *     (optional) "savedok" -> (value ignored)
+ *         presence indicates we should send a partially received snapshot
  *     (optional) "resume_object" and "resume_offset" -> (uint64)
  *         if present, resume send stream from specified object and offset.
  *     (optional) "redactbook" -> (string)
@@ -6265,6 +6264,7 @@ static const zfs_ioc_key_t zfs_keys_send_new[] = {
 	{"embedok",		DATA_TYPE_BOOLEAN,	ZK_OPTIONAL},
 	{"compressok",		DATA_TYPE_BOOLEAN,	ZK_OPTIONAL},
 	{"rawok",		DATA_TYPE_BOOLEAN,	ZK_OPTIONAL},
+	{"savedok",		DATA_TYPE_BOOLEAN,	ZK_OPTIONAL},
 	{"resume_object",	DATA_TYPE_UINT64,	ZK_OPTIONAL},
 	{"resume_offset",	DATA_TYPE_UINT64,	ZK_OPTIONAL},
 	{"redactbook",		DATA_TYPE_STRING,	ZK_OPTIONAL},
@@ -6278,11 +6278,12 @@ zfs_ioc_send_new(const char *snapname, nvlist_t *innvl, nvlist_t *outnvl)
 	offset_t off;
 	char *fromname = NULL;
 	int fd;
-	file_t *fp;
+	zfs_file_t *fp;
 	boolean_t largeblockok;
 	boolean_t embedok;
 	boolean_t compressok;
 	boolean_t rawok;
+	boolean_t savedok;
 	uint64_t resumeobj = 0;
 	uint64_t resumeoff = 0;
 	char *redactbook = NULL;
@@ -6295,27 +6296,27 @@ zfs_ioc_send_new(const char *snapname, nvlist_t *innvl, nvlist_t *outnvl)
 	embedok = nvlist_exists(innvl, "embedok");
 	compressok = nvlist_exists(innvl, "compressok");
 	rawok = nvlist_exists(innvl, "rawok");
+	savedok = nvlist_exists(innvl, "savedok");
 
 	(void) nvlist_lookup_uint64(innvl, "resume_object", &resumeobj);
 	(void) nvlist_lookup_uint64(innvl, "resume_offset", &resumeoff);
 
 	(void) nvlist_lookup_string(innvl, "redactbook", &redactbook);
 
-	if ((fp = getf(fd)) == NULL)
-		return (SET_ERROR(EBADF));
+	if ((error = zfs_file_get(fd, &fp)))
+		return (error);
 
-	off = fp->f_offset;
+	off = zfs_file_off(fp);
+
 	dmu_send_outparams_t out = {0};
 	out.dso_outfunc = dump_bytes;
-	out.dso_arg = fp->f_vnode;
+	out.dso_arg = fp;
 	out.dso_dryrun = B_FALSE;
-	error = dmu_send(snapname, fromname, embedok, largeblockok, compressok,
-	    rawok, resumeobj, resumeoff, redactbook, fd, &off, &out);
+	error = dmu_send(snapname, fromname, embedok, largeblockok,
+	    compressok, rawok, savedok, resumeobj, resumeoff,
+	    redactbook, fd, &off, &out);
 
-	if (VOP_SEEK(fp->f_vnode, fp->f_offset, &off, NULL) == 0)
-		fp->f_offset = off;
-
-	releasef(fd);
+	zfs_file_put(fd);
 	return (error);
 }
 
@@ -6378,6 +6379,7 @@ zfs_ioc_send_space(const char *snapname, nvlist_t *innvl, nvlist_t *outnvl)
 	boolean_t embedok;
 	boolean_t compressok;
 	boolean_t rawok;
+	boolean_t savedok;
 	uint64_t space = 0;
 	boolean_t full_estimate = B_FALSE;
 	uint64_t resumeobj = 0;
@@ -6401,6 +6403,7 @@ zfs_ioc_send_space(const char *snapname, nvlist_t *innvl, nvlist_t *outnvl)
 	embedok = nvlist_exists(innvl, "embedok");
 	compressok = nvlist_exists(innvl, "compressok");
 	rawok = nvlist_exists(innvl, "rawok");
+	savedok = nvlist_exists(innvl, "savedok");
 	boolean_t from = (nvlist_lookup_string(innvl, "from", &fromname) == 0);
 	boolean_t altbook = (nvlist_lookup_string(innvl, "redactbook",
 	    &redactlist_book) == 0);
@@ -6475,12 +6478,12 @@ zfs_ioc_send_space(const char *snapname, nvlist_t *innvl, nvlist_t *outnvl)
 		dsl_dataset_rele(tosnap, FTAG);
 		dsl_pool_rele(dp, FTAG);
 		error = dmu_send(snapname, fromname, embedok, largeblockok,
-		    compressok, rawok, resumeobj, resumeoff, redactlist_book,
-		    fd, &off, &out);
+		    compressok, rawok, savedok, resumeobj, resumeoff,
+		    redactlist_book, fd, &off, &out);
 	} else {
 		error = dmu_send_estimate_fast(tosnap, fromsnap,
 		    (from && strchr(fromname, '#') != NULL ? &zbm : NULL),
-		    compressok || rawok, &space);
+		    compressok || rawok, savedok, &space);
 		space -= resume_bytes;
 		if (fromsnap != NULL)
 			dsl_dataset_rele(fromsnap, FTAG);
@@ -7222,18 +7225,19 @@ zfsdev_minor_alloc(void)
 }
 
 long
-zfsdev_ioctl_common(uint_t vecnum, unsigned long arg)
+zfsdev_ioctl_common(uint_t vecnum, zfs_cmd_t *zc)
 {
-	zfs_cmd_t *zc;
-	int error, cmd, rc, flag = 0;
+	int error, cmd, flag = 0;
 	const zfs_ioc_vec_t *vec;
 	char *saved_poolname = NULL;
 	nvlist_t *innvl = NULL;
 	fstrans_cookie_t cookie;
 
 	cmd = vecnum;
+	error = 0;
 	if (vecnum >= sizeof (zfs_ioc_vec) / sizeof (zfs_ioc_vec[0]))
-		return (-SET_ERROR(ZFS_ERR_IOC_CMD_UNAVAIL));
+		return (SET_ERROR(ZFS_ERR_IOC_CMD_UNAVAIL));
+
 	vec = &zfs_ioc_vec[vecnum];
 
 	/*
@@ -7241,16 +7245,7 @@ zfsdev_ioctl_common(uint_t vecnum, unsigned long arg)
 	 * a normal or legacy handler are registered.
 	 */
 	if (vec->zvec_func == NULL && vec->zvec_legacy_func == NULL)
-		return (-SET_ERROR(ZFS_ERR_IOC_CMD_UNAVAIL));
-
-	zc = kmem_zalloc(sizeof (zfs_cmd_t), KM_SLEEP);
-
-	error = ddi_copyin((void *)(uintptr_t)arg, zc, sizeof (zfs_cmd_t),
-	    flag);
-	if (error != 0) {
-		error = SET_ERROR(EFAULT);
-		goto out;
-	}
+		return (SET_ERROR(ZFS_ERR_IOC_CMD_UNAVAIL));
 
 	zc->zc_iflags = flag & FKIOCTL;
 	if (zc->zc_nvlist_src_size > MAX_NVLIST_SRC_SIZE) {
@@ -7413,9 +7408,6 @@ zfsdev_ioctl_common(uint_t vecnum, unsigned long arg)
 
 out:
 	nvlist_free(innvl);
-	rc = ddi_copyout(zc, (void *)(uintptr_t)arg, sizeof (zfs_cmd_t), flag);
-	if (error == 0 && rc != 0)
-		error = SET_ERROR(EFAULT);
 	if (error == 0 && vec->zvec_allow_log) {
 		char *s = tsd_get(zfs_allow_log_key);
 		if (s != NULL)
@@ -7425,9 +7417,7 @@ out:
 		if (saved_poolname != NULL)
 			kmem_strfree(saved_poolname);
 	}
-
-	kmem_free(zc, sizeof (zfs_cmd_t));
-	return (-error);
+	return (error);
 }
 
 int
@@ -7438,7 +7428,7 @@ zfs_kmod_init(void)
 	if ((error = zvol_init()) != 0)
 		return (error);
 
-	spa_init(FREAD | FWRITE);
+	spa_init(SPA_MODE_READ | SPA_MODE_WRITE);
 	zfs_init();
 
 	zfs_ioctl_init();

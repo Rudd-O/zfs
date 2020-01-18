@@ -65,6 +65,12 @@
 #include <linux/miscdevice.h>
 #include <linux/slab.h>
 
+boolean_t
+zfs_vfs_held(zfsvfs_t *zfsvfs)
+{
+	return (zfsvfs->z_sb != NULL);
+}
+
 int
 zfs_vfs_ref(zfsvfs_t **zfvp)
 {
@@ -73,6 +79,12 @@ zfs_vfs_ref(zfsvfs_t **zfvp)
 		return (SET_ERROR(ESRCH));
 	}
 	return (0);
+}
+
+void
+zfs_vfs_rele(zfsvfs_t *zfsvfs)
+{
+	deactivate_super(zfsvfs->z_sb);
 }
 
 static int
@@ -99,7 +111,6 @@ zfsdev_state_init(struct file *filp)
 		newzs = B_TRUE;
 	}
 
-	zs->zs_file = filp;
 	filp->private_data = zs;
 
 	zfs_onexit_init((zfs_onexit_t **)&zs->zs_onexit);
@@ -169,24 +180,40 @@ static long
 zfsdev_ioctl(struct file *filp, unsigned cmd, unsigned long arg)
 {
 	uint_t vecnum;
+	zfs_cmd_t *zc;
+	int error, rc;
 
 	vecnum = cmd - ZFS_IOC_FIRST;
-	return (zfsdev_ioctl_common(vecnum, arg));
+
+	zc = kmem_zalloc(sizeof (zfs_cmd_t), KM_SLEEP);
+
+	if (ddi_copyin((void *)(uintptr_t)arg, zc, sizeof (zfs_cmd_t), 0)) {
+		error = -SET_ERROR(EFAULT);
+		goto out;
+	}
+	error = -zfsdev_ioctl_common(vecnum, zc);
+	rc = ddi_copyout(zc, (void *)(uintptr_t)arg, sizeof (zfs_cmd_t), 0);
+	if (error == 0 && rc != 0)
+		error = -SET_ERROR(EFAULT);
+out:
+	kmem_free(zc, sizeof (zfs_cmd_t));
+	return (error);
+
 }
 
 int
 zfsdev_getminor(int fd, minor_t *minorp)
 {
 	zfsdev_state_t *zs, *fpd;
-	file_t *fp;
+	struct file *fp;
+	int rc;
 
 	ASSERT(!MUTEX_HELD(&zfsdev_state_lock));
-	fp = getf(fd);
 
-	if (fp == NULL)
-		return (SET_ERROR(EBADF));
+	if ((rc = zfs_file_get(fd, &fp)))
+		return (rc);
 
-	fpd = fp->f_file->private_data;
+	fpd = fp->private_data;
 	if (fpd == NULL)
 		return (SET_ERROR(EBADF));
 

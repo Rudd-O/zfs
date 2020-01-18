@@ -196,13 +196,13 @@ spl_zlib_init(void)
 {
 	int size;
 
-	size = MAX(spl_zlib_deflate_workspacesize(MAX_WBITS, MAX_MEM_LEVEL),
+	size = MAX(zlib_deflate_workspacesize(MAX_WBITS, MAX_MEM_LEVEL),
 	    zlib_inflate_workspacesize());
 
 	zlib_workspace_cache = kmem_cache_create(
 	    "spl_zlib_workspace_cache",
 	    size, 0, NULL, NULL, NULL, NULL, NULL,
-	    KMC_VMEM);
+	    KMC_KVMEM);
 	if (!zlib_workspace_cache)
 		return (1);
 

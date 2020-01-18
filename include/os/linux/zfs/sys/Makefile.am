@@ -16,10 +16,12 @@ KERNEL_H = \
 	$(top_srcdir)/include/os/linux/zfs/sys/trace_zil.h \
 	$(top_srcdir)/include/os/linux/zfs/sys/trace_zio.h \
 	$(top_srcdir)/include/os/linux/zfs/sys/trace_zrlock.h \
+	$(top_srcdir)/include/os/linux/zfs/sys/zfs_context_os.h \
 	$(top_srcdir)/include/os/linux/zfs/sys/zfs_ctldir.h \
 	$(top_srcdir)/include/os/linux/zfs/sys/zfs_dir.h \
 	$(top_srcdir)/include/os/linux/zfs/sys/zfs_vfsops.h \
 	$(top_srcdir)/include/os/linux/zfs/sys/zfs_vnops.h \
+	$(top_srcdir)/include/os/linux/zfs/sys/zfs_znode_impl.h \
 	$(top_srcdir)/include/os/linux/zfs/sys/zpl.h
 
 if CONFIG_KERNEL

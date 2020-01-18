@@ -1080,7 +1080,7 @@ hdr_full_crypt_dest(void *vbuf, void *unused)
 static void
 hdr_l2only_dest(void *vbuf, void *unused)
 {
-	ASSERTV(arc_buf_hdr_t *hdr = vbuf);
+	arc_buf_hdr_t *hdr __maybe_unused = vbuf;
 
 	ASSERT(HDR_EMPTY(hdr));
 	arc_space_return(HDR_L2ONLY_SIZE, ARC_SPACE_L2HDRS);
@@ -7873,7 +7873,6 @@ l2arc_read_done(zio_t *zio)
 		zio->io_private = hdr;
 		arc_read_done(zio);
 	} else {
-		mutex_exit(hash_lock);
 		/*
 		 * Buffer didn't survive caching.  Increment stats and
 		 * reissue to the original storage device.
@@ -7898,10 +7897,24 @@ l2arc_read_done(zio_t *zio)
 
 			ASSERT(!pio || pio->io_child_type == ZIO_CHILD_LOGICAL);
 
-			zio_nowait(zio_read(pio, zio->io_spa, zio->io_bp,
+			zio = zio_read(pio, zio->io_spa, zio->io_bp,
 			    abd, zio->io_size, arc_read_done,
 			    hdr, zio->io_priority, cb->l2rcb_flags,
-			    &cb->l2rcb_zb));
+			    &cb->l2rcb_zb);
+
+			/*
+			 * Original ZIO will be freed, so we need to update
+			 * ARC header with the new ZIO pointer to be used
+			 * by zio_change_priority() in arc_read().
+			 */
+			for (struct arc_callback *acb = hdr->b_l1hdr.b_acb;
+			    acb != NULL; acb = acb->acb_next)
+				acb->acb_zio_head = zio;
+
+			mutex_exit(hash_lock);
+			zio_nowait(zio);
+		} else {
+			mutex_exit(hash_lock);
 		}
 	}
 
@@ -8666,7 +8679,7 @@ l2arc_fini(void)
 void
 l2arc_start(void)
 {
-	if (!(spa_mode_global & FWRITE))
+	if (!(spa_mode_global & SPA_MODE_WRITE))
 		return;
 
 	(void) thread_create(NULL, 0, l2arc_feed_thread, NULL, 0, &p0,
@@ -8676,7 +8689,7 @@ l2arc_start(void)
 void
 l2arc_stop(void)
 {
-	if (!(spa_mode_global & FWRITE))
+	if (!(spa_mode_global & SPA_MODE_WRITE))
 		return;
 
 	mutex_enter(&l2arc_feed_thr_lock);

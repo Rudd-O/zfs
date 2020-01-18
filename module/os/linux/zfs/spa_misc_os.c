@@ -42,6 +42,19 @@
 #include <sys/kstat.h>
 #include "zfs_prop.h"
 
+
+int
+param_set_deadman_failmode(const char *val, zfs_kernel_param_t *kp)
+{
+	int error;
+
+	error = -param_set_deadman_failmode_common(val);
+	if (error == 0)
+		error = param_set_charp(val, kp);
+
+	return (error);
+}
+
 int
 param_set_deadman_ziotime(const char *val, zfs_kernel_param_t *kp)
 {
@@ -52,7 +65,7 @@ param_set_deadman_ziotime(const char *val, zfs_kernel_param_t *kp)
 	if (error < 0)
 		return (SET_ERROR(error));
 
-	if (spa_mode_global != 0) {
+	if (spa_mode_global != SPA_MODE_UNINIT) {
 		mutex_enter(&spa_namespace_lock);
 		while ((spa = spa_next(spa)) != NULL)
 			spa->spa_deadman_ziotime =
@@ -73,7 +86,7 @@ param_set_deadman_synctime(const char *val, zfs_kernel_param_t *kp)
 	if (error < 0)
 		return (SET_ERROR(error));
 
-	if (spa_mode_global != 0) {
+	if (spa_mode_global != SPA_MODE_UNINIT) {
 		mutex_enter(&spa_namespace_lock);
 		while ((spa = spa_next(spa)) != NULL)
 			spa->spa_deadman_synctime =

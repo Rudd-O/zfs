@@ -326,7 +326,7 @@ static spl_kmem_slab_t *
 spl_slab_alloc(spl_kmem_cache_t *skc, int flags)
 {
 	spl_kmem_slab_t *sks;
-	spl_kmem_obj_t *sko, *n;
+	spl_kmem_obj_t *sko;
 	void *base, *obj;
 	uint32_t obj_size, offslab_size = 0;
 	int i,  rc = 0;
@@ -370,6 +370,7 @@ spl_slab_alloc(spl_kmem_cache_t *skc, int flags)
 
 out:
 	if (rc) {
+		spl_kmem_obj_t *n = NULL;
 		if (skc->skc_flags & KMC_OFFSLAB)
 			list_for_each_entry_safe(sko,
 			    n, &sks->sks_free_list, sko_list) {
@@ -419,8 +420,8 @@ spl_slab_free(spl_kmem_slab_t *sks,
 static void
 spl_slab_reclaim(spl_kmem_cache_t *skc)
 {
-	spl_kmem_slab_t *sks, *m;
-	spl_kmem_obj_t *sko, *n;
+	spl_kmem_slab_t *sks = NULL, *m = NULL;
+	spl_kmem_obj_t *sko = NULL, *n = NULL;
 	LIST_HEAD(sks_list);
 	LIST_HEAD(sko_list);
 	uint32_t size = 0;
@@ -816,7 +817,7 @@ spl_magazine_free(spl_kmem_magazine_t *skm)
 static int
 spl_magazine_create(spl_kmem_cache_t *skc)
 {
-	int i;
+	int i = 0;
 
 	if (skc->skc_flags & KMC_NOMAGAZINE)
 		return (0);
@@ -847,7 +848,7 @@ static void
 spl_magazine_destroy(spl_kmem_cache_t *skc)
 {
 	spl_kmem_magazine_t *skm;
-	int i;
+	int i = 0;
 
 	if (skc->skc_flags & KMC_NOMAGAZINE)
 		return;
@@ -874,13 +875,14 @@ spl_magazine_destroy(spl_kmem_cache_t *skc)
  * flags
  *	KMC_KMEM	Force SPL kmem backed cache
  *	KMC_VMEM        Force SPL vmem backed cache
+ *	KMC_KVMEM       Force kvmem backed cache
  *	KMC_SLAB        Force Linux slab backed cache
  *	KMC_OFFSLAB	Locate objects off the slab
- *	KMC_NOTOUCH	unsupported
- *	KMC_NODEBUG	unsupported
- *	KMC_NOHASH      unsupported
- *	KMC_QCACHE	unsupported
- *	KMC_NOMAGAZINE	unsupported
+ *	KMC_NOTOUCH	Disable cache object aging (unsupported)
+ *	KMC_NODEBUG	Disable debugging (unsupported)
+ *	KMC_NOHASH      Disable hashing (unsupported)
+ *	KMC_QCACHE	Disable qcache (unsupported)
+ *	KMC_NOMAGAZINE	Enabled for kmem/vmem, Disabled for Linux slab
  */
 spl_kmem_cache_t *
 spl_kmem_cache_create(char *name, size_t size, size_t align,
@@ -961,8 +963,7 @@ spl_kmem_cache_create(char *name, size_t size, size_t align,
 	 * linuxslab) then select a cache type based on the object size
 	 * and default tunables.
 	 */
-	if (!(skc->skc_flags & (KMC_KMEM | KMC_VMEM | KMC_SLAB))) {
-
+	if (!(skc->skc_flags & (KMC_KMEM | KMC_VMEM | KMC_SLAB | KMC_KVMEM))) {
 		if (spl_kmem_cache_slab_limit &&
 		    size <= (size_t)spl_kmem_cache_slab_limit) {
 			/*
@@ -980,16 +981,16 @@ spl_kmem_cache_create(char *name, size_t size, size_t align,
 		} else {
 			/*
 			 * All other objects are considered large and are
-			 * placed on vmem backed slabs.
+			 * placed on kvmem backed slabs.
 			 */
-			skc->skc_flags |= KMC_VMEM;
+			skc->skc_flags |= KMC_KVMEM;
 		}
 	}
 
 	/*
 	 * Given the type of slab allocate the required resources.
 	 */
-	if (skc->skc_flags & (KMC_KMEM | KMC_VMEM)) {
+	if (skc->skc_flags & (KMC_KMEM | KMC_VMEM | KMC_KVMEM)) {
 		rc = spl_slab_size(skc,
 		    &skc->skc_slab_objs, &skc->skc_slab_size);
 		if (rc)
@@ -1030,11 +1031,6 @@ spl_kmem_cache_create(char *name, size_t size, size_t align,
 			goto out;
 		}
 
-#if defined(HAVE_KMEM_CACHE_ALLOCFLAGS)
-		skc->skc_linux_cache->allocflags |= __GFP_COMP;
-#elif defined(HAVE_KMEM_CACHE_GFPFLAGS)
-		skc->skc_linux_cache->gfpflags |= __GFP_COMP;
-#endif
 		skc->skc_flags |= KMC_NOMAGAZINE;
 	}
 
@@ -1078,7 +1074,7 @@ spl_kmem_cache_destroy(spl_kmem_cache_t *skc)
 	taskqid_t id;
 
 	ASSERT(skc->skc_magic == SKC_MAGIC);
-	ASSERT(skc->skc_flags & (KMC_KMEM | KMC_VMEM | KMC_SLAB));
+	ASSERT(skc->skc_flags & (KMC_KMEM | KMC_VMEM | KMC_KVMEM | KMC_SLAB));
 
 	down_write(&spl_kmem_cache_sem);
 	list_del_init(&skc->skc_list);
@@ -1100,7 +1096,7 @@ spl_kmem_cache_destroy(spl_kmem_cache_t *skc)
 	 */
 	wait_event(wq, atomic_read(&skc->skc_ref) == 0);
 
-	if (skc->skc_flags & (KMC_KMEM | KMC_VMEM)) {
+	if (skc->skc_flags & (KMC_KMEM | KMC_VMEM | KMC_KVMEM)) {
 		spl_magazine_destroy(skc);
 		spl_slab_reclaim(skc);
 	} else {
@@ -1256,7 +1252,7 @@ spl_cache_grow(spl_kmem_cache_t *skc, int flags, void **obj)
 	 * However, this can't be applied to KVM_VMEM due to a bug that
 	 * __vmalloc() doesn't honor gfp flags in page table allocation.
 	 */
-	if (!(skc->skc_flags & KMC_VMEM)) {
+	if (!(skc->skc_flags & KMC_VMEM) && !(skc->skc_flags & KMC_KVMEM)) {
 		rc = __spl_cache_grow(skc, flags | KM_NOSLEEP);
 		if (rc == 0)
 			return (0);
@@ -1631,7 +1627,7 @@ static spl_shrinker_t
 __spl_kmem_cache_generic_shrinker(struct shrinker *shrink,
     struct shrink_control *sc)
 {
-	spl_kmem_cache_t *skc;
+	spl_kmem_cache_t *skc = NULL;
 	int alloc = 0;
 
 	/*

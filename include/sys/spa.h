@@ -26,7 +26,7 @@
  * Copyright 2013 Saso Kiselkov. All rights reserved.
  * Copyright (c) 2014 Integros [integros.com]
  * Copyright 2017 Joyent, Inc.
- * Copyright (c) 2017 Datto Inc.
+ * Copyright (c) 2017, 2019, Datto Inc. All rights reserved.
  * Copyright (c) 2017, Intel Corporation.
  */
 
@@ -723,6 +723,12 @@ typedef enum spa_import_type {
 	SPA_IMPORT_ASSEMBLE
 } spa_import_type_t;
 
+typedef enum spa_mode {
+	SPA_MODE_UNINIT = 0,
+	SPA_MODE_READ = 1,
+	SPA_MODE_WRITE = 2,
+} spa_mode_t;
+
 /*
  * Send TRIM commands in-line during normal pool operation while deleting.
  *	OFF: no
@@ -762,6 +768,7 @@ extern void spa_async_request(spa_t *spa, int flag);
 extern void spa_async_unrequest(spa_t *spa, int flag);
 extern void spa_async_suspend(spa_t *spa);
 extern void spa_async_resume(spa_t *spa);
+extern int spa_async_tasks(spa_t *spa);
 extern spa_t *spa_inject_addref(char *pool);
 extern void spa_inject_delref(spa_t *spa);
 extern void spa_scan_stat_init(spa_t *spa);
@@ -1099,7 +1106,7 @@ extern uint32_t spa_get_hostid(spa_t *spa);
 extern void spa_activate_allocation_classes(spa_t *, dmu_tx_t *);
 extern boolean_t spa_livelist_delete_check(spa_t *spa);
 
-extern int spa_mode(spa_t *spa);
+extern spa_mode_t spa_mode(spa_t *spa);
 extern uint64_t zfs_strtonum(const char *str, char **nptr);
 
 extern char *spa_his_ievent_table[];
@@ -1149,7 +1156,7 @@ extern void vdev_mirror_stat_init(void);
 extern void vdev_mirror_stat_fini(void);
 
 /* Initialization and termination */
-extern void spa_init(int flags);
+extern void spa_init(spa_mode_t mode);
 extern void spa_fini(void);
 extern void spa_boot_init(void);
 
@@ -1175,6 +1182,7 @@ extern void spa_wake_waiters(spa_t *spa);
 int param_set_deadman_ziotime(const char *val, zfs_kernel_param_t *kp);
 int param_set_deadman_synctime(const char *val, zfs_kernel_param_t *kp);
 int param_set_slop_shift(const char *buf, zfs_kernel_param_t *kp);
+int param_set_deadman_failmode(const char *val, zfs_kernel_param_t *kp);
 
 #ifdef ZFS_DEBUG
 #define	dprintf_bp(bp, fmt, ...) do {				\
@@ -1189,7 +1197,7 @@ _NOTE(CONSTCOND) } while (0)
 #define	dprintf_bp(bp, fmt, ...)
 #endif
 
-extern int spa_mode_global;			/* mode, e.g. FREAD | FWRITE */
+extern spa_mode_t spa_mode_global;
 extern int zfs_deadman_enabled;
 extern unsigned long zfs_deadman_synctime_ms;
 extern unsigned long zfs_deadman_ziotime_ms;

@@ -121,6 +121,11 @@ int zfs_sync_pass_rewrite = 2; /* rewrite new bps starting in this pass */
  */
 #define	IO_IS_ALLOCATING(zio) ((zio)->io_orig_pipeline & ZIO_STAGE_DVA_ALLOCATE)
 
+/*
+ * Enable smaller cores by excluding metadata
+ * allocations as well.
+ */
+int zio_exclude_metadata = 0;
 int zio_requeue_io_start_cut_in_line = 1;
 
 #ifdef ZFS_DEBUG
@@ -153,7 +158,11 @@ zio_init(void)
 		size_t size = (c + 1) << SPA_MINBLOCKSHIFT;
 		size_t p2 = size;
 		size_t align = 0;
-		size_t cflags = (size > zio_buf_debug_limit) ? KMC_NODEBUG : 0;
+		size_t data_cflags, cflags;
+
+		data_cflags = KMC_NODEBUG;
+		cflags = (zio_exclude_metadata || size > zio_buf_debug_limit) ?
+		    KMC_NODEBUG : 0;
 
 #if defined(_ILP32) && defined(_KERNEL)
 		/*
@@ -201,7 +210,7 @@ zio_init(void)
 			(void) sprintf(name, "zio_data_buf_%lu", (ulong_t)size);
 			zio_data_buf_cache[c] = kmem_cache_create(name, size,
 			    align, NULL, NULL, NULL, NULL,
-			    data_alloc_arena, cflags);
+			    data_alloc_arena, data_cflags);
 		}
 	}
 
@@ -2550,7 +2559,7 @@ zio_write_gang_member_ready(zio_t *zio)
 	dva_t *cdva = zio->io_bp->blk_dva;
 	dva_t *pdva = pio->io_bp->blk_dva;
 	uint64_t asize;
-	ASSERTV(zio_t *gio = zio->io_gang_leader);
+	zio_t *gio __maybe_unused = zio->io_gang_leader;
 
 	if (BP_IS_HOLE(zio->io_bp))
 		return;
@@ -4184,7 +4193,7 @@ zio_ready(zio_t *zio)
 static void
 zio_dva_throttle_done(zio_t *zio)
 {
-	ASSERTV(zio_t *lio = zio->io_logical);
+	zio_t *lio __maybe_unused = zio->io_logical;
 	zio_t *pio = zio_unique_parent(zio);
 	vdev_t *vd = zio->io_vd;
 	int flags = METASLAB_ASYNC_ALLOC;

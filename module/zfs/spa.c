@@ -29,7 +29,7 @@
  * Copyright 2016 Toomas Soome <tsoome@me.com>
  * Copyright (c) 2016 Actifio, Inc. All rights reserved.
  * Copyright 2018 Joyent, Inc.
- * Copyright (c) 2017 Datto Inc.
+ * Copyright (c) 2017, 2019, Datto Inc. All rights reserved.
  * Copyright 2017 Joyent, Inc.
  * Copyright (c) 2017, Intel Corporation.
  */
@@ -319,7 +319,7 @@ spa_prop_get_config(spa_t *spa, nvlist_t **nvp)
 		spa_prop_add_list(*nvp, ZPOOL_PROP_EXPANDSZ, NULL,
 		    metaslab_class_expandable_space(mc), src);
 		spa_prop_add_list(*nvp, ZPOOL_PROP_READONLY, NULL,
-		    (spa_mode(spa) == FREAD), src);
+		    (spa_mode(spa) == SPA_MODE_READ), src);
 
 		cap = (size == 0) ? 0 : (alloc * 100 / size);
 		spa_prop_add_list(*nvp, ZPOOL_PROP_CAPACITY, NULL, cap, src);
@@ -847,7 +847,7 @@ spa_prop_clear_bootfs(spa_t *spa, uint64_t dsobj, dmu_tx_t *tx)
 static int
 spa_change_guid_check(void *arg, dmu_tx_t *tx)
 {
-	ASSERTV(uint64_t *newguid = arg);
+	uint64_t *newguid __maybe_unused = arg;
 	spa_t *spa = dmu_tx_pool(tx)->dp_spa;
 	vdev_t *rvd = spa->spa_root_vdev;
 	uint64_t vdev_state;
@@ -1196,7 +1196,7 @@ spa_thread(void *arg)
  * Activate an uninitialized pool.
  */
 static void
-spa_activate(spa_t *spa, int mode)
+spa_activate(spa_t *spa, spa_mode_t mode)
 {
 	ASSERT(spa->spa_state == POOL_STATE_UNINITIALIZED);
 
@@ -3362,7 +3362,7 @@ spa_ld_open_vdevs(spa_t *spa)
 	if (spa->spa_missing_tvds != 0) {
 		spa_load_note(spa, "vdev tree has %lld missing top-level "
 		    "vdevs.", (u_longlong_t)spa->spa_missing_tvds);
-		if (spa->spa_trust_config && (spa->spa_mode & FWRITE)) {
+		if (spa->spa_trust_config && (spa->spa_mode & SPA_MODE_WRITE)) {
 			/*
 			 * Although theoretically we could allow users to open
 			 * incomplete pools in RW mode, we'd need to add a lot
@@ -4358,7 +4358,7 @@ spa_ld_check_for_config_update(spa_t *spa, uint64_t config_cache_txg,
 static void
 spa_ld_prepare_for_reload(spa_t *spa)
 {
-	int mode = spa->spa_mode;
+	spa_mode_t mode = spa->spa_mode;
 	int async_suspended = spa->spa_async_suspended;
 
 	spa_unload(spa);
@@ -4868,7 +4868,7 @@ spa_load_impl(spa_t *spa, spa_import_type_t type, char **ereport)
 static int
 spa_load_retry(spa_t *spa, spa_load_state_t state)
 {
-	int mode = spa->spa_mode;
+	spa_mode_t mode = spa->spa_mode;
 
 	spa_unload(spa);
 	spa_deactivate(spa);
@@ -5690,7 +5690,7 @@ spa_create(const char *pool, nvlist_t *nvroot, nvlist_t *props,
 			return (error);
 		}
 	}
-	if (!has_allocclass && zfs_special_devs(nvroot)) {
+	if (!has_allocclass && zfs_special_devs(nvroot, NULL)) {
 		spa_deactivate(spa);
 		spa_remove(spa);
 		mutex_exit(&spa_namespace_lock);
@@ -5915,7 +5915,7 @@ spa_import(char *pool, nvlist_t *config, nvlist_t *props, uint64_t flags)
 	char *altroot = NULL;
 	spa_load_state_t state = SPA_LOAD_IMPORT;
 	zpool_load_policy_t policy;
-	uint64_t mode = spa_mode_global;
+	spa_mode_t mode = spa_mode_global;
 	uint64_t readonly = B_FALSE;
 	int error;
 	nvlist_t *nvroot;
@@ -5939,7 +5939,7 @@ spa_import(char *pool, nvlist_t *config, nvlist_t *props, uint64_t flags)
 	(void) nvlist_lookup_uint64(props,
 	    zpool_prop_to_name(ZPOOL_PROP_READONLY), &readonly);
 	if (readonly)
-		mode = FREAD;
+		mode = SPA_MODE_READ;
 	spa = spa_add(pool, config, altroot);
 	spa->spa_import_flags = flags;
 
@@ -6109,7 +6109,7 @@ spa_tryimport(nvlist_t *tryconfig)
 	 */
 	mutex_enter(&spa_namespace_lock);
 	spa = spa_add(TRYIMPORT_NAME, tryconfig, NULL);
-	spa_activate(spa, FREAD);
+	spa_activate(spa, SPA_MODE_READ);
 
 	/*
 	 * Rewind pool if a max txg was provided.
@@ -6219,7 +6219,7 @@ spa_export_common(char *pool, int new_state, nvlist_t **oldconfig,
 	if (oldconfig)
 		*oldconfig = NULL;
 
-	if (!(spa_mode_global & FWRITE))
+	if (!(spa_mode_global & SPA_MODE_WRITE))
 		return (SET_ERROR(EROFS));
 
 	mutex_enter(&spa_namespace_lock);
@@ -6530,7 +6530,7 @@ int
 spa_vdev_attach(spa_t *spa, uint64_t guid, nvlist_t *nvroot, int replacing)
 {
 	uint64_t txg, dtl_max_txg;
-	ASSERTV(vdev_t *rvd = spa->spa_root_vdev);
+	vdev_t *rvd __maybe_unused = spa->spa_root_vdev;
 	vdev_t *oldvd, *newvd, *newrootvd, *pvd, *tvd;
 	vdev_ops_t *pvops;
 	char *oldvdpath, *newvdpath;
@@ -6718,9 +6718,9 @@ spa_vdev_attach(spa_t *spa, uint64_t guid, nvlist_t *nvroot, int replacing)
 	 */
 	if (dsl_scan_resilvering(spa_get_dsl(spa)) &&
 	    spa_feature_is_enabled(spa, SPA_FEATURE_RESILVER_DEFER))
-		vdev_set_deferred_resilver(spa, newvd);
+		vdev_defer_resilver(newvd);
 	else
-		dsl_resilver_restart(spa->spa_dsl_pool, dtl_max_txg);
+		dsl_scan_restart_resilver(spa->spa_dsl_pool, dtl_max_txg);
 
 	if (spa->spa_bootfs)
 		spa_event_notify(spa, newvd, NULL, ESC_ZFS_BOOTFS_VDEV_ATTACH);
@@ -6755,7 +6755,7 @@ spa_vdev_detach(spa_t *spa, uint64_t guid, uint64_t pguid, int replace_done)
 {
 	uint64_t txg;
 	int error;
-	ASSERTV(vdev_t *rvd = spa->spa_root_vdev);
+	vdev_t *rvd __maybe_unused = spa->spa_root_vdev;
 	vdev_t *vd, *pvd, *cvd, *tvd;
 	boolean_t unspare = B_FALSE;
 	uint64_t unspare_guid = 0;
@@ -7957,7 +7957,7 @@ spa_async_thread(void *arg)
 	if (tasks & SPA_ASYNC_RESILVER &&
 	    (!dsl_scan_resilvering(dp) ||
 	    !spa_feature_is_enabled(dp->dp_spa, SPA_FEATURE_RESILVER_DEFER)))
-		dsl_resilver_restart(dp, 0);
+		dsl_scan_restart_resilver(dp, 0);
 
 	if (tasks & SPA_ASYNC_INITIALIZE_RESTART) {
 		mutex_enter(&spa_namespace_lock);
@@ -8073,8 +8073,7 @@ spa_async_dispatch(spa_t *spa)
 	mutex_enter(&spa->spa_async_lock);
 	if (spa_async_tasks_pending(spa) &&
 	    !spa->spa_async_suspended &&
-	    spa->spa_async_thread == NULL &&
-	    rootdir != NULL)
+	    spa->spa_async_thread == NULL)
 		spa->spa_async_thread = thread_create(NULL, 0,
 		    spa_async_thread, spa, 0, &p0, TS_RUN, maxclsyspri);
 	mutex_exit(&spa->spa_async_lock);
@@ -8087,6 +8086,12 @@ spa_async_request(spa_t *spa, int task)
 	mutex_enter(&spa->spa_async_lock);
 	spa->spa_async_tasks |= task;
 	mutex_exit(&spa->spa_async_lock);
+}
+
+int
+spa_async_tasks(spa_t *spa)
+{
+	return (spa->spa_async_tasks);
 }
 
 /*
@@ -8635,8 +8640,8 @@ spa_sync_upgrades(spa_t *spa, dmu_tx_t *tx)
 static void
 vdev_indirect_state_sync_verify(vdev_t *vd)
 {
-	ASSERTV(vdev_indirect_mapping_t *vim = vd->vdev_indirect_mapping);
-	ASSERTV(vdev_indirect_births_t *vib = vd->vdev_indirect_births);
+	vdev_indirect_mapping_t *vim __maybe_unused = vd->vdev_indirect_mapping;
+	vdev_indirect_births_t *vib __maybe_unused = vd->vdev_indirect_births;
 
 	if (vd->vdev_ops == &vdev_indirect_ops) {
 		ASSERT(vim != NULL);
