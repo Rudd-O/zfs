@@ -24,7 +24,7 @@ def srpm_step() {
 
 def integration_step() {
     return {
-        build job: "zfs-fedora-installer/master", parameters: [[$class: 'StringParameterValue', name: 'UPSTREAM_PROJECT', value: "zfs/${currentBuild.projectName}"], [$class: 'StringParameterValue', name: 'BUILD_FROM_RPMS', value: "yes"], [$class: 'StringParameterValue', name: 'BUILD_FROM_SOURCE', value: "no"], [$class: 'StringParameterValue', name: 'SOURCE_BRANCH', value: "master"], [$class: 'StringParameterValue', name: 'RELEASE', value: "${params.RELEASE}"]]
+        build job: "zfs-fedora-installer/master", parameters: [[$class: 'StringParameterValue', name: 'UPSTREAM_PROJECT', value: "zfs/${currentBuild.projectName}"], [$class: 'StringParameterValue', name: 'BUILD_FROM_RPMS', value: "yes"], [$class: 'StringParameterValue', name: 'BUILD_FROM_SOURCE', value: "no"], [$class: 'StringParameterValue', name: 'SOURCE_BRANCH', value: "master"], [$class: 'StringParameterValue', name: 'RELEASE', value: "${env.RELEASE}"]]
     }
 }
 
