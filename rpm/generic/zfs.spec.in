@@ -258,6 +258,7 @@ Requires:       dracut
 Requires:       /usr/bin/awk
 Requires:       util-linux
 Requires:       grep
+Requires:       lsof
 
 %description dracut
 This package contains a dracut module used to construct an initramfs
