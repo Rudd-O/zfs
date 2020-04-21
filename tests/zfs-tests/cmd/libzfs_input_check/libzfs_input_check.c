@@ -556,7 +556,8 @@ test_recv_new(const char *dataset, int fd)
 	fnvlist_add_boolean(optional, "resumable");
 	fnvlist_add_uint64(optional, "action_handle", *action_handle);
 #endif
-	IOC_INPUT_TEST(ZFS_IOC_RECV_NEW, dataset, required, optional, EBADE);
+	IOC_INPUT_TEST(ZFS_IOC_RECV_NEW, dataset, required, optional,
+	    ZFS_ERR_STREAM_TRUNCATED);
 
 	nvlist_free(props);
 	nvlist_free(optional);
@@ -739,6 +740,18 @@ test_wait(const char *pool)
 }
 
 static void
+test_wait_fs(const char *dataset)
+{
+	nvlist_t *required = fnvlist_alloc();
+
+	fnvlist_add_int32(required, "wait_activity", 2);
+
+	IOC_INPUT_TEST(ZFS_IOC_WAIT_FS, dataset, required, NULL, EINVAL);
+
+	nvlist_free(required);
+}
+
+static void
 zfs_ioc_input_tests(const char *pool)
 {
 	char filepath[] = "/tmp/ioc_test_file_XXXXXX";
@@ -825,6 +838,7 @@ zfs_ioc_input_tests(const char *pool)
 	test_vdev_trim(pool);
 
 	test_wait(pool);
+	test_wait_fs(dataset);
 
 	/*
 	 * cleanup
@@ -979,6 +993,7 @@ validate_ioc_values(void)
 	CHECK(ZFS_IOC_BASE + 81 == ZFS_IOC_REDACT);
 	CHECK(ZFS_IOC_BASE + 82 == ZFS_IOC_GET_BOOKMARK_PROPS);
 	CHECK(ZFS_IOC_BASE + 83 == ZFS_IOC_WAIT);
+	CHECK(ZFS_IOC_BASE + 84 == ZFS_IOC_WAIT_FS);
 	CHECK(ZFS_IOC_PLATFORM_BASE + 1 == ZFS_IOC_EVENTS_NEXT);
 	CHECK(ZFS_IOC_PLATFORM_BASE + 2 == ZFS_IOC_EVENTS_CLEAR);
 	CHECK(ZFS_IOC_PLATFORM_BASE + 3 == ZFS_IOC_EVENTS_SEEK);

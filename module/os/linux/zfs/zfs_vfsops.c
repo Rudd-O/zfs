@@ -55,6 +55,7 @@
 #include <sys/zfs_quota.h>
 #include <sys/sunddi.h>
 #include <sys/dmu_objset.h>
+#include <sys/dsl_dir.h>
 #include <sys/spa_boot.h>
 #include <sys/objlist.h>
 #include <sys/zpl.h>
@@ -872,6 +873,8 @@ zfsvfs_setup(zfsvfs_t *zfsvfs, boolean_t mounting)
 			    "num_entries in unlinked set: %llu",
 			    zs.zs_num_entries);
 			zfs_unlinked_drain(zfsvfs);
+			dsl_dir_t *dd = zfsvfs->z_os->os_dsl_dataset->ds_dir;
+			dd->dd_activity_cancelled = B_FALSE;
 		}
 
 		/*
@@ -990,7 +993,7 @@ zfs_check_global_label(const char *dsname, const char *hexsl)
 		if (dsl_prop_get_integer(dsname,
 		    zfs_prop_to_name(ZFS_PROP_READONLY), &rdonly, NULL))
 			return (SET_ERROR(EACCES));
-		return (rdonly ? 0 : EACCES);
+		return (rdonly ? 0 : SET_ERROR(EACCES));
 	}
 	return (SET_ERROR(EACCES));
 }
@@ -1423,6 +1426,8 @@ zfsvfs_teardown(zfsvfs_t *zfsvfs, boolean_t unmounting)
 		txg_wait_synced(dmu_objset_pool(zfsvfs->z_os), 0);
 	}
 	dmu_objset_evict_dbufs(zfsvfs->z_os);
+	dsl_dir_t *dd = os->os_dsl_dataset->ds_dir;
+	dsl_dir_cancel_waiters(dd);
 
 	return (0);
 }
@@ -1804,12 +1809,16 @@ zfs_resume_fs(zfsvfs_t *zfsvfs, dsl_dataset_t *ds)
 	objset_t *os;
 	VERIFY3P(ds->ds_owner, ==, zfsvfs);
 	VERIFY(dsl_dataset_long_held(ds));
+	dsl_pool_t *dp = spa_get_dsl(dsl_dataset_get_spa(ds));
+	dsl_pool_config_enter(dp, FTAG);
 	VERIFY0(dmu_objset_from_ds(ds, &os));
+	dsl_pool_config_exit(dp, FTAG);
 
 	err = zfsvfs_init(zfsvfs, os);
 	if (err != 0)
 		goto bail;
 
+	ds->ds_dir->dd_activity_cancelled = B_FALSE;
 	VERIFY(zfsvfs_setup(zfsvfs, B_FALSE) == 0);
 
 	zfs_set_fuid_feature(zfsvfs);
@@ -1895,7 +1904,10 @@ zfs_end_fs(zfsvfs_t *zfsvfs, dsl_dataset_t *ds)
 	objset_t *os;
 	VERIFY3P(ds->ds_owner, ==, zfsvfs);
 	VERIFY(dsl_dataset_long_held(ds));
+	dsl_pool_t *dp = spa_get_dsl(dsl_dataset_get_spa(ds));
+	dsl_pool_config_enter(dp, FTAG);
 	VERIFY0(dmu_objset_from_ds(ds, &os));
+	dsl_pool_config_exit(dp, FTAG);
 	zfsvfs->z_os = os;
 
 	/* release the VOPs */

@@ -14,7 +14,6 @@ COMMON_H = \
 	$(top_srcdir)/include/sys/bptree.h \
 	$(top_srcdir)/include/sys/btree.h \
 	$(top_srcdir)/include/sys/bqueue.h \
-	$(top_srcdir)/include/sys/cityhash.h \
 	$(top_srcdir)/include/sys/dataset_kstats.h \
 	$(top_srcdir)/include/sys/dbuf.h \
 	$(top_srcdir)/include/sys/ddt.h \
@@ -99,6 +98,7 @@ COMMON_H = \
 	$(top_srcdir)/include/sys/zcp_global.h \
 	$(top_srcdir)/include/sys/zcp_iter.h \
 	$(top_srcdir)/include/sys/zcp_prop.h \
+	$(top_srcdir)/include/sys/zcp_set.h \
 	$(top_srcdir)/include/sys/zfeature.h \
 	$(top_srcdir)/include/sys/zfs_acl.h \
 	$(top_srcdir)/include/sys/zfs_context.h \

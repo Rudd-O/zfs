@@ -1359,8 +1359,13 @@ dmu_read_uio_dnode(dnode_t *dn, uio_t *uio, uint64_t size)
 				XUIOSTAT_BUMP(xuiostat_rbuf_copied);
 		} else
 #endif
+#ifdef __FreeBSD__
+			err = vn_io_fault_uiomove((char *)db->db_data + bufoff,
+			    tocpy, uio);
+#else
 			err = uiomove((char *)db->db_data + bufoff, tocpy,
 			    UIO_READ, uio);
+#endif
 		if (err)
 			break;
 
@@ -1459,9 +1464,13 @@ dmu_write_uio_dnode(dnode_t *dn, uio_t *uio, uint64_t size, dmu_tx_t *tx)
 		 * to lock the pages in memory, so that uiomove won't
 		 * block.
 		 */
+#ifdef __FreeBSD__
+		err = vn_io_fault_uiomove((char *)db->db_data + bufoff,
+		    tocpy, uio);
+#else
 		err = uiomove((char *)db->db_data + bufoff, tocpy,
 		    UIO_WRITE, uio);
-
+#endif
 		if (tocpy == db->db_size)
 			dmu_buf_fill_done(db, tx);
 
@@ -1876,7 +1885,7 @@ dmu_sync(zio_t *pio, uint64_t txg, dmu_sync_cb_t *done, zgd_t *zgd)
 	dmu_buf_impl_t *db = (dmu_buf_impl_t *)zgd->zgd_db;
 	objset_t *os = db->db_objset;
 	dsl_dataset_t *ds = os->os_dsl_dataset;
-	dbuf_dirty_record_t *dr;
+	dbuf_dirty_record_t *dr, *dr_next;
 	dmu_sync_arg_t *dsa;
 	zbookmark_phys_t zb;
 	zio_prop_t zp;
@@ -1924,9 +1933,7 @@ dmu_sync(zio_t *pio, uint64_t txg, dmu_sync_cb_t *done, zgd_t *zgd)
 		return (dmu_sync_late_arrival(pio, os, done, zgd, &zp, &zb));
 	}
 
-	dr = db->db_last_dirty;
-	while (dr && dr->dr_txg != txg)
-		dr = dr->dr_next;
+	dr = dbuf_find_dirty_eq(db, txg);
 
 	if (dr == NULL) {
 		/*
@@ -1937,7 +1944,8 @@ dmu_sync(zio_t *pio, uint64_t txg, dmu_sync_cb_t *done, zgd_t *zgd)
 		return (SET_ERROR(ENOENT));
 	}
 
-	ASSERT(dr->dr_next == NULL || dr->dr_next->dr_txg < txg);
+	dr_next = list_next(&db->db_dirty_records, dr);
+	ASSERT(dr_next == NULL || dr_next->dr_txg < txg);
 
 	if (db->db_blkptr != NULL) {
 		/*
@@ -1978,7 +1986,7 @@ dmu_sync(zio_t *pio, uint64_t txg, dmu_sync_cb_t *done, zgd_t *zgd)
 	 */
 	DB_DNODE_ENTER(db);
 	dn = DB_DNODE(db);
-	if (dr->dr_next != NULL || dnode_block_freed(dn, db->db_blkid))
+	if (dr_next != NULL || dnode_block_freed(dn, db->db_blkid))
 		zp.zp_nopwrite = B_FALSE;
 	DB_DNODE_EXIT(db);
 
@@ -2366,7 +2374,6 @@ dmu_object_info_from_db(dmu_buf_t *db_fake, dmu_object_info_t *doi)
 
 /*
  * Faster still when you only care about the size.
- * This is specifically optimized for zfs_getattr().
  */
 void
 dmu_object_size_from_db(dmu_buf_t *db_fake, uint32_t *blksize,

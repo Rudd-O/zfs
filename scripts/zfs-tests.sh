@@ -221,7 +221,7 @@ create_links() {
 			[ ! -e "$STF_PATH/$i" ] || continue
 
 			if [ ! -d "$j/$i" ] && [ -e "$j/$i" ]; then
-				ln -s "$j/$i" "$STF_PATH/$i" || \
+				ln -sf "$j/$i" "$STF_PATH/$i" || \
 				    fail "Couldn't link $i"
 				break
 			fi
@@ -239,8 +239,11 @@ create_links() {
 constrain_path() {
 	. "$STF_SUITE/include/commands.cfg"
 
-	SYSTEM_DIRS="/bin /sbin /usr/bin /usr/sbin"
-	SYSTEM_DIRS+=" /usr/local/bin /usr/local/sbin"
+	# On FreeBSD, base system zfs utils are in /sbin and OpenZFS utils
+	# install to /usr/local/sbin. To avoid testing the wrong utils we
+	# need /usr/local to come before / in the path search order.
+	SYSTEM_DIRS="/usr/local/bin /usr/local/sbin"
+	SYSTEM_DIRS+=" /usr/bin /usr/sbin /bin /sbin"
 
 	if [ "$INTREE" = "yes" ]; then
 		# Constrained path set to ./zfs/bin/
@@ -339,6 +342,9 @@ $0 -v
 
 # Run a smaller suite of tests designed to run more quickly.
 $0 -r linux-fast
+
+# Run a single test
+$0 -t tests/functional/cli_root/zfs_bookmark/zfs_bookmark_cliargs.ksh
 
 # Cleanup a previous run of the test suite prior to testing, run the
 # default (linux) suite of tests and perform no cleanup on exit.

@@ -115,7 +115,7 @@ typedef enum {
 	ZFS_PROP_READONLY,
 	ZFS_PROP_ZONED,
 	ZFS_PROP_SNAPDIR,
-	ZFS_PROP_PRIVATE,		/* not exposed to user, temporary */
+	ZFS_PROP_ACLMODE,
 	ZFS_PROP_ACLINHERIT,
 	ZFS_PROP_CREATETXG,
 	ZFS_PROP_NAME,			/* not exposed to the user */
@@ -573,6 +573,11 @@ typedef enum zfs_key_location {
 #define	ZPL_VERSION_USERSPACE		ZPL_VERSION_4
 #define	ZPL_VERSION_SA			ZPL_VERSION_5
 
+/* Persistent L2ARC version */
+#define	L2ARC_PERSISTENT_VERSION_1	1ULL
+#define	L2ARC_PERSISTENT_VERSION	L2ARC_PERSISTENT_VERSION_1
+#define	L2ARC_PERSISTENT_VERSION_STRING	"1"
+
 /* Rewind policy information */
 #define	ZPOOL_NO_REWIND		1  /* No policy - default behavior */
 #define	ZPOOL_NEVER_REWIND	2  /* Do not search for best txg or rewind */
@@ -591,8 +596,8 @@ typedef struct zpool_load_policy {
 
 /*
  * The following are configuration names used in the nvlist describing a pool's
- * configuration.  New on-disk names should be prefixed with "<reverse-DNS>:"
- * (e.g. "org.open-zfs:") to avoid conflicting names being developed
+ * configuration.  New on-disk names should be prefixed with "<reversed-DNS>:"
+ * (e.g. "org.openzfs:") to avoid conflicting names being developed
  * independently.
  */
 #define	ZPOOL_CONFIG_VERSION		"version"
@@ -1282,6 +1287,7 @@ typedef enum zfs_ioc {
 	ZFS_IOC_REDACT,				/* 0x5a51 */
 	ZFS_IOC_GET_BOOKMARK_PROPS,		/* 0x5a52 */
 	ZFS_IOC_WAIT,				/* 0x5a53 */
+	ZFS_IOC_WAIT_FS,			/* 0x5a54 */
 
 	/*
 	 * Per-platform (Optional) - 6/128 numbers reserved.
@@ -1310,6 +1316,8 @@ typedef enum zfs_ioc {
  * not described precisely by generic errno codes.
  *
  * These numbers should not change over time. New entries should be appended.
+ *
+ * (Keep in sync with contrib/pyzfs/libzfs_core/_constants.py)
  */
 typedef enum {
 	ZFS_ERR_CHECKPOINT_EXISTS = 1024,
@@ -1327,6 +1335,8 @@ typedef enum {
 	ZFS_ERR_SPILL_BLOCK_FLAG_MISSING,
 	ZFS_ERR_UNKNOWN_SEND_STREAM_FEATURE,
 	ZFS_ERR_EXPORT_IN_PROGRESS,
+	ZFS_ERR_BOOKMARK_SOURCE_NOT_ANCESTOR,
+	ZFS_ERR_STREAM_TRUNCATED,
 } zfs_errno_t;
 
 /*
@@ -1350,8 +1360,14 @@ typedef enum {
 	ZPOOL_WAIT_REMOVE,
 	ZPOOL_WAIT_RESILVER,
 	ZPOOL_WAIT_SCRUB,
+	ZPOOL_WAIT_TRIM,
 	ZPOOL_WAIT_NUM_ACTIVITIES
 } zpool_wait_activity_t;
+
+typedef enum {
+	ZFS_WAIT_DELETEQ,
+	ZFS_WAIT_NUM_ACTIVITIES
+} zfs_wait_activity_t;
 
 /*
  * Bookmark name values.
@@ -1409,6 +1425,12 @@ typedef enum {
 #define	ZPOOL_WAIT_ACTIVITY		"wait_activity"
 #define	ZPOOL_WAIT_TAG			"wait_tag"
 #define	ZPOOL_WAIT_WAITED		"wait_waited"
+
+/*
+ * The following are names used when invoking ZFS_IOC_WAIT_FS.
+ */
+#define	ZFS_WAIT_ACTIVITY		"wait_activity"
+#define	ZFS_WAIT_WAITED			"wait_waited"
 
 /*
  * Flags for ZFS_IOC_VDEV_SET_STATE

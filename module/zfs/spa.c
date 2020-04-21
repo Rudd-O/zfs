@@ -4860,6 +4860,8 @@ spa_load_impl(spa_t *spa, spa_import_type_t type, char **ereport)
 	}
 
 	spa_import_progress_remove(spa_guid(spa));
+	spa_async_request(spa, SPA_ASYNC_L2CACHE_REBUILD);
+
 	spa_load_note(spa, "LOADED");
 
 	return (0);
@@ -5114,7 +5116,7 @@ spa_open_common(const char *pool, spa_t **spapp, void *tag, nvlist_t *nvpolicy,
 	}
 
 	if (firstopen)
-		zvol_create_minors(spa, spa_name(spa), B_TRUE);
+		zvol_create_minors_recursive(spa_name(spa));
 
 	*spapp = spa;
 
@@ -6083,7 +6085,7 @@ spa_import(char *pool, nvlist_t *config, nvlist_t *props, uint64_t flags)
 
 	mutex_exit(&spa_namespace_lock);
 
-	zvol_create_minors(spa, pool, B_TRUE);
+	zvol_create_minors_recursive(pool);
 
 	return (0);
 }
@@ -7477,6 +7479,7 @@ spa_vdev_split_mirror(spa_t *spa, char *newname, nvlist_t *config,
 	list_destroy(&vd_trim_list);
 
 	newspa->spa_config_source = SPA_CONFIG_SRC_SPLIT;
+	newspa->spa_is_splitting = B_TRUE;
 
 	/* create the new pool from the disks of the original pool */
 	error = spa_load(newspa, SPA_LOAD_IMPORT, SPA_IMPORT_ASSEMBLE);
@@ -7554,6 +7557,7 @@ spa_vdev_split_mirror(spa_t *spa, char *newname, nvlist_t *config,
 	spa_history_log_internal(newspa, "split", NULL,
 	    "from pool %s", spa_name(spa));
 
+	newspa->spa_is_splitting = B_FALSE;
 	kmem_free(vml, children * sizeof (vdev_t *));
 
 	/* if we're not going to mount the filesystems in userland, export */
@@ -7984,6 +7988,17 @@ spa_async_thread(void *arg)
 	}
 
 	/*
+	 * Kick off L2 cache rebuilding.
+	 */
+	if (tasks & SPA_ASYNC_L2CACHE_REBUILD) {
+		mutex_enter(&spa_namespace_lock);
+		spa_config_enter(spa, SCL_L2ARC, FTAG, RW_READER);
+		l2arc_spa_rebuild_start(spa);
+		spa_config_exit(spa, SCL_L2ARC, FTAG);
+		mutex_exit(&spa_namespace_lock);
+	}
+
+	/*
 	 * Let the world know that we're done.
 	 */
 	mutex_enter(&spa->spa_async_lock);
@@ -8125,10 +8140,10 @@ bpobj_enqueue_free_cb(void *arg, const blkptr_t *bp, dmu_tx_t *tx)
 static int
 spa_free_sync_cb(void *arg, const blkptr_t *bp, dmu_tx_t *tx)
 {
-	zio_t *zio = arg;
+	zio_t *pio = arg;
 
-	zio_nowait(zio_free_sync(zio, zio->io_spa, dmu_tx_get_txg(tx), bp,
-	    zio->io_flags));
+	zio_nowait(zio_free_sync(pio, pio->io_spa, dmu_tx_get_txg(tx), bp,
+	    pio->io_flags));
 	return (0);
 }
 
@@ -9280,28 +9295,35 @@ spa_wake_waiters(spa_t *spa)
 	mutex_exit(&spa->spa_activities_lock);
 }
 
-/* Whether the vdev or any of its descendants is initializing. */
+/* Whether the vdev or any of its descendants are being initialized/trimmed. */
 static boolean_t
-spa_vdev_initializing_impl(vdev_t *vd)
+spa_vdev_activity_in_progress_impl(vdev_t *vd, zpool_wait_activity_t activity)
 {
 	spa_t *spa = vd->vdev_spa;
-	boolean_t initializing;
 
 	ASSERT(spa_config_held(spa, SCL_CONFIG | SCL_STATE, RW_READER));
 	ASSERT(MUTEX_HELD(&spa->spa_activities_lock));
+	ASSERT(activity == ZPOOL_WAIT_INITIALIZE ||
+	    activity == ZPOOL_WAIT_TRIM);
+
+	kmutex_t *lock = activity == ZPOOL_WAIT_INITIALIZE ?
+	    &vd->vdev_initialize_lock : &vd->vdev_trim_lock;
 
 	mutex_exit(&spa->spa_activities_lock);
-	mutex_enter(&vd->vdev_initialize_lock);
+	mutex_enter(lock);
 	mutex_enter(&spa->spa_activities_lock);
 
-	initializing = (vd->vdev_initialize_state == VDEV_INITIALIZE_ACTIVE);
-	mutex_exit(&vd->vdev_initialize_lock);
+	boolean_t in_progress = (activity == ZPOOL_WAIT_INITIALIZE) ?
+	    (vd->vdev_initialize_state == VDEV_INITIALIZE_ACTIVE) :
+	    (vd->vdev_trim_state == VDEV_TRIM_ACTIVE);
+	mutex_exit(lock);
 
-	if (initializing)
+	if (in_progress)
 		return (B_TRUE);
 
 	for (int i = 0; i < vd->vdev_children; i++) {
-		if (spa_vdev_initializing_impl(vd->vdev_child[i]))
+		if (spa_vdev_activity_in_progress_impl(vd->vdev_child[i],
+		    activity))
 			return (B_TRUE);
 	}
 
@@ -9310,12 +9332,13 @@ spa_vdev_initializing_impl(vdev_t *vd)
 
 /*
  * If use_guid is true, this checks whether the vdev specified by guid is
- * being initialized. Otherwise, it checks whether any vdev in the pool is being
- * initialized. The caller must hold the config lock and spa_activities_lock.
+ * being initialized/trimmed. Otherwise, it checks whether any vdev in the pool
+ * is being initialized/trimmed. The caller must hold the config lock and
+ * spa_activities_lock.
  */
 static int
-spa_vdev_initializing(spa_t *spa, boolean_t use_guid, uint64_t guid,
-    boolean_t *in_progress)
+spa_vdev_activity_in_progress(spa_t *spa, boolean_t use_guid, uint64_t guid,
+    zpool_wait_activity_t activity, boolean_t *in_progress)
 {
 	mutex_exit(&spa->spa_activities_lock);
 	spa_config_enter(spa, SCL_CONFIG | SCL_STATE, FTAG, RW_READER);
@@ -9332,7 +9355,7 @@ spa_vdev_initializing(spa_t *spa, boolean_t use_guid, uint64_t guid,
 		vd = spa->spa_root_vdev;
 	}
 
-	*in_progress = spa_vdev_initializing_impl(vd);
+	*in_progress = spa_vdev_activity_in_progress_impl(vd, activity);
 
 	spa_config_exit(spa, SCL_CONFIG | SCL_STATE, FTAG);
 	return (0);
@@ -9403,7 +9426,9 @@ spa_activity_in_progress(spa_t *spa, zpool_wait_activity_t activity,
 		    spa_livelist_delete_check(spa));
 		break;
 	case ZPOOL_WAIT_INITIALIZE:
-		error = spa_vdev_initializing(spa, use_tag, tag, in_progress);
+	case ZPOOL_WAIT_TRIM:
+		error = spa_vdev_activity_in_progress(spa, use_tag, tag,
+		    activity, in_progress);
 		break;
 	case ZPOOL_WAIT_REPLACE:
 		mutex_exit(&spa->spa_activities_lock);
@@ -9443,15 +9468,16 @@ spa_wait_common(const char *pool, zpool_wait_activity_t activity,
 {
 	/*
 	 * The tag is used to distinguish between instances of an activity.
-	 * 'initialize' is the only activity that we use this for. The other
-	 * activities can only have a single instance in progress in a pool at
-	 * one time, making the tag unnecessary.
+	 * 'initialize' and 'trim' are the only activities that we use this for.
+	 * The other activities can only have a single instance in progress in a
+	 * pool at one time, making the tag unnecessary.
 	 *
 	 * There can be multiple devices being replaced at once, but since they
 	 * all finish once resilvering finishes, we don't bother keeping track
 	 * of them individually, we just wait for them all to finish.
 	 */
-	if (use_tag && activity != ZPOOL_WAIT_INITIALIZE)
+	if (use_tag && activity != ZPOOL_WAIT_INITIALIZE &&
+	    activity != ZPOOL_WAIT_TRIM)
 		return (EINVAL);
 
 	if (activity < 0 || activity >= ZPOOL_WAIT_NUM_ACTIVITIES)

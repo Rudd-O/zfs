@@ -30,6 +30,7 @@
  * Copyright (c) 2019 Datto Inc.
  * Copyright (c) 2019, loli10K <ezomori.nozomu@gmail.com>
  * Copyright 2019 Joyent, Inc.
+ * Copyright (c) 2019, 2020 by Christian Schwarz. All rights reserved.
  */
 
 #include <assert.h>
@@ -121,6 +122,7 @@ static int zfs_do_change_key(int argc, char **argv);
 static int zfs_do_project(int argc, char **argv);
 static int zfs_do_version(int argc, char **argv);
 static int zfs_do_redact(int argc, char **argv);
+static int zfs_do_wait(int argc, char **argv);
 
 #ifdef __FreeBSD__
 static int zfs_do_jail(int argc, char **argv);
@@ -182,7 +184,8 @@ typedef enum {
 	HELP_VERSION,
 	HELP_REDACT,
 	HELP_JAIL,
-	HELP_UNJAIL
+	HELP_UNJAIL,
+	HELP_WAIT,
 } zfs_help_t;
 
 typedef struct zfs_command {
@@ -247,6 +250,7 @@ static zfs_command_t command_table[] = {
 	{ "unload-key",	zfs_do_unload_key,	HELP_UNLOAD_KEY		},
 	{ "change-key",	zfs_do_change_key,	HELP_CHANGE_KEY		},
 	{ "redact",	zfs_do_redact,		HELP_REDACT		},
+	{ "wait",	zfs_do_wait,		HELP_WAIT		},
 
 #ifdef __FreeBSD__
 	{ "jail",	zfs_do_jail,		HELP_JAIL		},
@@ -297,10 +301,10 @@ get_usage(zfs_help_t idx)
 	case HELP_PROMOTE:
 		return (gettext("\tpromote <clone-filesystem>\n"));
 	case HELP_RECEIVE:
-		return (gettext("\treceive [-vnsFhu] "
+		return (gettext("\treceive [-vMnsFhu] "
 		    "[-o <property>=<value>] ... [-x <property>] ...\n"
 		    "\t    <filesystem|volume|snapshot>\n"
-		    "\treceive [-vnsFhu] [-o <property>=<value>] ... "
+		    "\treceive [-vMnsFhu] [-o <property>=<value>] ... "
 		    "[-x <property>] ... \n"
 		    "\t    [-d | -e] <filesystem>\n"
 		    "\treceive -A <filesystem|volume>\n"));
@@ -383,7 +387,8 @@ get_usage(zfs_help_t idx)
 		return (gettext("\tdiff [-FHt] <snapshot> "
 		    "[snapshot|filesystem]\n"));
 	case HELP_BOOKMARK:
-		return (gettext("\tbookmark <snapshot> <bookmark>\n"));
+		return (gettext("\tbookmark <snapshot|bookmark> "
+		    "<newbookmark>\n"));
 	case HELP_CHANNEL_PROGRAM:
 		return (gettext("\tprogram [-jn] [-t <instruction limit>] "
 		    "[-m <memory limit (b)>]\n"
@@ -403,11 +408,13 @@ get_usage(zfs_help_t idx)
 		return (gettext("\tversion\n"));
 	case HELP_REDACT:
 		return (gettext("\tredact <snapshot> <bookmark> "
-		    "<redaction_snapshot> ..."));
+		    "<redaction_snapshot> ...\n"));
 	case HELP_JAIL:
 		return (gettext("\tjail <jailid|jailname> <filesystem>\n"));
 	case HELP_UNJAIL:
 		return (gettext("\tunjail <jailid|jailname> <filesystem>\n"));
+	case HELP_WAIT:
+		return (gettext("\twait [-t <activity>] <filesystem>\n"));
 	}
 
 	abort();
@@ -3746,8 +3753,13 @@ zfs_do_redact(int argc, char **argv)
 		    "specified\n"));
 		break;
 	case EINVAL:
-		(void) fprintf(stderr, gettext("redaction snapshot must be "
-		    "descendent of snapshot being redacted\n"));
+		if (strchr(bookname, '#') != NULL)
+			(void) fprintf(stderr, gettext(
+			    "redaction bookmark name must not contain '#'\n"));
+		else
+			(void) fprintf(stderr, gettext(
+			    "redaction snapshot must be descendent of "
+			    "snapshot being redacted\n"));
 		break;
 	case EALREADY:
 		(void) fprintf(stderr, gettext("attempted to redact redacted "
@@ -3756,6 +3768,10 @@ zfs_do_redact(int argc, char **argv)
 	case ENOTSUP:
 		(void) fprintf(stderr, gettext("redaction bookmarks feature "
 		    "not enabled\n"));
+		break;
+	case EXDEV:
+		(void) fprintf(stderr, gettext("potentially invalid redaction "
+		    "snapshot; full dataset names required\n"));
 		break;
 	default:
 		(void) fprintf(stderr, gettext("internal error: %s\n"),
@@ -4317,6 +4333,16 @@ zfs_do_send(int argc, char **argv)
 		}
 	}
 
+	if (flags.dedup) {
+		(void) fprintf(stderr,
+		    gettext("WARNING: deduplicated send is "
+		    "deprecated, and will be removed in a\n"
+		    "future release. (In the future, the flag will be "
+		    "accepted, but a\n"
+		    "regular, non-deduplicated stream will be "
+		    "generated.)\n\n"));
+	}
+
 	if (flags.parsable && flags.verbosity == 0)
 		flags.verbosity = 1;
 
@@ -4397,18 +4423,6 @@ zfs_do_send(int argc, char **argv)
 	if (!(flags.replicate || flags.doall)) {
 		char frombuf[ZFS_MAX_DATASET_NAME_LEN];
 
-		if (redactbook != NULL) {
-			if (strchr(argv[0], '@') == NULL) {
-				(void) fprintf(stderr, gettext("Error: Cannot "
-				    "do a redacted send to a filesystem.\n"));
-				return (1);
-			}
-		}
-
-		zhp = zfs_open(g_zfs, argv[0], ZFS_TYPE_DATASET);
-		if (zhp == NULL)
-			return (1);
-
 		if (fromname != NULL && (strchr(fromname, '#') == NULL &&
 		    strchr(fromname, '@') == NULL)) {
 			/*
@@ -4437,6 +4451,10 @@ zfs_do_send(int argc, char **argv)
 			(void) strlcat(frombuf, tmpbuf, sizeof (frombuf));
 			fromname = frombuf;
 		}
+
+		zhp = zfs_open(g_zfs, argv[0], ZFS_TYPE_DATASET);
+		if (zhp == NULL)
+			return (1);
 		err = zfs_send_one(zhp, fromname, STDOUT_FILENO, &flags,
 		    redactbook);
 		zfs_close(zhp);
@@ -4535,7 +4553,7 @@ zfs_do_receive(int argc, char **argv)
 		nomem();
 
 	/* check options */
-	while ((c = getopt(argc, argv, ":o:x:dehnuvFsA")) != -1) {
+	while ((c = getopt(argc, argv, ":o:x:dehMnuvFsA")) != -1) {
 		switch (c) {
 		case 'o':
 			if (!parseprop(props, optarg)) {
@@ -4569,6 +4587,9 @@ zfs_do_receive(int argc, char **argv)
 			break;
 		case 'h':
 			flags.skipholds = B_TRUE;
+			break;
+		case 'M':
+			flags.forceunmount = B_TRUE;
 			break;
 		case 'n':
 			flags.dryrun = B_TRUE;
@@ -6191,7 +6212,7 @@ typedef struct holds_cbdata {
 	size_t		cb_max_taglen;
 } holds_cbdata_t;
 
-#define	STRFTIME_FMT_STR "%a %b %e %k:%M %Y"
+#define	STRFTIME_FMT_STR "%a %b %e %H:%M %Y"
 #define	DATETIME_BUF_LEN (32)
 /*
  *
@@ -7520,16 +7541,17 @@ out:
 }
 
 /*
- * zfs bookmark <fs@snap> <fs#bmark>
+ * zfs bookmark <fs@source>|<fs#source> <fs#bookmark>
  *
- * Creates a bookmark with the given name from the given snapshot.
+ * Creates a bookmark with the given name from the source snapshot
+ * or creates a copy of an existing source bookmark.
  */
 static int
 zfs_do_bookmark(int argc, char **argv)
 {
-	char snapname[ZFS_MAX_DATASET_NAME_LEN];
-	char bookname[ZFS_MAX_DATASET_NAME_LEN];
-	zfs_handle_t *zhp;
+	char *source, *bookname;
+	char expbuf[ZFS_MAX_DATASET_NAME_LEN];
+	int source_type;
 	nvlist_t *nvl;
 	int ret = 0;
 	int c;
@@ -7549,7 +7571,7 @@ zfs_do_bookmark(int argc, char **argv)
 
 	/* check number of arguments */
 	if (argc < 1) {
-		(void) fprintf(stderr, gettext("missing snapshot argument\n"));
+		(void) fprintf(stderr, gettext("missing source argument\n"));
 		goto usage;
 	}
 	if (argc < 2) {
@@ -7557,50 +7579,72 @@ zfs_do_bookmark(int argc, char **argv)
 		goto usage;
 	}
 
-	if (strchr(argv[0], '@') == NULL) {
+	source = argv[0];
+	bookname = argv[1];
+
+	if (strchr(source, '@') == NULL && strchr(source, '#') == NULL) {
 		(void) fprintf(stderr,
-		    gettext("invalid snapshot name '%s': "
-		    "must contain a '@'\n"), argv[0]);
+		    gettext("invalid source name '%s': "
+		    "must contain a '@' or '#'\n"), source);
 		goto usage;
 	}
-	if (strchr(argv[1], '#') == NULL) {
+	if (strchr(bookname, '#') == NULL) {
 		(void) fprintf(stderr,
 		    gettext("invalid bookmark name '%s': "
-		    "must contain a '#'\n"), argv[1]);
+		    "must contain a '#'\n"), bookname);
 		goto usage;
 	}
 
-	if (argv[0][0] == '@') {
-		/*
-		 * Snapshot name begins with @.
-		 * Default to same fs as bookmark.
-		 */
-		(void) strlcpy(snapname, argv[1], sizeof (snapname));
-		*strchr(snapname, '#') = '\0';
-		(void) strlcat(snapname, argv[0], sizeof (snapname));
-	} else {
-		(void) strlcpy(snapname, argv[0], sizeof (snapname));
-	}
-	if (argv[1][0] == '#') {
-		/*
-		 * Bookmark name begins with #.
-		 * Default to same fs as snapshot.
-		 */
-		(void) strlcpy(bookname, argv[0], sizeof (bookname));
-		*strchr(bookname, '@') = '\0';
-		(void) strlcat(bookname, argv[1], sizeof (bookname));
-	} else {
-		(void) strlcpy(bookname, argv[1], sizeof (bookname));
+	/*
+	 * expand source or bookname to full path:
+	 * one of them may be specified as short name
+	 */
+	{
+		char **expand;
+		char *source_short, *bookname_short;
+		source_short = strpbrk(source, "@#");
+		bookname_short = strpbrk(bookname, "#");
+		if (source_short == source &&
+		    bookname_short == bookname) {
+			(void) fprintf(stderr, gettext(
+			    "either source or bookmark must be specified as "
+			    "full dataset paths"));
+			goto usage;
+		} else if (source_short != source &&
+		    bookname_short != bookname) {
+			expand = NULL;
+		} else if (source_short != source) {
+			strlcpy(expbuf, source, sizeof (expbuf));
+			expand = &bookname;
+		} else if (bookname_short != bookname) {
+			strlcpy(expbuf, bookname, sizeof (expbuf));
+			expand = &source;
+		} else {
+			abort();
+		}
+		if (expand != NULL) {
+			*strpbrk(expbuf, "@#") = '\0'; /* dataset name in buf */
+			(void) strlcat(expbuf, *expand, sizeof (expbuf));
+			*expand = expbuf;
+		}
 	}
 
-	zhp = zfs_open(g_zfs, snapname, ZFS_TYPE_SNAPSHOT);
+	/* determine source type */
+	switch (*strpbrk(source, "@#")) {
+		case '@': source_type = ZFS_TYPE_SNAPSHOT; break;
+		case '#': source_type = ZFS_TYPE_BOOKMARK; break;
+		default: abort();
+	}
+
+	/* test the source exists */
+	zfs_handle_t *zhp;
+	zhp = zfs_open(g_zfs, source, source_type);
 	if (zhp == NULL)
 		goto usage;
 	zfs_close(zhp);
 
-
 	nvl = fnvlist_alloc();
-	fnvlist_add_string(nvl, bookname, snapname);
+	fnvlist_add_string(nvl, bookname, source);
 	ret = lzc_bookmark(nvl, NULL);
 	fnvlist_free(nvl);
 
@@ -7615,6 +7659,10 @@ zfs_do_bookmark(int argc, char **argv)
 		switch (ret) {
 		case EXDEV:
 			err_msg = "bookmark is in a different pool";
+			break;
+		case ZFS_ERR_BOOKMARK_SOURCE_NOT_ANCESTOR:
+			err_msg = "source is not an ancestor of the "
+			    "new bookmark's dataset";
 			break;
 		case EEXIST:
 			err_msg = "bookmark exists";
@@ -8272,6 +8320,90 @@ zfs_do_project(int argc, char **argv)
 	}
 
 	return (ret);
+}
+
+static int
+zfs_do_wait(int argc, char **argv)
+{
+	boolean_t enabled[ZFS_WAIT_NUM_ACTIVITIES];
+	int error, i;
+	char c;
+
+	/* By default, wait for all types of activity. */
+	for (i = 0; i < ZFS_WAIT_NUM_ACTIVITIES; i++)
+		enabled[i] = B_TRUE;
+
+	while ((c = getopt(argc, argv, "t:")) != -1) {
+		switch (c) {
+		case 't':
+		{
+			static char *col_subopts[] = { "deleteq", NULL };
+			char *value;
+
+			/* Reset activities array */
+			bzero(&enabled, sizeof (enabled));
+			while (*optarg != '\0') {
+				int activity = getsubopt(&optarg, col_subopts,
+				    &value);
+
+				if (activity < 0) {
+					(void) fprintf(stderr,
+					    gettext("invalid activity '%s'\n"),
+					    value);
+					usage(B_FALSE);
+				}
+
+				enabled[activity] = B_TRUE;
+			}
+			break;
+		}
+		case '?':
+			(void) fprintf(stderr, gettext("invalid option '%c'\n"),
+			    optopt);
+			usage(B_FALSE);
+		}
+	}
+
+	argv += optind;
+	argc -= optind;
+	if (argc < 1) {
+		(void) fprintf(stderr, gettext("missing 'filesystem' "
+		    "argument\n"));
+		usage(B_FALSE);
+	}
+	if (argc > 1) {
+		(void) fprintf(stderr, gettext("too many arguments\n"));
+		usage(B_FALSE);
+	}
+
+	zfs_handle_t *zhp = zfs_open(g_zfs, argv[0], ZFS_TYPE_FILESYSTEM);
+	if (zhp == NULL)
+		return (1);
+
+	for (;;) {
+		boolean_t missing = B_FALSE;
+		boolean_t any_waited = B_FALSE;
+
+		for (int i = 0; i < ZFS_WAIT_NUM_ACTIVITIES; i++) {
+			boolean_t waited;
+
+			if (!enabled[i])
+				continue;
+
+			error = zfs_wait_status(zhp, i, &missing, &waited);
+			if (error != 0 || missing)
+				break;
+
+			any_waited = (any_waited || waited);
+		}
+
+		if (error != 0 || missing || !any_waited)
+			break;
+	}
+
+	zfs_close(zhp);
+
+	return (error);
 }
 
 /*

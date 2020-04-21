@@ -200,7 +200,7 @@ Streams are created using the
 .Xr zfs-send 8
 subcommand, which by default creates a full stream.
 .It Xr zfs-bookmark 8
-Creates a bookmark of the given snapshot.
+Creates a new bookmark of the given snapshot or bookmark.
 Bookmarks mark the point in time when the snapshot was created, and can be used
 as the incremental source for a
 .Nm zfs Cm send
@@ -280,6 +280,11 @@ programmatically via a Lua script-language channel program.
 Attaches a filesystem to a jail.
 .It Xr zfs-unjail 8
 Detaches a filesystem from a jail.
+.El
+.Ss Waiting
+.Bl -tag -width ""
+.It Xr zfs-wait 8
+Wait for background activity in a filesystem to complete.
 .El
 .Sh EXIT STATUS
 The

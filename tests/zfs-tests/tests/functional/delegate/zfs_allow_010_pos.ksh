@@ -93,7 +93,7 @@ elif is_freebsd; then
 #		Permission	Filesystem	Volume
 #
 # Removed for FreeBSD
-# - zoned	- zones are not supported
+# - jailed	- jailing requires superuser privileges
 # - sharenfs	- sharing requires superuser privileges
 # - share	- sharing requires superuser privileges
 # - xattr	- Not supported on FreeBSD

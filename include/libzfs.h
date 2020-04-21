@@ -269,6 +269,9 @@ typedef struct trimflags {
 	/* request a secure trim, requires support from device */
 	boolean_t secure;
 
+	/* after starting trim, block until trim completes */
+	boolean_t wait;
+
 	/* trim at the requested rate in bytes/second */
 	uint64_t rate;
 } trimflags_t;
@@ -503,6 +506,9 @@ extern nvlist_t *zfs_get_all_props(zfs_handle_t *);
 extern nvlist_t *zfs_get_user_props(zfs_handle_t *);
 extern nvlist_t *zfs_get_recvd_props(zfs_handle_t *);
 extern nvlist_t *zfs_get_clones_nvl(zfs_handle_t *);
+
+extern int zfs_wait_status(zfs_handle_t *, zfs_wait_activity_t,
+    boolean_t *, boolean_t *);
 
 /*
  * zfs encryption management
@@ -755,6 +761,9 @@ typedef struct recvflags {
 
 	/* mount the filesystem unless nomount is specified */
 	boolean_t domount;
+
+	/* force unmount while recv snapshot (private) */
+	boolean_t forceunmount;
 } recvflags_t;
 
 extern int zfs_receive(libzfs_handle_t *, const char *, nvlist_t *,
