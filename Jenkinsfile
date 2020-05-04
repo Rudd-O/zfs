@@ -11,12 +11,15 @@ def srpm_step() {
                     returnStdout: true
                 ).trim()
                 println "Git hash is reported as ${env.GIT_HASH}"
-                sh """
+                sh (
+                script: """
                 ./autogen.sh
                 sed "s/_META_RELEASE=.*/_META_RELEASE=0.${env.BUILD_NUMBER}.${env.GIT_HASH}/" -i configure
                 ./configure --with-config=user
                 make srpm-dkms srpm-utils
-                """
+                """,
+                label: "configure for source RPM"
+                )
             }
         }
     }
