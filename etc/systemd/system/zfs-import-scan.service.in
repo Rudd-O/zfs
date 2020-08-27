@@ -14,10 +14,7 @@ ConditionPathIsDirectory=/sys/module/zfs
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=@sbindir@/modprobe zfs zfs_autoimport_disable=1
 ExecStart=@sbindir@/zpool import -aN -o cachefile=none
-StandardOutput=journal+console
-StandardError=journal+console
 
 [Install]
 WantedBy=zfs-import.target
