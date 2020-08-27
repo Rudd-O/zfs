@@ -58,6 +58,7 @@ typedef struct dmu_recv_cookie {
 	uint64_t drc_ivset_guid;
 	void *drc_owner;
 	cred_t *drc_cred;
+	proc_t *drc_proc;
 	nvlist_t *drc_begin_nvl;
 
 	objset_t *drc_os;
@@ -73,7 +74,6 @@ typedef struct dmu_recv_cookie {
 	struct receive_record_arg *drc_next_rrd;
 	zio_cksum_t drc_cksum;
 	zio_cksum_t drc_prev_cksum;
-	int drc_err;
 	/* Sorted list of objects not to issue prefetches for. */
 	objlist_t *drc_ignore_objlist;
 } dmu_recv_cookie_t;

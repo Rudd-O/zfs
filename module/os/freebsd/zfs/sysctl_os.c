@@ -52,6 +52,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/spa.h>
 #include <sys/spa_impl.h>
 #include <sys/vdev.h>
+#include <sys/vdev_impl.h>
 #include <sys/dmu.h>
 #include <sys/dsl_dir.h>
 #include <sys/dsl_dataset.h>
@@ -90,7 +91,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/arc_impl.h>
 #include <sys/dsl_pool.h>
 
-#include <../zfs_config.h>
 
 /* BEGIN CSTYLED */
 SYSCTL_DECL(_vfs_zfs);
@@ -143,12 +143,12 @@ extern arc_state_t ARC_l2c_only;
 /* arc.c */
 
 /* legacy compat */
-extern unsigned long l2arc_write_max;	/* def max write size */
-extern unsigned long l2arc_write_boost;	/* extra warmup write */
-extern unsigned long l2arc_headroom;		/* # of dev writes */
-extern unsigned long l2arc_headroom_boost;
-extern unsigned long l2arc_feed_secs;	/* interval seconds */
-extern unsigned long l2arc_feed_min_ms;	/* min interval msecs */
+extern uint64_t l2arc_write_max;	/* def max write size */
+extern uint64_t l2arc_write_boost;	/* extra warmup write */
+extern uint64_t l2arc_headroom;		/* # of dev writes */
+extern uint64_t l2arc_headroom_boost;
+extern uint64_t l2arc_feed_secs;	/* interval seconds */
+extern uint64_t l2arc_feed_min_ms;	/* min interval msecs */
 extern int l2arc_noprefetch;			/* don't cache prefetch bufs */
 extern int l2arc_feed_again;			/* turbo warmup */
 extern int l2arc_norw;			/* no reads during writes */
@@ -224,25 +224,6 @@ SYSCTL_UQUAD(_vfs_zfs, OID_AUTO, mfu_ghost_data_esize, CTLFLAG_RD,
 SYSCTL_UQUAD(_vfs_zfs, OID_AUTO, l2c_only_size, CTLFLAG_RD,
     &ARC_l2c_only.arcs_size.rc_count, 0, "size of mru state");
 
-extern int			arc_no_grow_shift;
-extern int		arc_shrink_shift;
-
-extern arc_stats_t arc_stats;
-#define	ARCSTAT(stat)	(arc_stats.stat.value.ui64)
-#define	arc_p		ARCSTAT(arcstat_p)	/* target size of MRU */
-#define	arc_c		ARCSTAT(arcstat_c)	/* target size of cache */
-#define	arc_c_min	ARCSTAT(arcstat_c_min)	/* min target cache size */
-#define	arc_c_max	ARCSTAT(arcstat_c_max)	/* max target cache size */
-#define	arc_no_grow	ARCSTAT(arcstat_no_grow) /* do not grow cache size */
-#define	arc_tempreserve	ARCSTAT(arcstat_tempreserve)
-#define	arc_loaned_bytes	ARCSTAT(arcstat_loaned_bytes)
-#define	arc_meta_limit	ARCSTAT(arcstat_meta_limit) /* max size for metadata */
-#define	arc_dnode_limit	ARCSTAT(arcstat_dnode_limit) /* max size for dnodes */
-#define	arc_meta_min	ARCSTAT(arcstat_meta_min) /* min size for metadata */
-#define	arc_meta_max	ARCSTAT(arcstat_meta_max) /* max size of metadata */
-#define	arc_need_free	ARCSTAT(arcstat_need_free) /* bytes to be freed */
-#define	arc_sys_free	ARCSTAT(arcstat_sys_free) /* target system free bytes */
-
 static int
 sysctl_vfs_zfs_arc_no_grow_shift(SYSCTL_HANDLER_ARGS)
 {
@@ -264,6 +245,42 @@ sysctl_vfs_zfs_arc_no_grow_shift(SYSCTL_HANDLER_ARGS)
 SYSCTL_PROC(_vfs_zfs, OID_AUTO, arc_no_grow_shift, CTLTYPE_U32 | CTLFLAG_RWTUN,
     0, sizeof (uint32_t), sysctl_vfs_zfs_arc_no_grow_shift, "U",
     "log2(fraction of ARC which must be free to allow growing)");
+
+int
+param_set_arc_long(SYSCTL_HANDLER_ARGS)
+{
+	int err;
+
+	err = sysctl_handle_long(oidp, arg1, 0, req);
+	if (err != 0 || req->newptr == NULL)
+		return (err);
+
+	arc_tuning_update(B_TRUE);
+
+	return (0);
+}
+
+int
+param_set_arc_int(SYSCTL_HANDLER_ARGS)
+{
+	int err;
+
+	err = sysctl_handle_int(oidp, arg1, 0, req);
+	if (err != 0 || req->newptr == NULL)
+		return (err);
+
+	arc_tuning_update(B_TRUE);
+
+	return (0);
+}
+
+SYSCTL_PROC(_vfs_zfs, OID_AUTO, arc_min, CTLTYPE_ULONG | CTLFLAG_RWTUN,
+    &zfs_arc_min, sizeof (zfs_arc_min), param_set_arc_long, "LU",
+    "min arc size (LEGACY)");
+SYSCTL_PROC(_vfs_zfs, OID_AUTO, arc_max, CTLTYPE_ULONG | CTLFLAG_RWTUN,
+    &zfs_arc_max, sizeof (zfs_arc_max), param_set_arc_long, "LU",
+    "max arc size (LEGACY)");
+
 /* dbuf.c */
 
 
@@ -502,56 +519,53 @@ SYSCTL_INT(_vfs_zfs, OID_AUTO, space_map_ibs, CTLFLAG_RWTUN,
 
 
 /* vdev.c */
-#ifdef notyet
-extern uint64_t zfs_max_auto_ashift;
-extern uint64_t zfs_min_auto_ashift;
-
-static int
-sysctl_vfs_zfs_max_auto_ashift(SYSCTL_HANDLER_ARGS)
+int
+param_set_min_auto_ashift(SYSCTL_HANDLER_ARGS)
 {
 	uint64_t val;
 	int err;
 
-	val = zfs_max_auto_ashift;
+	val = zfs_vdev_min_auto_ashift;
 	err = sysctl_handle_64(oidp, &val, 0, req);
 	if (err != 0 || req->newptr == NULL)
-		return (err);
+		return (SET_ERROR(err));
 
-	if (val > ASHIFT_MAX || val < zfs_min_auto_ashift)
-		return (EINVAL);
+	if (val < ASHIFT_MIN || val > zfs_vdev_max_auto_ashift)
+		return (SET_ERROR(EINVAL));
 
-	zfs_max_auto_ashift = val;
+	zfs_vdev_min_auto_ashift = val;
 
 	return (0);
 }
-SYSCTL_PROC(_vfs_zfs, OID_AUTO, max_auto_ashift,
-    CTLTYPE_U64 | CTLFLAG_MPSAFE | CTLFLAG_RW, 0, sizeof (uint64_t),
-    sysctl_vfs_zfs_max_auto_ashift, "QU",
-    "Max ashift used when optimising for logical -> physical sectors size on "
-    "new top-level vdevs.");
-static int
-sysctl_vfs_zfs_min_auto_ashift(SYSCTL_HANDLER_ARGS)
+
+int
+param_set_max_auto_ashift(SYSCTL_HANDLER_ARGS)
 {
 	uint64_t val;
 	int err;
 
-	val = zfs_min_auto_ashift;
+	val = zfs_vdev_max_auto_ashift;
 	err = sysctl_handle_64(oidp, &val, 0, req);
 	if (err != 0 || req->newptr == NULL)
-		return (err);
+		return (SET_ERROR(err));
 
-	if (val < ASHIFT_MIN || val > zfs_max_auto_ashift)
-		return (EINVAL);
+	if (val > ASHIFT_MAX || val < zfs_vdev_min_auto_ashift)
+		return (SET_ERROR(EINVAL));
 
-	zfs_min_auto_ashift = val;
+	zfs_vdev_max_auto_ashift = val;
 
 	return (0);
 }
-SYSCTL_PROC(_vfs_zfs, OID_AUTO, min_auto_ashift,
-    CTLTYPE_U64 | CTLFLAG_MPSAFE | CTLFLAG_RW, 0, sizeof (uint64_t),
-    sysctl_vfs_zfs_min_auto_ashift, "QU",
-    "Min ashift used when creating new top-level vdevs.");
-#endif
+
+SYSCTL_PROC(_vfs_zfs, OID_AUTO, min_auto_ashift, CTLTYPE_U64 | CTLFLAG_RWTUN,
+    &zfs_vdev_min_auto_ashift, sizeof (zfs_vdev_min_auto_ashift),
+    param_set_min_auto_ashift, "QU",
+    "Min ashift used when creating new top-level vdev. (LEGACY)");
+SYSCTL_PROC(_vfs_zfs, OID_AUTO, max_auto_ashift, CTLTYPE_U64 | CTLFLAG_RWTUN,
+    &zfs_vdev_max_auto_ashift, sizeof (zfs_vdev_max_auto_ashift),
+    param_set_max_auto_ashift, "QU",
+    "Max ashift used when optimizing for logical -> physical sector size on "
+    "new top-level vdevs. (LEGACY)");
 
 /*
  * Since the DTL space map of a vdev is not expected to have a lot of
@@ -643,35 +657,6 @@ SYSCTL_INT(_vfs_zfs_zio, OID_AUTO, use_uma, CTLFLAG_RDTUN, &zio_use_uma, 0,
 SYSCTL_INT(_vfs_zfs_zio, OID_AUTO, exclude_metadata, CTLFLAG_RDTUN, &zio_exclude_metadata, 0,
     "Exclude metadata buffers from dumps as well");
 
-
-int
-param_set_arc_long(SYSCTL_HANDLER_ARGS)
-{
-	int err;
-
-	err = sysctl_handle_long(oidp, arg1, 0, req);
-	if (err != 0 || req->newptr == NULL)
-		return (err);
-
-	arc_tuning_update(B_TRUE);
-
-	return (0);
-}
-
-int
-param_set_arc_int(SYSCTL_HANDLER_ARGS)
-{
-	int err;
-
-	err = sysctl_handle_int(oidp, arg1, 0, req);
-	if (err != 0 || req->newptr == NULL)
-		return (err);
-
-	arc_tuning_update(B_TRUE);
-
-	return (0);
-}
-
 int
 param_set_slop_shift(SYSCTL_HANDLER_ARGS)
 {
@@ -688,6 +673,21 @@ param_set_slop_shift(SYSCTL_HANDLER_ARGS)
 		return (EINVAL);
 
 	*(int *)arg1 = val;
+
+	return (0);
+}
+
+int
+param_set_multihost_interval(SYSCTL_HANDLER_ARGS)
+{
+	int err;
+
+	err = sysctl_handle_long(oidp, arg1, 0, req);
+	if (err != 0 || req->newptr == NULL)
+		return (err);
+
+	if (spa_mode_global != SPA_MODE_UNINIT)
+		mmp_signal_all_threads();
 
 	return (0);
 }

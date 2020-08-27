@@ -21,7 +21,7 @@
 
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2011, 2018 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2020 by Delphix. All rights reserved.
  * Copyright 2017 Nexenta Systems, Inc.
  * Copyright (c) 2014 Integros [integros.com]
  * Copyright 2016 Toomas Soome <tsoome@me.com>
@@ -39,6 +39,7 @@
 #include <sys/dmu_tx.h>
 #include <sys/dsl_dir.h>
 #include <sys/vdev_impl.h>
+#include <sys/vdev_rebuild.h>
 #include <sys/uberblock_impl.h>
 #include <sys/metaslab.h>
 #include <sys/metaslab_impl.h>
@@ -108,6 +109,9 @@ int zfs_vdev_standard_sm_blksz = (1 << 17);
  * write cache is enabled.
  */
 int zfs_nocacheflush = 0;
+
+uint64_t zfs_vdev_max_auto_ashift = ASHIFT_MAX;
+uint64_t zfs_vdev_min_auto_ashift = ASHIFT_MIN;
 
 /*PRINTFLIKE2*/
 void
@@ -551,10 +555,12 @@ vdev_alloc_common(spa_t *spa, uint_t id, uint64_t guid, vdev_ops_t *ops)
 	mutex_init(&vd->vdev_stat_lock, NULL, MUTEX_DEFAULT, NULL);
 	mutex_init(&vd->vdev_probe_lock, NULL, MUTEX_DEFAULT, NULL);
 	mutex_init(&vd->vdev_scan_io_queue_lock, NULL, MUTEX_DEFAULT, NULL);
+
 	mutex_init(&vd->vdev_initialize_lock, NULL, MUTEX_DEFAULT, NULL);
 	mutex_init(&vd->vdev_initialize_io_lock, NULL, MUTEX_DEFAULT, NULL);
 	cv_init(&vd->vdev_initialize_cv, NULL, CV_DEFAULT, NULL);
 	cv_init(&vd->vdev_initialize_io_cv, NULL, CV_DEFAULT, NULL);
+
 	mutex_init(&vd->vdev_trim_lock, NULL, MUTEX_DEFAULT, NULL);
 	mutex_init(&vd->vdev_autotrim_lock, NULL, MUTEX_DEFAULT, NULL);
 	mutex_init(&vd->vdev_trim_io_lock, NULL, MUTEX_DEFAULT, NULL);
@@ -562,10 +568,16 @@ vdev_alloc_common(spa_t *spa, uint_t id, uint64_t guid, vdev_ops_t *ops)
 	cv_init(&vd->vdev_autotrim_cv, NULL, CV_DEFAULT, NULL);
 	cv_init(&vd->vdev_trim_io_cv, NULL, CV_DEFAULT, NULL);
 
+	mutex_init(&vd->vdev_rebuild_lock, NULL, MUTEX_DEFAULT, NULL);
+	mutex_init(&vd->vdev_rebuild_io_lock, NULL, MUTEX_DEFAULT, NULL);
+	cv_init(&vd->vdev_rebuild_cv, NULL, CV_DEFAULT, NULL);
+	cv_init(&vd->vdev_rebuild_io_cv, NULL, CV_DEFAULT, NULL);
+
 	for (int t = 0; t < DTL_TYPES; t++) {
 		vd->vdev_dtl[t] = range_tree_create(NULL, RANGE_SEG64, NULL, 0,
 		    0);
 	}
+
 	txg_list_create(&vd->vdev_ms_list, spa,
 	    offsetof(struct metaslab, ms_txg_node));
 	txg_list_create(&vd->vdev_dtl_list, spa,
@@ -835,6 +847,9 @@ vdev_alloc(spa_t *spa, vdev_t **vdp, nvlist_t *nv, vdev_t *parent, uint_t id,
 		(void) nvlist_lookup_uint64(nv, ZPOOL_CONFIG_RESILVER_TXG,
 		    &vd->vdev_resilver_txg);
 
+		(void) nvlist_lookup_uint64(nv, ZPOOL_CONFIG_REBUILD_TXG,
+		    &vd->vdev_rebuild_txg);
+
 		if (nvlist_exists(nv, ZPOOL_CONFIG_RESILVER_DEFER))
 			vdev_defer_resilver(vd);
 
@@ -890,6 +905,7 @@ vdev_free(vdev_t *vd)
 	ASSERT3P(vd->vdev_initialize_thread, ==, NULL);
 	ASSERT3P(vd->vdev_trim_thread, ==, NULL);
 	ASSERT3P(vd->vdev_autotrim_thread, ==, NULL);
+	ASSERT3P(vd->vdev_rebuild_thread, ==, NULL);
 
 	/*
 	 * Scan queues are normally destroyed at the end of a scan. If the
@@ -998,16 +1014,23 @@ vdev_free(vdev_t *vd)
 	mutex_destroy(&vd->vdev_stat_lock);
 	mutex_destroy(&vd->vdev_probe_lock);
 	mutex_destroy(&vd->vdev_scan_io_queue_lock);
+
 	mutex_destroy(&vd->vdev_initialize_lock);
 	mutex_destroy(&vd->vdev_initialize_io_lock);
 	cv_destroy(&vd->vdev_initialize_io_cv);
 	cv_destroy(&vd->vdev_initialize_cv);
+
 	mutex_destroy(&vd->vdev_trim_lock);
 	mutex_destroy(&vd->vdev_autotrim_lock);
 	mutex_destroy(&vd->vdev_trim_io_lock);
 	cv_destroy(&vd->vdev_trim_cv);
 	cv_destroy(&vd->vdev_autotrim_cv);
 	cv_destroy(&vd->vdev_trim_io_cv);
+
+	mutex_destroy(&vd->vdev_rebuild_lock);
+	mutex_destroy(&vd->vdev_rebuild_io_lock);
+	cv_destroy(&vd->vdev_rebuild_cv);
+	cv_destroy(&vd->vdev_rebuild_io_cv);
 
 	zfs_ratelimit_fini(&vd->vdev_delay_rl);
 	zfs_ratelimit_fini(&vd->vdev_checksum_rl);
@@ -1078,7 +1101,10 @@ vdev_top_transfer(vdev_t *svd, vdev_t *tvd)
 	ASSERT3P(tvd->vdev_indirect_births, ==, NULL);
 	ASSERT3P(tvd->vdev_obsolete_sm, ==, NULL);
 	ASSERT0(tvd->vdev_removing);
+	ASSERT0(tvd->vdev_rebuilding);
 	tvd->vdev_removing = svd->vdev_removing;
+	tvd->vdev_rebuilding = svd->vdev_rebuilding;
+	tvd->vdev_rebuild_config = svd->vdev_rebuild_config;
 	tvd->vdev_indirect_config = svd->vdev_indirect_config;
 	tvd->vdev_indirect_mapping = svd->vdev_indirect_mapping;
 	tvd->vdev_indirect_births = svd->vdev_indirect_births;
@@ -1092,6 +1118,7 @@ vdev_top_transfer(vdev_t *svd, vdev_t *tvd)
 	svd->vdev_indirect_births = NULL;
 	svd->vdev_obsolete_sm = NULL;
 	svd->vdev_removing = 0;
+	svd->vdev_rebuilding = 0;
 
 	for (t = 0; t < TXG_SIZE; t++) {
 		while ((msp = txg_list_remove(&svd->vdev_ms_list, t)) != NULL)
@@ -1152,6 +1179,8 @@ vdev_add_parent(vdev_t *cvd, vdev_ops_t *ops)
 	mvd->vdev_max_asize = cvd->vdev_max_asize;
 	mvd->vdev_psize = cvd->vdev_psize;
 	mvd->vdev_ashift = cvd->vdev_ashift;
+	mvd->vdev_logical_ashift = cvd->vdev_logical_ashift;
+	mvd->vdev_physical_ashift = cvd->vdev_physical_ashift;
 	mvd->vdev_state = cvd->vdev_state;
 	mvd->vdev_crtxg = cvd->vdev_crtxg;
 
@@ -1183,7 +1212,8 @@ vdev_remove_parent(vdev_t *cvd)
 	    mvd->vdev_ops == &vdev_replacing_ops ||
 	    mvd->vdev_ops == &vdev_spare_ops);
 	cvd->vdev_ashift = mvd->vdev_ashift;
-
+	cvd->vdev_logical_ashift = mvd->vdev_logical_ashift;
+	cvd->vdev_physical_ashift = mvd->vdev_physical_ashift;
 	vdev_remove_child(mvd, cvd);
 	vdev_remove_child(pvd, mvd);
 
@@ -1554,7 +1584,7 @@ vdev_probe(vdev_t *vd, zio_t *zio)
 	for (int l = 1; l < VDEV_LABELS; l++) {
 		zio_nowait(zio_read_phys(pio, vd,
 		    vdev_label_offset(vd->vdev_psize, l,
-		    offsetof(vdev_label_t, vl_pad2)), VDEV_PAD_SIZE,
+		    offsetof(vdev_label_t, vl_be)), VDEV_PAD_SIZE,
 		    abd_alloc_for_io(VDEV_PAD_SIZE, B_TRUE),
 		    ZIO_CHECKSUM_OFF, vdev_probe_done, vps,
 		    ZIO_PRIORITY_SYNC_READ, vps->vps_flags, B_TRUE));
@@ -1653,7 +1683,8 @@ vdev_open(vdev_t *vd)
 	uint64_t osize = 0;
 	uint64_t max_osize = 0;
 	uint64_t asize, max_asize, psize;
-	uint64_t ashift = 0;
+	uint64_t logical_ashift = 0;
+	uint64_t physical_ashift = 0;
 
 	ASSERT(vd->vdev_open_thread == curthread ||
 	    spa_config_held(spa, SCL_STATE_ALL, RW_WRITER) == SCL_STATE_ALL);
@@ -1683,8 +1714,8 @@ vdev_open(vdev_t *vd)
 		return (SET_ERROR(ENXIO));
 	}
 
-	error = vd->vdev_ops->vdev_op_open(vd, &osize, &max_osize, &ashift);
-
+	error = vd->vdev_ops->vdev_op_open(vd, &osize, &max_osize,
+	    &logical_ashift, &physical_ashift);
 	/*
 	 * Physical volume size should never be larger than its max size, unless
 	 * the disk has shrunk while we were reading it or the device is buggy
@@ -1799,6 +1830,17 @@ vdev_open(vdev_t *vd)
 		return (SET_ERROR(EINVAL));
 	}
 
+	vd->vdev_physical_ashift =
+	    MAX(physical_ashift, vd->vdev_physical_ashift);
+	vd->vdev_logical_ashift = MAX(logical_ashift, vd->vdev_logical_ashift);
+	vd->vdev_ashift = MAX(vd->vdev_logical_ashift, vd->vdev_ashift);
+
+	if (vd->vdev_logical_ashift > ASHIFT_MAX) {
+		vdev_set_state(vd, B_TRUE, VDEV_STATE_CANT_OPEN,
+		    VDEV_AUX_ASHIFT_TOO_BIG);
+		return (SET_ERROR(EDOM));
+	}
+
 	if (vd->vdev_asize == 0) {
 		/*
 		 * This is the first-ever open, so use the computed values.
@@ -1806,9 +1848,6 @@ vdev_open(vdev_t *vd)
 		 */
 		vd->vdev_asize = asize;
 		vd->vdev_max_asize = max_asize;
-		if (vd->vdev_ashift == 0) {
-			vd->vdev_ashift = ashift; /* use detected value */
-		}
 		if (vd->vdev_ashift != 0 && (vd->vdev_ashift < ASHIFT_MIN ||
 		    vd->vdev_ashift > ASHIFT_MAX)) {
 			vdev_set_state(vd, B_TRUE, VDEV_STATE_CANT_OPEN,
@@ -1817,16 +1856,17 @@ vdev_open(vdev_t *vd)
 		}
 	} else {
 		/*
-		 * Detect if the alignment requirement has increased.
-		 * We don't want to make the pool unavailable, just
-		 * post an event instead.
+		 * Make sure the alignment required hasn't increased.
 		 */
-		if (ashift > vd->vdev_top->vdev_ashift &&
+		if (vd->vdev_ashift > vd->vdev_top->vdev_ashift &&
 		    vd->vdev_ops->vdev_op_leaf) {
 			zfs_ereport_post(FM_EREPORT_ZFS_DEVICE_BAD_ASHIFT,
 			    spa, vd, NULL, NULL, 0, 0);
-		}
+			vdev_set_state(vd, B_TRUE, VDEV_STATE_CANT_OPEN,
+			    VDEV_AUX_BAD_LABEL);
+			return (SET_ERROR(EDOM));
 
+		}
 		vd->vdev_max_asize = max_asize;
 	}
 
@@ -2281,9 +2321,6 @@ vdev_reopen(vdev_t *vd)
 		if (vdev_readable(vd) && vdev_writeable(vd) &&
 		    vd->vdev_aux == &spa->spa_l2cache) {
 			/*
-			 * When reopening we can assume the device label has
-			 * already the attribute l2cache_persistent, since we've
-			 * opened the device in the past and updated the label.
 			 * In case the vdev is present we should evict all ARC
 			 * buffers and pointers to log blocks and reclaim their
 			 * space before restoring its contents to L2ARC.
@@ -2294,6 +2331,7 @@ vdev_reopen(vdev_t *vd)
 				l2arc_add_vdev(spa, vd);
 			}
 			spa_async_request(spa, SPA_ASYNC_L2CACHE_REBUILD);
+			spa_async_request(spa, SPA_ASYNC_L2CACHE_TRIM);
 		}
 	} else {
 		(void) vdev_validate(vd);
@@ -2404,6 +2442,35 @@ vdev_metaslab_set_size(vdev_t *vd)
 
 	vd->vdev_ms_shift = ms_shift;
 	ASSERT3U(vd->vdev_ms_shift, >=, SPA_MAXBLOCKSHIFT);
+}
+
+/*
+ * Maximize performance by inflating the configured ashift for top level
+ * vdevs to be as close to the physical ashift as possible while maintaining
+ * administrator defined limits and ensuring it doesn't go below the
+ * logical ashift.
+ */
+void
+vdev_ashift_optimize(vdev_t *vd)
+{
+	if (vd == vd->vdev_top) {
+		if (vd->vdev_ashift < vd->vdev_physical_ashift) {
+			vd->vdev_ashift = MIN(
+			    MAX(zfs_vdev_max_auto_ashift, vd->vdev_ashift),
+			    MAX(zfs_vdev_min_auto_ashift,
+			    vd->vdev_physical_ashift));
+		} else {
+			/*
+			 * Unusual case where logical ashift > physical ashift
+			 * so we can't cap the calculated ashift based on max
+			 * ashift as that would cause failures.
+			 * We still check if we need to increase it to match
+			 * the min ashift.
+			 */
+			vd->vdev_ashift = MAX(zfs_vdev_min_auto_ashift,
+			    vd->vdev_ashift);
+		}
+	}
 }
 
 void
@@ -2578,12 +2645,8 @@ vdev_dtl_max(vdev_t *vd)
  * excise the DTLs.
  */
 static boolean_t
-vdev_dtl_should_excise(vdev_t *vd)
+vdev_dtl_should_excise(vdev_t *vd, boolean_t rebuild_done)
 {
-	spa_t *spa = vd->vdev_spa;
-	dsl_scan_t *scn = spa->spa_dsl_pool->dp_scan;
-
-	ASSERT0(scn->scn_phys.scn_errors);
 	ASSERT0(vd->vdev_children);
 
 	if (vd->vdev_state < VDEV_STATE_DEGRADED)
@@ -2592,23 +2655,52 @@ vdev_dtl_should_excise(vdev_t *vd)
 	if (vd->vdev_resilver_deferred)
 		return (B_FALSE);
 
-	if (vd->vdev_resilver_txg == 0 ||
-	    range_tree_is_empty(vd->vdev_dtl[DTL_MISSING]))
+	if (range_tree_is_empty(vd->vdev_dtl[DTL_MISSING]))
 		return (B_TRUE);
 
-	/*
-	 * When a resilver is initiated the scan will assign the scn_max_txg
-	 * value to the highest txg value that exists in all DTLs. If this
-	 * device's max DTL is not part of this scan (i.e. it is not in
-	 * the range (scn_min_txg, scn_max_txg] then it is not eligible
-	 * for excision.
-	 */
-	if (vdev_dtl_max(vd) <= scn->scn_phys.scn_max_txg) {
-		ASSERT3U(scn->scn_phys.scn_min_txg, <=, vdev_dtl_min(vd));
-		ASSERT3U(scn->scn_phys.scn_min_txg, <, vd->vdev_resilver_txg);
-		ASSERT3U(vd->vdev_resilver_txg, <=, scn->scn_phys.scn_max_txg);
-		return (B_TRUE);
+	if (rebuild_done) {
+		vdev_rebuild_t *vr = &vd->vdev_top->vdev_rebuild_config;
+		vdev_rebuild_phys_t *vrp = &vr->vr_rebuild_phys;
+
+		/* Rebuild not initiated by attach */
+		if (vd->vdev_rebuild_txg == 0)
+			return (B_TRUE);
+
+		/*
+		 * When a rebuild completes without error then all missing data
+		 * up to the rebuild max txg has been reconstructed and the DTL
+		 * is eligible for excision.
+		 */
+		if (vrp->vrp_rebuild_state == VDEV_REBUILD_COMPLETE &&
+		    vdev_dtl_max(vd) <= vrp->vrp_max_txg) {
+			ASSERT3U(vrp->vrp_min_txg, <=, vdev_dtl_min(vd));
+			ASSERT3U(vrp->vrp_min_txg, <, vd->vdev_rebuild_txg);
+			ASSERT3U(vd->vdev_rebuild_txg, <=, vrp->vrp_max_txg);
+			return (B_TRUE);
+		}
+	} else {
+		dsl_scan_t *scn = vd->vdev_spa->spa_dsl_pool->dp_scan;
+		dsl_scan_phys_t *scnp __maybe_unused = &scn->scn_phys;
+
+		/* Resilver not initiated by attach */
+		if (vd->vdev_resilver_txg == 0)
+			return (B_TRUE);
+
+		/*
+		 * When a resilver is initiated the scan will assign the
+		 * scn_max_txg value to the highest txg value that exists
+		 * in all DTLs. If this device's max DTL is not part of this
+		 * scan (i.e. it is not in the range (scn_min_txg, scn_max_txg]
+		 * then it is not eligible for excision.
+		 */
+		if (vdev_dtl_max(vd) <= scn->scn_phys.scn_max_txg) {
+			ASSERT3U(scnp->scn_min_txg, <=, vdev_dtl_min(vd));
+			ASSERT3U(scnp->scn_min_txg, <, vd->vdev_resilver_txg);
+			ASSERT3U(vd->vdev_resilver_txg, <=, scnp->scn_max_txg);
+			return (B_TRUE);
+		}
 	}
+
 	return (B_FALSE);
 }
 
@@ -2617,7 +2709,8 @@ vdev_dtl_should_excise(vdev_t *vd)
  * write operations will be issued to the pool.
  */
 void
-vdev_dtl_reassess(vdev_t *vd, uint64_t txg, uint64_t scrub_txg, int scrub_done)
+vdev_dtl_reassess(vdev_t *vd, uint64_t txg, uint64_t scrub_txg,
+    boolean_t scrub_done, boolean_t rebuild_done)
 {
 	spa_t *spa = vd->vdev_spa;
 	avl_tree_t reftree;
@@ -2627,38 +2720,65 @@ vdev_dtl_reassess(vdev_t *vd, uint64_t txg, uint64_t scrub_txg, int scrub_done)
 
 	for (int c = 0; c < vd->vdev_children; c++)
 		vdev_dtl_reassess(vd->vdev_child[c], txg,
-		    scrub_txg, scrub_done);
+		    scrub_txg, scrub_done, rebuild_done);
 
 	if (vd == spa->spa_root_vdev || !vdev_is_concrete(vd) || vd->vdev_aux)
 		return;
 
 	if (vd->vdev_ops->vdev_op_leaf) {
 		dsl_scan_t *scn = spa->spa_dsl_pool->dp_scan;
+		vdev_rebuild_t *vr = &vd->vdev_top->vdev_rebuild_config;
+		boolean_t check_excise = B_FALSE;
+		boolean_t wasempty = B_TRUE;
 
 		mutex_enter(&vd->vdev_dtl_lock);
 
 		/*
-		 * If requested, pretend the scan completed cleanly.
+		 * If requested, pretend the scan or rebuild completed cleanly.
 		 */
-		if (zfs_scan_ignore_errors && scn)
-			scn->scn_phys.scn_errors = 0;
+		if (zfs_scan_ignore_errors) {
+			if (scn != NULL)
+				scn->scn_phys.scn_errors = 0;
+			if (vr != NULL)
+				vr->vr_rebuild_phys.vrp_errors = 0;
+		}
+
+		if (scrub_txg != 0 &&
+		    !range_tree_is_empty(vd->vdev_dtl[DTL_MISSING])) {
+			wasempty = B_FALSE;
+			zfs_dbgmsg("guid:%llu txg:%llu scrub:%llu started:%d "
+			    "dtl:%llu/%llu errors:%llu",
+			    (u_longlong_t)vd->vdev_guid, (u_longlong_t)txg,
+			    (u_longlong_t)scrub_txg, spa->spa_scrub_started,
+			    (u_longlong_t)vdev_dtl_min(vd),
+			    (u_longlong_t)vdev_dtl_max(vd),
+			    (u_longlong_t)(scn ? scn->scn_phys.scn_errors : 0));
+		}
 
 		/*
-		 * If we've completed a scan cleanly then determine
-		 * if this vdev should remove any DTLs. We only want to
-		 * excise regions on vdevs that were available during
-		 * the entire duration of this scan.
+		 * If we've completed a scrub/resilver or a rebuild cleanly
+		 * then determine if this vdev should remove any DTLs. We
+		 * only want to excise regions on vdevs that were available
+		 * during the entire duration of this scan.
 		 */
-		if (scrub_txg != 0 &&
-		    (spa->spa_scrub_started ||
-		    (scn != NULL && scn->scn_phys.scn_errors == 0)) &&
-		    vdev_dtl_should_excise(vd)) {
+		if (rebuild_done &&
+		    vr != NULL && vr->vr_rebuild_phys.vrp_errors == 0) {
+			check_excise = B_TRUE;
+		} else {
+			if (spa->spa_scrub_started ||
+			    (scn != NULL && scn->scn_phys.scn_errors == 0)) {
+				check_excise = B_TRUE;
+			}
+		}
+
+		if (scrub_txg && check_excise &&
+		    vdev_dtl_should_excise(vd, rebuild_done)) {
 			/*
-			 * We completed a scrub up to scrub_txg.  If we
-			 * did it without rebooting, then the scrub dtl
-			 * will be valid, so excise the old region and
-			 * fold in the scrub dtl.  Otherwise, leave the
-			 * dtl as-is if there was an error.
+			 * We completed a scrub, resilver or rebuild up to
+			 * scrub_txg.  If we did it without rebooting, then
+			 * the scrub dtl will be valid, so excise the old
+			 * region and fold in the scrub dtl.  Otherwise,
+			 * leave the dtl as-is if there was an error.
 			 *
 			 * There's little trick here: to excise the beginning
 			 * of the DTL_MISSING map, we put it into a reference
@@ -2679,6 +2799,14 @@ vdev_dtl_reassess(vdev_t *vd, uint64_t txg, uint64_t scrub_txg, int scrub_done)
 			space_reftree_generate_map(&reftree,
 			    vd->vdev_dtl[DTL_MISSING], 1);
 			space_reftree_destroy(&reftree);
+
+			if (!range_tree_is_empty(vd->vdev_dtl[DTL_MISSING])) {
+				zfs_dbgmsg("update DTL_MISSING:%llu/%llu",
+				    (u_longlong_t)vdev_dtl_min(vd),
+				    (u_longlong_t)vdev_dtl_max(vd));
+			} else if (!wasempty) {
+				zfs_dbgmsg("DTL_MISSING is now empty");
+			}
 		}
 		range_tree_vacate(vd->vdev_dtl[DTL_PARTIAL], NULL, NULL);
 		range_tree_walk(vd->vdev_dtl[DTL_MISSING],
@@ -2693,15 +2821,20 @@ vdev_dtl_reassess(vdev_t *vd, uint64_t txg, uint64_t scrub_txg, int scrub_done)
 			    range_tree_add, vd->vdev_dtl[DTL_OUTAGE]);
 
 		/*
-		 * If the vdev was resilvering and no longer has any
-		 * DTLs then reset its resilvering flag and dirty
+		 * If the vdev was resilvering or rebuilding and no longer
+		 * has any DTLs then reset the appropriate flag and dirty
 		 * the top level so that we persist the change.
 		 */
-		if (txg != 0 && vd->vdev_resilver_txg != 0 &&
+		if (txg != 0 &&
 		    range_tree_is_empty(vd->vdev_dtl[DTL_MISSING]) &&
 		    range_tree_is_empty(vd->vdev_dtl[DTL_OUTAGE])) {
-			vd->vdev_resilver_txg = 0;
-			vdev_config_dirty(vd->vdev_top);
+			if (vd->vdev_rebuild_txg != 0) {
+				vd->vdev_rebuild_txg = 0;
+				vdev_config_dirty(vd->vdev_top);
+			} else if (vd->vdev_resilver_txg != 0) {
+				vd->vdev_resilver_txg = 0;
+				vdev_config_dirty(vd->vdev_top);
+			}
 		}
 
 		mutex_exit(&vd->vdev_dtl_lock);
@@ -2839,7 +2972,7 @@ vdev_construct_zaps(vdev_t *vd, dmu_tx_t *tx)
 	}
 }
 
-void
+static void
 vdev_dtl_sync(vdev_t *vd, uint64_t txg)
 {
 	spa_t *spa = vd->vdev_spa;
@@ -2937,10 +3070,10 @@ vdev_dtl_required(vdev_t *vd)
 	 * If not, we can safely offline/detach/remove the device.
 	 */
 	vd->vdev_cant_read = B_TRUE;
-	vdev_dtl_reassess(tvd, 0, 0, B_FALSE);
+	vdev_dtl_reassess(tvd, 0, 0, B_FALSE, B_FALSE);
 	required = !vdev_dtl_empty(tvd, DTL_OUTAGE);
 	vd->vdev_cant_read = cant_read;
-	vdev_dtl_reassess(tvd, 0, 0, B_FALSE);
+	vdev_dtl_reassess(tvd, 0, 0, B_FALSE, B_FALSE);
 
 	if (!required && zio_injection_enabled) {
 		required = !!zio_handle_device_injection(vd, NULL,
@@ -3039,11 +3172,32 @@ vdev_load(vdev_t *vd)
 		spa_t *spa = vd->vdev_spa;
 		char bias_str[64];
 
-		if (zap_lookup(spa->spa_meta_objset, vd->vdev_top_zap,
+		error = zap_lookup(spa->spa_meta_objset, vd->vdev_top_zap,
 		    VDEV_TOP_ZAP_ALLOCATION_BIAS, 1, sizeof (bias_str),
-		    bias_str) == 0) {
+		    bias_str);
+		if (error == 0) {
 			ASSERT(vd->vdev_alloc_bias == VDEV_BIAS_NONE);
 			vd->vdev_alloc_bias = vdev_derive_alloc_bias(bias_str);
+		} else if (error != ENOENT) {
+			vdev_set_state(vd, B_FALSE, VDEV_STATE_CANT_OPEN,
+			    VDEV_AUX_CORRUPT_DATA);
+			vdev_dbgmsg(vd, "vdev_load: zap_lookup(top_zap=%llu) "
+			    "failed [error=%d]", vd->vdev_top_zap, error);
+			return (error);
+		}
+	}
+
+	/*
+	 * Load any rebuild state from the top-level vdev zap.
+	 */
+	if (vd == vd->vdev_top && vd->vdev_top_zap != 0) {
+		error = vdev_rebuild_load(vd);
+		if (error && error != ENOTSUP) {
+			vdev_set_state(vd, B_FALSE, VDEV_STATE_CANT_OPEN,
+			    VDEV_AUX_CORRUPT_DATA);
+			vdev_dbgmsg(vd, "vdev_load: vdev_rebuild_load "
+			    "failed [error=%d]", error);
+			return (error);
 		}
 	}
 
@@ -3199,6 +3353,7 @@ vdev_destroy_ms_flush_data(vdev_t *vd, dmu_tx_t *tx)
 	    VDEV_TOP_ZAP_MS_UNFLUSHED_PHYS_TXGS, sizeof (uint64_t), 1, &object);
 	if (err == ENOENT)
 		return;
+	VERIFY0(err);
 
 	VERIFY0(dmu_object_free(mos, object, tx));
 	VERIFY0(zap_remove(mos, vd->vdev_top_zap,
@@ -3522,9 +3677,14 @@ vdev_online(spa_t *spa, uint64_t guid, uint64_t flags, vdev_state_t *newstate)
 	}
 	mutex_exit(&vd->vdev_initialize_lock);
 
-	/* Restart trimming if necessary */
+	/*
+	 * Restart trimming if necessary. We do not restart trimming for cache
+	 * devices here. This is triggered by l2arc_rebuild_vdev()
+	 * asynchronously for the whole device or in l2arc_evict() as it evicts
+	 * space for upcoming writes.
+	 */
 	mutex_enter(&vd->vdev_trim_lock);
-	if (vdev_writeable(vd) &&
+	if (vdev_writeable(vd) && !vd->vdev_isl2cache &&
 	    vd->vdev_trim_thread == NULL &&
 	    vd->vdev_trim_state == VDEV_TRIM_ACTIVE) {
 		(void) vdev_trim(vd, vd->vdev_trim_rate, vd->vdev_trim_partial,
@@ -3924,6 +4084,7 @@ vdev_get_stats_ex(vdev_t *vd, vdev_stat_t *vs, vdev_stat_ex_t *vsx)
 		vs->vs_timestamp = gethrtime() - vs->vs_timestamp;
 		vs->vs_state = vd->vdev_state;
 		vs->vs_rsize = vdev_get_min_asize(vd);
+
 		if (vd->vdev_ops->vdev_op_leaf) {
 			vs->vs_rsize += VDEV_LABEL_START_SIZE +
 			    VDEV_LABEL_END_SIZE;
@@ -3950,7 +4111,11 @@ vdev_get_stats_ex(vdev_t *vd, vdev_stat_t *vs, vdev_stat_ex_t *vsx)
 			vs->vs_trim_bytes_est = vd->vdev_trim_bytes_est;
 			vs->vs_trim_state = vd->vdev_trim_state;
 			vs->vs_trim_action_time = vd->vdev_trim_action_time;
+
+			/* Set when there is a deferred resilver. */
+			vs->vs_resilver_deferred = vd->vdev_resilver_deferred;
 		}
+
 		/*
 		 * Report expandable space on top-level, non-auxiliary devices
 		 * only. The expandable space is reported in terms of metaslab
@@ -3962,13 +4127,21 @@ vdev_get_stats_ex(vdev_t *vd, vdev_stat_t *vs, vdev_stat_ex_t *vsx)
 			    vd->vdev_max_asize - vd->vdev_asize,
 			    1ULL << tvd->vdev_ms_shift);
 		}
+
+		vs->vs_configured_ashift = vd->vdev_top != NULL
+		    ? vd->vdev_top->vdev_ashift : vd->vdev_ashift;
+		vs->vs_logical_ashift = vd->vdev_logical_ashift;
+		vs->vs_physical_ashift = vd->vdev_physical_ashift;
+
+		/*
+		 * Report fragmentation and rebuild progress for top-level,
+		 * non-auxiliary, concrete devices.
+		 */
 		if (vd->vdev_aux == NULL && vd == vd->vdev_top &&
 		    vdev_is_concrete(vd)) {
 			vs->vs_fragmentation = (vd->vdev_mg != NULL) ?
 			    vd->vdev_mg->mg_fragmentation : 0;
 		}
-		if (vd->vdev_ops->vdev_op_leaf)
-			vs->vs_resilver_deferred = vd->vdev_resilver_deferred;
 	}
 
 	vdev_get_stats_ex_impl(vd, vs, vsx);
@@ -4049,15 +4222,33 @@ vdev_stat_update(zio_t *zio, uint64_t psize)
 		mutex_enter(&vd->vdev_stat_lock);
 
 		if (flags & ZIO_FLAG_IO_REPAIR) {
+			/*
+			 * Repair is the result of a resilver issued by the
+			 * scan thread (spa_sync).
+			 */
 			if (flags & ZIO_FLAG_SCAN_THREAD) {
-				dsl_scan_phys_t *scn_phys =
-				    &spa->spa_dsl_pool->dp_scan->scn_phys;
+				dsl_scan_t *scn = spa->spa_dsl_pool->dp_scan;
+				dsl_scan_phys_t *scn_phys = &scn->scn_phys;
 				uint64_t *processed = &scn_phys->scn_processed;
 
-				/* XXX cleanup? */
 				if (vd->vdev_ops->vdev_op_leaf)
 					atomic_add_64(processed, psize);
 				vs->vs_scan_processed += psize;
+			}
+
+			/*
+			 * Repair is the result of a rebuild issued by the
+			 * rebuild thread (vdev_rebuild_thread).
+			 */
+			if (zio->io_priority == ZIO_PRIORITY_REBUILD) {
+				vdev_t *tvd = vd->vdev_top;
+				vdev_rebuild_t *vr = &tvd->vdev_rebuild_config;
+				vdev_rebuild_phys_t *vrp = &vr->vr_rebuild_phys;
+				uint64_t *rebuilt = &vrp->vrp_bytes_rebuilt;
+
+				if (vd->vdev_ops->vdev_op_leaf)
+					atomic_add_64(rebuilt, psize);
+				vs->vs_rebuild_processed += psize;
 			}
 
 			if (flags & ZIO_FLAG_SELF_HEAL)
@@ -4071,6 +4262,7 @@ vdev_stat_update(zio_t *zio, uint64_t psize)
 		if (vd->vdev_ops->vdev_op_leaf &&
 		    (zio->io_priority < ZIO_PRIORITY_NUM_QUEUEABLE)) {
 			zio_type_t vs_type = type;
+			zio_priority_t priority = zio->io_priority;
 
 			/*
 			 * TRIM ops and bytes are reported to user space as
@@ -4080,19 +4272,44 @@ vdev_stat_update(zio_t *zio, uint64_t psize)
 			if (type == ZIO_TYPE_TRIM)
 				vs_type = ZIO_TYPE_IOCTL;
 
+			/*
+			 * Solely for the purposes of 'zpool iostat -lqrw'
+			 * reporting use the priority to catagorize the IO.
+			 * Only the following are reported to user space:
+			 *
+			 *   ZIO_PRIORITY_SYNC_READ,
+			 *   ZIO_PRIORITY_SYNC_WRITE,
+			 *   ZIO_PRIORITY_ASYNC_READ,
+			 *   ZIO_PRIORITY_ASYNC_WRITE,
+			 *   ZIO_PRIORITY_SCRUB,
+			 *   ZIO_PRIORITY_TRIM.
+			 */
+			if (priority == ZIO_PRIORITY_REBUILD) {
+				priority = ((type == ZIO_TYPE_WRITE) ?
+				    ZIO_PRIORITY_ASYNC_WRITE :
+				    ZIO_PRIORITY_SCRUB);
+			} else if (priority == ZIO_PRIORITY_INITIALIZING) {
+				ASSERT3U(type, ==, ZIO_TYPE_WRITE);
+				priority = ZIO_PRIORITY_ASYNC_WRITE;
+			} else if (priority == ZIO_PRIORITY_REMOVAL) {
+				priority = ((type == ZIO_TYPE_WRITE) ?
+				    ZIO_PRIORITY_ASYNC_WRITE :
+				    ZIO_PRIORITY_ASYNC_READ);
+			}
+
 			vs->vs_ops[vs_type]++;
 			vs->vs_bytes[vs_type] += psize;
 
 			if (flags & ZIO_FLAG_DELEGATED) {
-				vsx->vsx_agg_histo[zio->io_priority]
+				vsx->vsx_agg_histo[priority]
 				    [RQ_HISTO(zio->io_size)]++;
 			} else {
-				vsx->vsx_ind_histo[zio->io_priority]
+				vsx->vsx_ind_histo[priority]
 				    [RQ_HISTO(zio->io_size)]++;
 			}
 
 			if (zio->io_delta && zio->io_delay) {
-				vsx->vsx_queue_histo[zio->io_priority]
+				vsx->vsx_queue_histo[priority]
 				    [L_HISTO(zio->io_delta - zio->io_delay)]++;
 				vsx->vsx_disk_histo[type]
 				    [L_HISTO(zio->io_delay)]++;
@@ -4861,4 +5078,13 @@ ZFS_MODULE_PARAM(zfs_vdev, vdev_, validate_skip, INT, ZMOD_RW,
 
 ZFS_MODULE_PARAM(zfs, zfs_, nocacheflush, INT, ZMOD_RW,
 	"Disable cache flushes");
+
+ZFS_MODULE_PARAM_CALL(zfs_vdev, zfs_vdev_, min_auto_ashift,
+	param_set_min_auto_ashift, param_get_ulong, ZMOD_RW,
+	"Minimum ashift used when creating new top-level vdevs");
+
+ZFS_MODULE_PARAM_CALL(zfs_vdev, zfs_vdev_, max_auto_ashift,
+	param_set_max_auto_ashift, param_get_ulong, ZMOD_RW,
+	"Maximum ashift used when optimizing for logical -> physical sector "
+	"size on new top-level vdevs");
 /* END CSTYLED */

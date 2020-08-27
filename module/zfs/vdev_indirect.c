@@ -27,7 +27,6 @@
 #include <sys/zio.h>
 #include <sys/zio_checksum.h>
 #include <sys/metaslab.h>
-#include <sys/refcount.h>
 #include <sys/dmu.h>
 #include <sys/vdev_indirect_mapping.h>
 #include <sys/dmu_tx.h>
@@ -884,7 +883,8 @@ void
 spa_start_indirect_condensing_thread(spa_t *spa)
 {
 	ASSERT3P(spa->spa_condense_zthr, ==, NULL);
-	spa->spa_condense_zthr = zthr_create(spa_condense_indirect_thread_check,
+	spa->spa_condense_zthr = zthr_create("z_indirect_condense",
+	    spa_condense_indirect_thread_check,
 	    spa_condense_indirect_thread, spa);
 }
 
@@ -950,11 +950,12 @@ vdev_indirect_close(vdev_t *vd)
 /* ARGSUSED */
 static int
 vdev_indirect_open(vdev_t *vd, uint64_t *psize, uint64_t *max_psize,
-    uint64_t *ashift)
+    uint64_t *logical_ashift, uint64_t *physical_ashift)
 {
 	*psize = *max_psize = vd->vdev_asize +
 	    VDEV_LABEL_START_SIZE + VDEV_LABEL_END_SIZE;
-	*ashift = vd->vdev_ashift;
+	*logical_ashift = vd->vdev_ashift;
+	*physical_ashift = vd->vdev_physical_ashift;
 	return (0);
 }
 
@@ -966,7 +967,7 @@ typedef struct remap_segment {
 	list_node_t rs_node;
 } remap_segment_t;
 
-remap_segment_t *
+static remap_segment_t *
 rs_alloc(vdev_t *vd, uint64_t offset, uint64_t asize, uint64_t split_offset)
 {
 	remap_segment_t *rs = kmem_alloc(sizeof (remap_segment_t), KM_SLEEP);
@@ -990,7 +991,7 @@ rs_alloc(vdev_t *vd, uint64_t offset, uint64_t asize, uint64_t split_offset)
  * Finally, since we are doing an allocation, it is up to the caller to
  * free the array allocated in this function.
  */
-vdev_indirect_mapping_entry_phys_t *
+static vdev_indirect_mapping_entry_phys_t *
 vdev_indirect_mapping_duplicate_adjacent_entries(vdev_t *vd, uint64_t offset,
     uint64_t asize, uint64_t *copied_entries)
 {
@@ -1638,7 +1639,7 @@ vdev_indirect_splits_damage(indirect_vsd_t *iv, zio_t *zio)
 			if (ic->ic_data == NULL)
 				continue;
 
-			abd_zero(ic->ic_data, ic->ic_data->abd_size);
+			abd_zero(ic->ic_data, abd_get_size(ic->ic_data));
 		}
 
 		iv->iv_attempts_max *= 2;
@@ -1858,7 +1859,6 @@ vdev_ops_t vdev_indirect_ops = {
 	.vdev_op_leaf = B_FALSE			/* leaf vdev */
 };
 
-EXPORT_SYMBOL(rs_alloc);
 EXPORT_SYMBOL(spa_condense_fini);
 EXPORT_SYMBOL(spa_start_indirect_condensing_thread);
 EXPORT_SYMBOL(spa_condense_indirect_start_sync);

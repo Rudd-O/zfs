@@ -21,7 +21,7 @@
 
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2011, 2018 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2020 by Delphix. All rights reserved.
  * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2013, 2017 Joyent, Inc. All rights reserved.
  * Copyright (c) 2014 Integros [integros.com]
@@ -704,6 +704,7 @@ typedef struct zpool_load_policy {
 #define	ZPOOL_CONFIG_SPLIT_LIST		"guid_list"
 #define	ZPOOL_CONFIG_REMOVING		"removing"
 #define	ZPOOL_CONFIG_RESILVER_TXG	"resilver_txg"
+#define	ZPOOL_CONFIG_REBUILD_TXG	"rebuild_txg"
 #define	ZPOOL_CONFIG_COMMENT		"comment"
 #define	ZPOOL_CONFIG_SUSPENDED		"suspended"	/* not stored on disk */
 #define	ZPOOL_CONFIG_SUSPENDED_REASON	"suspended_reason"	/* not stored */
@@ -730,6 +731,7 @@ typedef struct zpool_load_policy {
 #define	ZPOOL_CONFIG_MMP_HOSTID		"mmp_hostid"	/* not stored on disk */
 #define	ZPOOL_CONFIG_ALLOCATION_BIAS	"alloc_bias"	/* not stored on disk */
 #define	ZPOOL_CONFIG_EXPANSION_TIME	"expansion_time"	/* not stored */
+#define	ZPOOL_CONFIG_REBUILD_STATS	"org.openzfs:rebuild_stats"
 
 /*
  * The persistent vdev state is stored as separate values rather than a single
@@ -778,6 +780,9 @@ typedef struct zpool_load_policy {
 #define	VDEV_TOP_ZAP_MS_UNFLUSHED_PHYS_TXGS \
 	"com.delphix:ms_unflushed_phys_txgs"
 
+#define	VDEV_TOP_ZAP_VDEV_REBUILD_PHYS \
+	"org.openzfs:vdev_rebuild"
+
 #define	VDEV_TOP_ZAP_ALLOCATION_BIAS \
 	"org.zfsonlinux:allocation_bias"
 
@@ -824,8 +829,8 @@ typedef struct zpool_load_policy {
  * The location of the pool configuration repository, shared between kernel and
  * userland.
  */
+#define	ZPOOL_CACHE_BOOT	"/boot/zfs/zpool.cache"
 #define	ZPOOL_CACHE		"/etc/zfs/zpool.cache"
-
 /*
  * vdev states are ordered from least to most healthy.
  * A vdev that's CANT_OPEN or below is considered unusable.
@@ -868,6 +873,7 @@ typedef enum vdev_aux {
 	VDEV_AUX_EXTERNAL_PERSIST,	/* persistent forced fault	*/
 	VDEV_AUX_ACTIVE,	/* vdev active on a different host	*/
 	VDEV_AUX_CHILDREN_OFFLINE, /* all children are offline		*/
+	VDEV_AUX_ASHIFT_TOO_BIG, /* vdev's min block size is too large   */
 } vdev_aux_t;
 
 /*
@@ -991,6 +997,21 @@ typedef enum dsl_scan_state {
 	DSS_NUM_STATES
 } dsl_scan_state_t;
 
+typedef struct vdev_rebuild_stat {
+	uint64_t vrs_state;		/* vdev_rebuild_state_t */
+	uint64_t vrs_start_time;	/* time_t */
+	uint64_t vrs_end_time;		/* time_t */
+	uint64_t vrs_scan_time_ms;	/* total run time (millisecs) */
+	uint64_t vrs_bytes_scanned;	/* allocated bytes scanned */
+	uint64_t vrs_bytes_issued;	/* read bytes issued */
+	uint64_t vrs_bytes_rebuilt;	/* rebuilt bytes */
+	uint64_t vrs_bytes_est;		/* total bytes to scan */
+	uint64_t vrs_errors;		/* scanning errors */
+	uint64_t vrs_pass_time_ms;	/* pass run time (millisecs) */
+	uint64_t vrs_pass_bytes_scanned; /* bytes scanned since start/resume */
+	uint64_t vrs_pass_bytes_issued;	/* bytes rebuilt since start/resume */
+} vdev_rebuild_stat_t;
+
 /*
  * Errata described by https://zfsonlinux.org/msg/ZFS-8000-ER.  The ordering
  * of this enum must be maintained to ensure the errata identifiers map to
@@ -1047,7 +1068,17 @@ typedef struct vdev_stat {
 	uint64_t	vs_trim_bytes_est;	/* total bytes to trim */
 	uint64_t	vs_trim_state;		/* vdev_trim_state_t */
 	uint64_t	vs_trim_action_time;	/* time_t */
+	uint64_t	vs_rebuild_processed;	/* bytes rebuilt */
+	uint64_t	vs_configured_ashift;   /* TLV vdev_ashift */
+	uint64_t	vs_logical_ashift;	/* vdev_logical_ashift  */
+	uint64_t	vs_physical_ashift;	/* vdev_physical_ashift */
 } vdev_stat_t;
+
+/* BEGIN CSTYLED */
+#define	VDEV_STAT_VALID(field, uint64_t_field_count) \
+    ((uint64_t_field_count * sizeof (uint64_t)) >=	 \
+     (offsetof(vdev_stat_t, field) + sizeof (((vdev_stat_t *)NULL)->field)))
+/* END CSTYLED */
 
 /*
  * Extended stats
@@ -1149,12 +1180,11 @@ typedef struct ddt_histogram {
 #define	ZVOL_DRIVER	"zvol"
 #define	ZFS_DRIVER	"zfs"
 #define	ZFS_DEV		"/dev/zfs"
-#define	ZFS_SHARETAB	"/etc/dfs/sharetab"
 
 #define	ZFS_SUPER_MAGIC	0x2fc12fc1
 
 /* general zvol path */
-#define	ZVOL_DIR	"/dev"
+#define	ZVOL_DIR		"/dev/zvol/"
 
 #define	ZVOL_MAJOR		230
 #define	ZVOL_MINOR_BITS		4
@@ -1180,6 +1210,13 @@ typedef enum {
 	VDEV_TRIM_SUSPENDED,
 	VDEV_TRIM_COMPLETE,
 } vdev_trim_state_t;
+
+typedef enum {
+	VDEV_REBUILD_NONE,
+	VDEV_REBUILD_ACTIVE,
+	VDEV_REBUILD_CANCELED,
+	VDEV_REBUILD_COMPLETE,
+} vdev_rebuild_state_t;
 
 /*
  * nvlist name constants. Facilitate restricting snapshot iteration range for
@@ -1290,7 +1327,7 @@ typedef enum zfs_ioc {
 	ZFS_IOC_WAIT_FS,			/* 0x5a54 */
 
 	/*
-	 * Per-platform (Optional) - 6/128 numbers reserved.
+	 * Per-platform (Optional) - 8/128 numbers reserved.
 	 */
 	ZFS_IOC_PLATFORM = ZFS_IOC_FIRST + 0x80,
 	ZFS_IOC_EVENTS_NEXT,			/* 0x81 (Linux) */
@@ -1299,6 +1336,8 @@ typedef enum zfs_ioc {
 	ZFS_IOC_NEXTBOOT,			/* 0x84 (FreeBSD) */
 	ZFS_IOC_JAIL,				/* 0x85 (FreeBSD) */
 	ZFS_IOC_UNJAIL,				/* 0x86 (FreeBSD) */
+	ZFS_IOC_SET_BOOTENV,			/* 0x87 (Linux) */
+	ZFS_IOC_GET_BOOTENV,			/* 0x88 (Linux) */
 	ZFS_IOC_LAST
 } zfs_ioc_t;
 
@@ -1337,6 +1376,10 @@ typedef enum {
 	ZFS_ERR_EXPORT_IN_PROGRESS,
 	ZFS_ERR_BOOKMARK_SOURCE_NOT_ANCESTOR,
 	ZFS_ERR_STREAM_TRUNCATED,
+	ZFS_ERR_STREAM_LARGE_BLOCK_MISMATCH,
+	ZFS_ERR_RESILVER_IN_PROGRESS,
+	ZFS_ERR_REBUILD_IN_PROGRESS,
+	ZFS_ERR_BADPROP,
 } zfs_errno_t;
 
 /*
@@ -1478,7 +1521,12 @@ typedef enum {
  * given payloads:
  *
  *	ESC_ZFS_RESILVER_START
- *	ESC_ZFS_RESILVER_END
+ *	ESC_ZFS_RESILVER_FINISH
+ *
+ *		ZFS_EV_POOL_NAME	DATA_TYPE_STRING
+ *		ZFS_EV_POOL_GUID	DATA_TYPE_UINT64
+ *		ZFS_EV_RESILVER_TYPE	DATA_TYPE_STRING
+ *
  *	ESC_ZFS_POOL_DESTROY
  *	ESC_ZFS_POOL_REGUID
  *
@@ -1532,6 +1580,7 @@ typedef enum {
 #define	ZFS_EV_HIST_IOCTL	"history_ioctl"
 #define	ZFS_EV_HIST_DSNAME	"history_dsname"
 #define	ZFS_EV_HIST_DSID	"history_dsid"
+#define	ZFS_EV_RESILVER_TYPE	"resilver_type"
 
 #ifdef	__cplusplus
 }

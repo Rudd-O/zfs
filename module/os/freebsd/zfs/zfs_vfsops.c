@@ -108,8 +108,13 @@ static int zfs_root(vfs_t *vfsp, int flags, vnode_t **vpp);
 static int zfs_statfs(vfs_t *vfsp, struct statfs *statp);
 static int zfs_vget(vfs_t *vfsp, ino_t ino, int flags, vnode_t **vpp);
 static int zfs_sync(vfs_t *vfsp, int waitfor);
+#if __FreeBSD_version >= 1300098
+static int zfs_checkexp(vfs_t *vfsp, struct sockaddr *nam, uint64_t *extflagsp,
+    struct ucred **credanonp, int *numsecflavors, int *secflavors);
+#else
 static int zfs_checkexp(vfs_t *vfsp, struct sockaddr *nam, int *extflagsp,
     struct ucred **credanonp, int *numsecflavors, int **secflavors);
+#endif
 static int zfs_fhtovp(vfs_t *vfsp, fid_t *fidp, int flags, vnode_t **vpp);
 static void zfs_freevfs(vfs_t *vfsp);
 
@@ -352,7 +357,7 @@ zfs_quotactl(vfs_t *vfsp, int cmds, uid_t id, void *arg)
 		vfs_unbusy(vfsp);
 		break;
 	case Q_SETQUOTA:
-		error = copyin(&dqblk, arg, sizeof (dqblk));
+		error = copyin(arg, &dqblk, sizeof (dqblk));
 		if (error == 0)
 			error = zfs_set_userquota(zfsvfs, quota_type,
 			    "", id, dbtob(dqblk.dqb_bhardlimit));
@@ -1014,6 +1019,9 @@ zfsvfs_setup(zfsvfs_t *zfsvfs, boolean_t mounting)
 	if (mounting) {
 		boolean_t readonly;
 
+		ASSERT3P(zfsvfs->z_kstat.dk_kstats, ==, NULL);
+		dataset_kstats_create(&zfsvfs->z_kstat, zfsvfs->z_os);
+
 		/*
 		 * During replay we remove the read only flag to
 		 * allow replays to succeed.
@@ -1023,6 +1031,16 @@ zfsvfs_setup(zfsvfs_t *zfsvfs, boolean_t mounting)
 			zfsvfs->z_vfs->vfs_flag &= ~VFS_RDONLY;
 		} else {
 			dsl_dir_t *dd;
+			zap_stats_t zs;
+
+			if (zap_get_stats(zfsvfs->z_os, zfsvfs->z_unlinkedobj,
+			    &zs) == 0) {
+				dataset_kstats_update_nunlinks_kstat(
+				    &zfsvfs->z_kstat, zs.zs_num_entries);
+				dprintf_ds(zfsvfs->z_os->os_dsl_dataset,
+				    "num_entries in unlinked set: %llu",
+				    zs.zs_num_entries);
+			}
 
 			zfs_unlinked_drain(zfsvfs);
 			dd = zfsvfs->z_os->os_dsl_dataset->ds_dir;
@@ -1112,6 +1130,7 @@ zfsvfs_free(zfsvfs_t *zfsvfs)
 	rw_destroy(&zfsvfs->z_fuid_lock);
 	for (i = 0; i != ZFS_OBJ_MTX_SZ; i++)
 		mutex_destroy(&zfsvfs->z_hold_mtx[i]);
+	dataset_kstats_destroy(&zfsvfs->z_kstat);
 	kmem_free(zfsvfs, sizeof (zfsvfs_t));
 }
 
@@ -1173,6 +1192,9 @@ zfs_domount(vfs_t *vfsp, char *osname)
 	vfsp->mnt_kern_flag |= MNTK_NOMSYNC;
 	vfsp->mnt_kern_flag |= MNTK_VMSETSIZE_BUG;
 
+#if defined(_KERNEL) && !defined(KMEM_DEBUG)
+	vfsp->mnt_kern_flag |= MNTK_FPLOOKUP;
+#endif
 	/*
 	 * The fsid is 64 bits, composed of an 8-bit fs type, which
 	 * separates our fsid from any other filesystem types, and a
@@ -1236,7 +1258,7 @@ out:
 	return (error);
 }
 
-void
+static void
 zfs_unregister_callbacks(zfsvfs_t *zfsvfs)
 {
 	objset_t *os = zfsvfs->z_os;
@@ -1558,7 +1580,7 @@ zfs_mount(vfs_t *vfsp)
 
 		error = getpoolname(osname, pname);
 		if (error == 0)
-			error = spa_import_rootpool(pname);
+			error = spa_import_rootpool(pname, false);
 		if (error)
 			goto out;
 	}
@@ -1732,7 +1754,7 @@ zfsvfs_teardown(zfsvfs_t *zfsvfs, boolean_t unmounting)
 	/*
 	 * At this point there are no vops active, and any new vops will
 	 * fail with EIO since we have z_teardown_lock for writer (only
-	 * relavent for forced unmount).
+	 * relevant for forced unmount).
 	 *
 	 * Release all holds on dbufs.
 	 */
@@ -1896,8 +1918,13 @@ zfs_vget(vfs_t *vfsp, ino_t ino, int flags, vnode_t **vpp)
 }
 
 static int
+#if __FreeBSD_version >= 1300098
+zfs_checkexp(vfs_t *vfsp, struct sockaddr *nam, uint64_t *extflagsp,
+    struct ucred **credanonp, int *numsecflavors, int *secflavors)
+#else
 zfs_checkexp(vfs_t *vfsp, struct sockaddr *nam, int *extflagsp,
     struct ucred **credanonp, int *numsecflavors, int **secflavors)
+#endif
 {
 	zfsvfs_t *zfsvfs = vfsp->vfs_data;
 
@@ -2133,6 +2160,13 @@ zfs_freevfs(vfs_t *vfsp)
 
 #ifdef __i386__
 static int desiredvnodes_backup;
+#include <sys/vmmeter.h>
+
+
+#include <vm/vm_page.h>
+#include <vm/vm_object.h>
+#include <vm/vm_kern.h>
+#include <vm/vm_map.h>
 #endif
 
 static void
@@ -2188,7 +2222,7 @@ zfs_init(void)
 	 */
 	zfs_vnodes_adjust();
 
-	dmu_objset_register_type(DMU_OST_ZFS, zfs_space_delta_cb);
+	dmu_objset_register_type(DMU_OST_ZFS, zpl_get_file_info);
 
 	zfsvfs_taskq = taskq_create("zfsvfs", 1, minclsyspri, 0, 0, 0);
 }
@@ -2297,8 +2331,8 @@ zfs_set_version(zfsvfs_t *zfsvfs, uint64_t newvers)
 	}
 
 	spa_history_log_internal_ds(dmu_objset_ds(os), "upgrade", tx,
-	    "from %lu to %lu", zfsvfs->z_version, newvers);
-
+	    "from %ju to %ju", (uintmax_t)zfsvfs->z_version,
+	    (uintmax_t)newvers);
 	dmu_tx_commit(tx);
 
 	zfsvfs->z_version = newvers;
@@ -2393,7 +2427,7 @@ zfs_get_zplprop(objset_t *os, zfs_prop_t prop, uint64_t *value)
 }
 
 /*
- * Return true if the coresponding vfs's unmounted flag is set.
+ * Return true if the corresponding vfs's unmounted flag is set.
  * Otherwise return false.
  * If this function returns true we know VFS unmount has been initiated.
  */

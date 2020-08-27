@@ -69,9 +69,6 @@
 #include <sys/socket.h>
 #include <sys/sha2.h>
 
-/* in libzfs_dataset.c */
-extern void zfs_setprop_error(libzfs_handle_t *, zfs_prop_t, int, char *);
-
 static int zfs_receive_impl(libzfs_handle_t *, const char *, const char *,
     recvflags_t *, int, const char *, nvlist_t *, avl_tree_t *, char **,
     const char *, nvlist_t *);
@@ -613,6 +610,18 @@ send_iterate_fs(zfs_handle_t *zhp, void *arg)
 	fnvlist_free(sd->snapprops);
 	fnvlist_free(sd->snapholds);
 
+	/* Do not allow the size of the properties list to exceed the limit */
+	if ((fnvlist_size(nvfs) + fnvlist_size(sd->fss)) >
+	    zhp->zfs_hdl->libzfs_max_nvlist) {
+		(void) fprintf(stderr, dgettext(TEXT_DOMAIN,
+		    "warning: cannot send %s@%s: the size of the list of "
+		    "snapshots and properties is too large to be received "
+		    "successfully.\n"
+		    "Select a smaller number of snapshots to send.\n"),
+		    zhp->zfs_name, sd->tosnap);
+		rv = EZFS_NOSPC;
+		goto out;
+	}
 	/* add this fs to nvlist */
 	(void) snprintf(guidstring, sizeof (guidstring),
 	    "0x%llx", (longlong_t)guid);
@@ -863,7 +872,8 @@ int
 zfs_send_progress(zfs_handle_t *zhp, int fd, uint64_t *bytes_written,
     uint64_t *blocks_visited)
 {
-	zfs_cmd_t zc = { {0} };
+	zfs_cmd_t zc = {"\0"};
+
 	(void) strlcpy(zc.zc_name, zhp->zfs_name, sizeof (zc.zc_name));
 	zc.zc_cookie = fd;
 	if (zfs_ioctl(zhp->zfs_hdl, ZFS_IOC_SEND_PROGRESS, &zc) != 0)
@@ -2017,6 +2027,21 @@ send_prelim_records(zfs_handle_t *zhp, const char *from, int fd,
 			return (zfs_error(zhp->zfs_hdl, EZFS_BADBACKUP,
 			    errbuf));
 		}
+		/*
+		 * Do not allow the size of the properties list to exceed
+		 * the limit
+		 */
+		if ((fnvlist_size(fss) + fnvlist_size(hdrnv)) >
+		    zhp->zfs_hdl->libzfs_max_nvlist) {
+			(void) snprintf(errbuf, sizeof (errbuf),
+			    dgettext(TEXT_DOMAIN, "warning: cannot send '%s': "
+			    "the size of the list of snapshots and properties "
+			    "is too large to be received successfully.\n"
+			    "Select a smaller number of snapshots to send.\n"),
+			    zhp->zfs_name);
+			return (zfs_error(zhp->zfs_hdl, EZFS_NOSPC,
+			    errbuf));
+		}
 		fnvlist_add_nvlist(hdrnv, "fss", fss);
 		VERIFY0(nvlist_pack(hdrnv, &packbuf, &buflen, NV_ENCODE_XDR,
 		    0));
@@ -2296,7 +2321,7 @@ err_out:
 	return (err);
 }
 
-zfs_handle_t *
+static zfs_handle_t *
 name_to_dir_handle(libzfs_handle_t *hdl, const char *snapname)
 {
 	char dirname[ZFS_MAX_DATASET_NAME_LEN];
@@ -2580,8 +2605,6 @@ recv_read(libzfs_handle_t *hdl, int fd, void *buf, int ilen,
 	int rv;
 	int len = ilen;
 
-	assert(ilen <= SPA_MAXBLOCKSIZE);
-
 	do {
 		rv = read(fd, cp, len);
 		cp += rv;
@@ -2614,6 +2637,11 @@ recv_read_nvlist(libzfs_handle_t *hdl, int fd, int len, nvlist_t **nvp,
 	buf = zfs_alloc(hdl, len);
 	if (buf == NULL)
 		return (ENOMEM);
+
+	if (len > hdl->libzfs_max_nvlist) {
+		zfs_error_aux(hdl, dgettext(TEXT_DOMAIN, "nvlist too large"));
+		return (ENOMEM);
+	}
 
 	err = recv_read(hdl, fd, buf, len, byteswap, zc);
 	if (err != 0) {
@@ -2877,7 +2905,7 @@ typedef struct guid_to_name_data {
 	uint64_t num_redact_snaps;
 } guid_to_name_data_t;
 
-boolean_t
+static boolean_t
 redact_snaps_match(zfs_handle_t *zhp, guid_to_name_data_t *gtnd)
 {
 	uint64_t *bmark_snaps;
@@ -3785,6 +3813,7 @@ recv_skip(libzfs_handle_t *hdl, int fd, boolean_t byteswap)
 			}
 			payload_size =
 			    DRR_WRITE_PAYLOAD_SIZE(&drr->drr_u.drr_write);
+			assert(payload_size <= SPA_MAXBLOCKSIZE);
 			(void) recv_read(hdl, fd, buf,
 			    payload_size, B_FALSE, NULL);
 			break;
@@ -4802,6 +4831,12 @@ zfs_receive_one(libzfs_handle_t *hdl, int infd, const char *tosnap,
 			    ioctl_err == ECKSUM);
 			(void) zfs_error(hdl, EZFS_BADSTREAM, errbuf);
 			break;
+		case ZFS_ERR_STREAM_LARGE_BLOCK_MISMATCH:
+			zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
+			    "incremental send stream requires -L "
+			    "(--large-block), to match previous receive."));
+			(void) zfs_error(hdl, EZFS_BADSTREAM, errbuf);
+			break;
 		case ENOTSUP:
 			zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
 			    "pool must be upgraded to receive this stream."));
@@ -4888,8 +4923,8 @@ zfs_receive_one(libzfs_handle_t *hdl, int infd, const char *tosnap,
 		zfs_nicebytes(bytes, buf1, sizeof (buf1));
 		zfs_nicebytes(bytes/delta, buf2, sizeof (buf1));
 
-		(void) printf("received %s stream in %lu seconds (%s/sec)\n",
-		    buf1, delta, buf2);
+		(void) printf("received %s stream in %lld seconds (%s/sec)\n",
+		    buf1, (longlong_t)delta, buf2);
 	}
 
 	err = 0;

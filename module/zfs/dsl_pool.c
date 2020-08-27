@@ -220,10 +220,10 @@ dsl_pool_open_impl(spa_t *spa, uint64_t txg)
 	mutex_init(&dp->dp_lock, NULL, MUTEX_DEFAULT, NULL);
 	cv_init(&dp->dp_spaceavail_cv, NULL, CV_DEFAULT, NULL);
 
-	dp->dp_zrele_taskq = taskq_create("z_zrele", max_ncpus, defclsyspri,
-	    max_ncpus * 8, INT_MAX, TASKQ_PREPOPULATE | TASKQ_DYNAMIC);
+	dp->dp_zrele_taskq = taskq_create("z_zrele", boot_ncpus, defclsyspri,
+	    boot_ncpus * 8, INT_MAX, TASKQ_PREPOPULATE | TASKQ_DYNAMIC);
 	dp->dp_unlinked_drain_taskq = taskq_create("z_unlinked_drain",
-	    max_ncpus, defclsyspri, max_ncpus, INT_MAX,
+	    boot_ncpus, defclsyspri, boot_ncpus, INT_MAX,
 	    TASKQ_PREPOPULATE | TASKQ_DYNAMIC);
 
 	return (dp);
@@ -1158,7 +1158,7 @@ dsl_pool_clean_tmp_userrefs(dsl_pool_t *dp)
 /*
  * Create the pool-wide zap object for storing temporary snapshot holds.
  */
-void
+static void
 dsl_pool_user_hold_create_obj(dsl_pool_t *dp, dmu_tx_t *tx)
 {
 	objset_t *mos = dp->dp_meta_objset;

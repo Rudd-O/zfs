@@ -29,14 +29,20 @@
 #include <sys/param.h>
 #include <sys/kernel.h>
 #include <sys/bio.h>
+#include <sys/file.h>
 #include <sys/spa.h>
 #include <sys/spa_impl.h>
 #include <sys/vdev_impl.h>
+#include <sys/vdev_os.h>
 #include <sys/fs/zfs.h>
 #include <sys/zio.h>
 #include <geom/geom.h>
 #include <geom/geom_disk.h>
 #include <geom/geom_int.h>
+
+#ifndef g_topology_locked
+#define	g_topology_locked()	sx_xlocked(&topology_lock)
+#endif
 
 /*
  * Virtual device vector for GEOM.
@@ -796,7 +802,7 @@ vdev_geom_open_by_path(vdev_t *vd, int check_guid)
 
 static int
 vdev_geom_open(vdev_t *vd, uint64_t *psize, uint64_t *max_psize,
-    uint64_t *logical_ashift)
+    uint64_t *logical_ashift, uint64_t *physical_ashift)
 {
 	struct g_provider *pp;
 	struct g_consumer *cp;
@@ -839,7 +845,7 @@ vdev_geom_open(vdev_t *vd, uint64_t *psize, uint64_t *max_psize,
 		 * opened (since boot), and we are not loading an
 		 * existing pool configuration.  This looks like a
 		 * vdev add operation to a new or existing pool.
-		 * Assume the user knows what he/she is doing and find
+		 * Assume the user really wants to do this, and find
 		 * GEOM provider by its name, ignoring GUID mismatches.
 		 *
 		 * XXPOLICY: It would be safer to only allow a device
@@ -943,11 +949,12 @@ skip_open:
 	 * transfer size.
 	 */
 	*logical_ashift = highbit(MAX(pp->sectorsize, SPA_MINBLOCKSIZE)) - 1;
-#ifdef notyet
-	if (pp->stripesize > (1 << *logical_ashift) && ISP2(pp->stripesize) &&
-	    pp->stripesize <= (1 << ASHIFT_MAX) && pp->stripeoffset == 0)
+	*physical_ashift = 0;
+	if (pp->stripesize && pp->stripesize > (1 << *logical_ashift) &&
+	    ISP2(pp->stripesize) && pp->stripesize <= (1 << ASHIFT_MAX) &&
+	    pp->stripeoffset == 0)
 		*physical_ashift = highbit(pp->stripesize) - 1;
-#endif
+
 	/*
 	 * Clear the nowritecache settings, so that on a vdev_reopen()
 	 * we will try again.
@@ -976,18 +983,22 @@ static void
 vdev_geom_close(vdev_t *vd)
 {
 	struct g_consumer *cp;
+	boolean_t locked;
 
 	cp = vd->vdev_tsd;
 
 	DROP_GIANT();
-	g_topology_lock();
+	locked = g_topology_locked();
+	if (!locked)
+		g_topology_lock();
 
 	if (!vd->vdev_reopening ||
 	    (cp != NULL && ((cp->flags & G_CF_ORPHAN) != 0 ||
 	    (cp->provider != NULL && cp->provider->error != 0))))
 		vdev_geom_close_locked(vd);
 
-	g_topology_unlock();
+	if (!locked)
+		g_topology_unlock();
 	PICKUP_GIANT();
 }
 

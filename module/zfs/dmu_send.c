@@ -26,6 +26,8 @@
  * Copyright 2014 HybridCluster. All rights reserved.
  * Copyright 2016 RackTop Systems.
  * Copyright (c) 2016 Actifio, Inc. All rights reserved.
+ * Copyright (c) 2019, Klara Inc.
+ * Copyright (c) 2019, Allan Jude
  */
 
 #include <sys/dmu.h>
@@ -863,6 +865,14 @@ send_do_embed(const blkptr_t *bp, uint64_t featureflags)
 		return (B_FALSE);
 
 	/*
+	 * If we have not set the ZSTD feature flag, we can't send ZSTD
+	 * compressed embedded blocks, as the receiver may not support them.
+	 */
+	if ((BP_GET_COMPRESS(bp) == ZIO_COMPRESS_ZSTD &&
+	    !(featureflags & DMU_BACKUP_FEATURE_ZSTD)))
+		return (B_FALSE);
+
+	/*
 	 * Embed type must be explicitly enabled.
 	 */
 	switch (BPE_GET_ETYPE(bp)) {
@@ -1153,23 +1163,30 @@ send_cb(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
 	if (zb->zb_blkid == DMU_SPILL_BLKID)
 		ASSERT3U(BP_GET_TYPE(bp), ==, DMU_OT_SA);
 
-	record = range_alloc(DATA, zb->zb_object, start, (start + span < start ?
-	    0 : start + span), B_FALSE);
+	enum type record_type = DATA;
+	if (BP_IS_HOLE(bp))
+		record_type = HOLE;
+	else if (BP_IS_REDACTED(bp))
+		record_type = REDACT;
+	else
+		record_type = DATA;
+
+	record = range_alloc(record_type, zb->zb_object, start,
+	    (start + span < start ? 0 : start + span), B_FALSE);
 
 	uint64_t datablksz = (zb->zb_blkid == DMU_SPILL_BLKID ?
 	    BP_GET_LSIZE(bp) : dnp->dn_datablkszsec << SPA_MINBLOCKSHIFT);
+
 	if (BP_IS_HOLE(bp)) {
-		record->type = HOLE;
 		record->sru.hole.datablksz = datablksz;
 	} else if (BP_IS_REDACTED(bp)) {
-		record->type = REDACT;
 		record->sru.redact.datablksz = datablksz;
 	} else {
-		record->type = DATA;
 		record->sru.data.datablksz = datablksz;
 		record->sru.data.obj_type = dnp->dn_type;
 		record->sru.data.bp = *bp;
 	}
+
 	bqueue_enqueue(&sta->q, record, sizeof (*record));
 	return (0);
 }
@@ -1319,6 +1336,8 @@ redact_list_thread(void *arg)
 	record = range_alloc(DATA, 0, 0, 0, B_TRUE);
 	bqueue_enqueue_flush(&rlt_arg->q, record, sizeof (*record));
 	spl_fstrans_unmark(cookie);
+
+	thread_exit();
 }
 
 /*
@@ -1945,6 +1964,7 @@ setup_featureflags(struct dmu_send_params *dspp, objset_t *os,
 	/* raw send implies compressok */
 	if (dspp->compressok || dspp->rawok)
 		*featureflags |= DMU_BACKUP_FEATURE_COMPRESSED;
+
 	if (dspp->rawok && os->os_encrypted)
 		*featureflags |= DMU_BACKUP_FEATURE_RAW;
 
@@ -1953,6 +1973,17 @@ setup_featureflags(struct dmu_send_params *dspp, objset_t *os,
 	    DMU_BACKUP_FEATURE_RAW)) != 0 &&
 	    spa_feature_is_active(dp->dp_spa, SPA_FEATURE_LZ4_COMPRESS)) {
 		*featureflags |= DMU_BACKUP_FEATURE_LZ4;
+	}
+
+	/*
+	 * We specifically do not include DMU_BACKUP_FEATURE_EMBED_DATA here to
+	 * allow sending ZSTD compressed datasets to a receiver that does not
+	 * support ZSTD
+	 */
+	if ((*featureflags &
+	    (DMU_BACKUP_FEATURE_COMPRESSED | DMU_BACKUP_FEATURE_RAW)) != 0 &&
+	    dsl_dataset_feature_is_active(to_ds, SPA_FEATURE_ZSTD_COMPRESS)) {
+		*featureflags |= DMU_BACKUP_FEATURE_ZSTD;
 	}
 
 	if (dspp->resumeobj != 0 || dspp->resumeoff != 0) {
@@ -1999,7 +2030,8 @@ create_begin_record(struct dmu_send_params *dspp, objset_t *os,
 
 	if (dspp->savedok) {
 		drrb->drr_toguid = dspp->saved_guid;
-		strcpy(drrb->drr_toname, dspp->saved_toname);
+		strlcpy(drrb->drr_toname, dspp->saved_toname,
+		    sizeof (drrb->drr_toname));
 	} else {
 		dsl_dataset_name(to_ds, drrb->drr_toname);
 		if (!to_ds->ds_is_snapshot) {

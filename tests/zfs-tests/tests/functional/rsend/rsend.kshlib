@@ -26,6 +26,7 @@
 
 #
 # Copyright (c) 2013, 2018 by Delphix. All rights reserved.
+# Copyright (c) 2020 by Datto Inc. All rights reserved.
 #
 
 . $STF_SUITE/include/libtest.shlib
@@ -657,6 +658,21 @@ function resume_test
 	log_must zfs recv -suv $recvfs </$streamfs/$stream_num
 }
 
+function get_resume_token
+{
+	sendcmd=$1
+	streamfs=$2
+	recvfs=$3
+
+	log_must eval "$sendcmd > /$streamfs/1"
+	mess_send_file /$streamfs/1
+	log_mustnot zfs recv -suv $recvfs < /$streamfs/1 2>&1
+	token=$(zfs get -Hp -o value receive_resume_token $recvfs)
+	echo "$token" > /$streamfs/resume_token
+
+	return 0
+}
+
 #
 # Setup filesystems for the resumable send/receive tests
 #
@@ -675,7 +691,7 @@ function test_fs_setup
 	datasetexists $recvfs && log_must_busy zfs destroy -r $recvpool
 	datasetexists $streamfs && log_must_busy zfs destroy -r $streamfs
 
-	if $(datasetexists $sendfs || zfs create -o compress=lz4 $sendfs); then
+	if datasetexists $sendfs || zfs create -o compress=lz4 $sendfs; then
 		mk_files 1000 256 0 $sendfs &
 		mk_files 1000 131072 0 $sendfs &
 		mk_files 100 1048576 0 $sendfs &

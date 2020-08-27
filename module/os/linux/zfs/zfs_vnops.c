@@ -1041,7 +1041,7 @@ zfs_zrele_async(znode_t *zp)
 }
 
 /* ARGSUSED */
-void
+static void
 zfs_get_done(zgd_t *zgd, int error)
 {
 	znode_t *zp = zgd->zgd_private;
@@ -1060,7 +1060,7 @@ zfs_get_done(zgd_t *zgd, int error)
 	kmem_free(zgd, sizeof (zgd_t));
 }
 
-#ifdef DEBUG
+#ifdef ZFS_DEBUG
 static int zil_fault_io = 0;
 #endif
 
@@ -1142,7 +1142,7 @@ zfs_get_data(void *arg, lr_write_t *lr, char *buf, struct lwb *lwb, zio_t *zio)
 		/* test for truncation needs to be done while range locked */
 		if (lr->lr_offset >= zp->z_size)
 			error = SET_ERROR(ENOENT);
-#ifdef DEBUG
+#ifdef ZFS_DEBUG
 		if (zil_fault_io) {
 			error = SET_ERROR(EIO);
 			zil_fault_io = 0;
@@ -3077,6 +3077,12 @@ top:
 		uint64_t acl_obj;
 		new_mode = (pmode & S_IFMT) | (vap->va_mode & ~S_IFMT);
 
+		if (ZTOZSB(zp)->z_acl_mode == ZFS_ACL_RESTRICTED &&
+		    !(zp->z_pflags & ZFS_ACL_TRIVIAL)) {
+			err = EPERM;
+			goto out;
+		}
+
 		if ((err = zfs_acl_chmod_setattr(zp, &aclp, new_mode)))
 			goto out;
 
@@ -4554,25 +4560,6 @@ zfs_inactive(struct inode *ip)
 	zfs_zinactive(zp);
 	if (need_unlock)
 		rw_exit(&zfsvfs->z_teardown_inactive_lock);
-}
-
-/*
- * Bounds-check the seek operation.
- *
- *	IN:	ip	- inode seeking within
- *		ooff	- old file offset
- *		noffp	- pointer to new file offset
- *
- *	RETURN:	0 if success
- *		EINVAL if new offset invalid
- */
-/* ARGSUSED */
-int
-zfs_seek(struct inode *ip, offset_t ooff, offset_t *noffp)
-{
-	if (S_ISDIR(ip->i_mode))
-		return (0);
-	return ((*noffp < 0 || *noffp > MAXOFFSET_T) ? EINVAL : 0);
 }
 
 /*

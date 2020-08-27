@@ -21,7 +21,7 @@
 
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2011, 2017 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2020 by Delphix. All rights reserved.
  * Copyright (c) 2017, Intel Corporation.
  * Copyright (c) 2019, Datto Inc. All rights reserved.
  */
@@ -73,7 +73,7 @@ extern boolean_t vdev_dtl_contains(vdev_t *vd, vdev_dtl_type_t d,
 extern boolean_t vdev_dtl_empty(vdev_t *vd, vdev_dtl_type_t d);
 extern boolean_t vdev_dtl_need_resilver(vdev_t *vd, uint64_t off, size_t size);
 extern void vdev_dtl_reassess(vdev_t *vd, uint64_t txg, uint64_t scrub_txg,
-    int scrub_done);
+    boolean_t scrub_done, boolean_t rebuild_done);
 extern boolean_t vdev_dtl_required(vdev_t *vd);
 extern boolean_t vdev_resilver_needed(vdev_t *vd,
     uint64_t *minp, uint64_t *maxp);
@@ -94,6 +94,7 @@ extern void vdev_rele(vdev_t *);
 extern int vdev_metaslab_init(vdev_t *vd, uint64_t txg);
 extern void vdev_metaslab_fini(vdev_t *vd);
 extern void vdev_metaslab_set_size(vdev_t *);
+extern void vdev_ashift_optimize(vdev_t *);
 extern void vdev_expand(vdev_t *vd, uint64_t txg);
 extern void vdev_split(vdev_t *vd);
 extern void vdev_deadman(vdev_t *vd, char *tag);
@@ -178,7 +179,9 @@ extern nvlist_t *vdev_label_read_config(vdev_t *vd, uint64_t txg);
 extern void vdev_uberblock_load(vdev_t *, struct uberblock *, nvlist_t **);
 extern void vdev_config_generate_stats(vdev_t *vd, nvlist_t *nv);
 extern void vdev_label_write(zio_t *zio, vdev_t *vd, int l, abd_t *buf, uint64_t
-    offset, uint64_t size, zio_done_func_t *done, void *private, int flags);
+    offset, uint64_t size, zio_done_func_t *done, void *priv, int flags);
+extern int vdev_label_read_bootenv(vdev_t *, nvlist_t *);
+extern int vdev_label_write_bootenv(vdev_t *, char *);
 
 typedef enum {
 	VDEV_LABEL_CREATE,	/* create/add a new device */

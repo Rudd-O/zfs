@@ -25,6 +25,7 @@
 
 #include <sys/zfs_context.h>
 #include <sys/spa.h>
+#include <sys/file.h>
 #include <sys/vdev_file.h>
 #include <sys/vdev_impl.h>
 #include <sys/zio.h>
@@ -82,7 +83,7 @@ vdev_file_open_mode(spa_mode_t spa_mode)
 
 static int
 vdev_file_open(vdev_t *vd, uint64_t *psize, uint64_t *max_psize,
-    uint64_t *ashift)
+    uint64_t *logical_ashift, uint64_t *physical_ashift)
 {
 	vdev_file_t *vf;
 	zfs_file_t *fp;
@@ -166,7 +167,8 @@ skip_open:
 	}
 
 	*max_psize = *psize = zfa.zfa_size;
-	*ashift = SPA_MINBLOCKSHIFT;
+	*logical_ashift = SPA_MINBLOCKSHIFT;
+	*physical_ashift = SPA_MINBLOCKSHIFT;
 
 	return (0);
 }

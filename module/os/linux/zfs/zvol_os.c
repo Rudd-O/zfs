@@ -50,7 +50,6 @@ unsigned int zvol_threads = 32;
 struct zvol_state_os {
 	struct gendisk		*zvo_disk;	/* generic disk */
 	struct request_queue	*zvo_queue;	/* request queue */
-	dataset_kstats_t	zvo_kstat;	/* zvol kstats */
 	dev_t			zvo_dev;	/* device id */
 };
 
@@ -163,7 +162,7 @@ zvol_write(void *arg)
 	zfs_rangelock_exit(lr);
 
 	int64_t nwritten = start_resid - uio.uio_resid;
-	dataset_kstats_update_write_kstats(&zv->zv_zso->zvo_kstat, nwritten);
+	dataset_kstats_update_write_kstats(&zv->zv_kstat, nwritten);
 	task_io_account_write(nwritten);
 
 	if (sync)
@@ -286,7 +285,7 @@ zvol_read(void *arg)
 	zfs_rangelock_exit(lr);
 
 	int64_t nread = start_resid - uio.uio_resid;
-	dataset_kstats_update_read_kstats(&zv->zv_zso->zvo_kstat, nread);
+	dataset_kstats_update_read_kstats(&zv->zv_kstat, nread);
 	task_io_account_read(nread);
 
 	rw_exit(&zv->zv_suspend_lock);
@@ -296,9 +295,17 @@ zvol_read(void *arg)
 	kmem_free(zvr, sizeof (zv_request_t));
 }
 
+#ifdef HAVE_SUBMIT_BIO_IN_BLOCK_DEVICE_OPERATIONS
+static blk_qc_t
+zvol_submit_bio(struct bio *bio)
+#else
 static MAKE_REQUEST_FN_RET
 zvol_request(struct request_queue *q, struct bio *bio)
+#endif
 {
+#ifdef HAVE_SUBMIT_BIO_IN_BLOCK_DEVICE_OPERATIONS
+	struct request_queue *q = bio->bi_disk->queue;
+#endif
 	zvol_state_t *zv = q->queuedata;
 	fstrans_cookie_t cookie = spl_fstrans_mark();
 	uint64_t offset = BIO_BI_SECTOR(bio) << 9;
@@ -426,7 +433,8 @@ zvol_request(struct request_queue *q, struct bio *bio)
 
 out:
 	spl_fstrans_unmark(cookie);
-#if defined(HAVE_MAKE_REQUEST_FN_RET_QC)
+#if defined(HAVE_MAKE_REQUEST_FN_RET_QC) || \
+	defined(HAVE_SUBMIT_BIO_IN_BLOCK_DEVICE_OPERATIONS)
 	return (BLK_QC_T_NONE);
 #endif
 }
@@ -641,7 +649,7 @@ zvol_revalidate_disk(struct gendisk *disk)
 	return (0);
 }
 
-int
+static int
 zvol_update_volsize(zvol_state_t *zv, uint64_t volsize)
 {
 
@@ -714,12 +722,6 @@ zvol_find_by_dev(dev_t dev)
 	return (NULL);
 }
 
-void
-zvol_validate_dev(zvol_state_t *zv)
-{
-	ASSERT3U(MINOR(zv->zv_zso->zvo_dev) & ZVOL_MINOR_MASK, ==, 0);
-}
-
 static struct kobject *
 zvol_probe(dev_t dev, int *part, void *arg)
 {
@@ -744,6 +746,9 @@ static struct block_device_operations zvol_ops = {
 	.revalidate_disk	= zvol_revalidate_disk,
 	.getgeo			= zvol_getgeo,
 	.owner			= THIS_MODULE,
+#ifdef HAVE_SUBMIT_BIO_IN_BLOCK_DEVICE_OPERATIONS
+    .submit_bio		= zvol_submit_bio,
+#endif
 };
 
 /*
@@ -773,7 +778,11 @@ zvol_alloc(dev_t dev, const char *name)
 	list_link_init(&zv->zv_next);
 	mutex_init(&zv->zv_state_lock, NULL, MUTEX_DEFAULT, NULL);
 
+#ifdef HAVE_SUBMIT_BIO_IN_BLOCK_DEVICE_OPERATIONS
+	zso->zvo_queue = blk_alloc_queue(NUMA_NO_NODE);
+#else
 	zso->zvo_queue = blk_generic_alloc_queue(zvol_request, NUMA_NO_NODE);
+#endif
 	if (zso->zvo_queue == NULL)
 		goto out_kmem;
 
@@ -864,7 +873,7 @@ zvol_free(zvol_state_t *zv)
 	    MINOR(zv->zv_zso->zvo_dev) >> ZVOL_MINOR_BITS);
 
 	mutex_destroy(&zv->zv_state_lock);
-	dataset_kstats_destroy(&zv->zv_zso->zvo_kstat);
+	dataset_kstats_destroy(&zv->zv_kstat);
 
 	kmem_free(zv->zv_zso, sizeof (struct zvol_state_os));
 	kmem_free(zv, sizeof (zvol_state_t));
@@ -963,8 +972,8 @@ zvol_os_create_minor(const char *name)
 		else
 			zil_replay(os, zv, zvol_replay_vector);
 	}
-	ASSERT3P(zv->zv_zso->zvo_kstat.dk_kstats, ==, NULL);
-	dataset_kstats_create(&zv->zv_zso->zvo_kstat, zv->zv_objset);
+	ASSERT3P(zv->zv_kstat.dk_kstats, ==, NULL);
+	dataset_kstats_create(&zv->zv_kstat, zv->zv_objset);
 
 	/*
 	 * When udev detects the addition of the device it will immediately

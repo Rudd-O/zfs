@@ -36,10 +36,11 @@
 .\" Copyright 2019 Richard Laager. All rights reserved.
 .\" Copyright 2018 Nexenta Systems, Inc.
 .\" Copyright 2019 Joyent, Inc.
+.\" Copyright (c) 2019, Kjeld Schouten-Lebbing
 .\"
 .Dd January 30, 2020
 .Dt ZFSPROPS 8
-.Os Linux
+.Os
 .Sh NAME
 .Nm zfsprops
 .Nd Native properties and user-defined of ZFS datasets.
@@ -282,8 +283,9 @@ has been set somewhere in the tree under which the dataset resides.
 The type of dataset:
 .Sy filesystem ,
 .Sy volume ,
+.Sy snapshot ,
 or
-.Sy snapshot .
+.Sy bookmark .
 .It Sy used
 The amount of space consumed by this dataset and all its descendents.
 This is the value that is checked against this dataset's quota and reservation.
@@ -599,23 +601,24 @@ accordance to the requested mode from the application.
 The
 .Sy aclinherit
 property does not apply to POSIX ACLs.
-.It Sy aclmode Ns = Ns Sy discard Ns | Ns Sy groupmask Ns | Ns Sy passthrough
-.Ns Sy restricted
-Controls how an
-.Tn ACL
-is modified during
-.Xr chmod 2 .
-This property is not visible on Linux yet.
+.It Xo
+.Sy aclmode Ns = Ns Sy discard Ns | Ns Sy groupmask Ns | Ns
+.Sy passthrough Ns | Ns Sy restricted Ns
+.Xc
+Controls how an ACL is modified during chmod(2) and how inherited ACEs
+are modified by the file creation mode.
 .Bl -tag -width "passthrough"
 .It Sy discard
 default, deletes all
-.Tn ACL
-entries that do not represent the mode of the file.
+.Sy ACEs
+except for those representing
+the mode of the file or directory requested by
+.Xr chmod 2 .
 .It Sy groupmask
 reduces permissions granted in all
-.Em ALLOW
-entried found in the
-.Tn ACL
+.Sy ALLOW
+entries found in the
+.Sy ACL
 such that they are no greater than the group permissions specified by
 .Xr chmod 2 .
 .It Sy passthrough
@@ -760,8 +763,6 @@ The
 and
 .Sy edonr
 checksum algorithms require enabling the appropriate features on the pool.
-These pool features are not supported by GRUB and must not be used on the
-pool if GRUB needs to access the pool (e.g. for /boot).
 FreeBSD does not support the
 .Sy edonr
 algorithm.
@@ -773,7 +774,8 @@ for more information on these algorithms.
 Changing this property affects only newly-written data.
 .It Xo
 .Sy compression Ns = Ns Sy on Ns | Ns Sy off Ns | Ns Sy gzip Ns | Ns
-.Sy gzip- Ns Em N Ns | Ns Sy lz4 Ns | Ns Sy lzjb Ns | Ns Sy zle
+.Sy gzip- Ns Em N Ns | Ns Sy lz4 Ns | Ns Sy lzjb Ns | Ns Sy zle Ns | Ns Sy zstd Ns | Ns
+.Sy zstd- Ns Em N Ns | Ns Sy zstd-fast Ns | Ns Sy zstd-fast- Ns Em N
 .Xc
 Controls the compression algorithm used for this dataset.
 .Pp
@@ -839,6 +841,38 @@ is equivalent to
 .Po which is also the default for
 .Xr gzip 1
 .Pc .
+.Pp
+The
+.Sy zstd
+compression algorithm provides both high compression ratios and good
+performance. You can specify the
+.Sy zstd
+level by using the value
+.Sy zstd- Ns Em N ,
+where
+.Em N
+is an integer from 1
+.Pq fastest
+to 19
+.Pq best compression ratio .
+.Sy zstd
+is equivalent to
+.Sy zstd-3 .
+.Pp
+Faster speeds at the cost of the compression ratio can be requested by
+setting a negative
+.Sy zstd
+level.  This is done using
+.Sy zstd-fast- Ns Em N ,
+where
+.Em N
+is an integer in [1-9,10,20,30,...,100,500,1000] which maps to a negative
+.Sy zstd
+level. The lower the level the faster the compression - 1000 provides
+the fastest compression and lowest compression ratio.
+.Sy zstd-fast
+is equivalent to
+.Sy zstd-fast-1 .
 .Pp
 The
 .Sy zle

@@ -37,6 +37,11 @@
 #include <linux/msdos_fs.h>
 #include <linux/vfs_compat.h>
 
+typedef struct vdev_disk {
+	struct block_device		*vd_bdev;
+	krwlock_t			vd_lock;
+} vdev_disk_t;
+
 /*
  * Unique identifier for the exclusive vdev holder.
  */
@@ -154,7 +159,7 @@ vdev_disk_error(zio_t *zio)
 
 static int
 vdev_disk_open(vdev_t *v, uint64_t *psize, uint64_t *max_psize,
-    uint64_t *ashift)
+    uint64_t *logical_ashift, uint64_t *physical_ashift)
 {
 	struct block_device *bdev;
 	fmode_t mode = vdev_bdev_mode(spa_mode(v->vdev_spa));
@@ -265,7 +270,10 @@ vdev_disk_open(vdev_t *v, uint64_t *psize, uint64_t *max_psize,
 	struct request_queue *q = bdev_get_queue(vd->vd_bdev);
 
 	/*  Determine the physical block size */
-	int block_size = bdev_physical_block_size(vd->vd_bdev);
+	int physical_block_size = bdev_physical_block_size(vd->vd_bdev);
+
+	/*  Determine the logical block size */
+	int logical_block_size = bdev_logical_block_size(vd->vd_bdev);
 
 	/* Clear the nowritecache bit, causes vdev_reopen() to try again. */
 	v->vdev_nowritecache = B_FALSE;
@@ -286,7 +294,11 @@ vdev_disk_open(vdev_t *v, uint64_t *psize, uint64_t *max_psize,
 	*max_psize = bdev_max_capacity(vd->vd_bdev, v->vdev_wholedisk);
 
 	/* Based on the minimum sector size set the block size */
-	*ashift = highbit64(MAX(block_size, SPA_MINBLOCKSIZE)) - 1;
+	*physical_ashift = highbit64(MAX(physical_block_size,
+	    SPA_MINBLOCKSIZE)) - 1;
+
+	*logical_ashift = highbit64(MAX(logical_block_size,
+	    SPA_MINBLOCKSIZE)) - 1;
 
 	return (0);
 }
@@ -394,54 +406,6 @@ BIO_END_IO_PROTO(vdev_disk_physio_completion, bio, error)
 
 	/* Drop reference acquired by __vdev_disk_physio */
 	rc = vdev_disk_dio_put(dr);
-}
-
-static unsigned int
-bio_map(struct bio *bio, void *bio_ptr, unsigned int bio_size)
-{
-	unsigned int offset, size, i;
-	struct page *page;
-
-	offset = offset_in_page(bio_ptr);
-	for (i = 0; i < bio->bi_max_vecs; i++) {
-		size = PAGE_SIZE - offset;
-
-		if (bio_size <= 0)
-			break;
-
-		if (size > bio_size)
-			size = bio_size;
-
-		if (is_vmalloc_addr(bio_ptr))
-			page = vmalloc_to_page(bio_ptr);
-		else
-			page = virt_to_page(bio_ptr);
-
-		/*
-		 * Some network related block device uses tcp_sendpage, which
-		 * doesn't behave well when using 0-count page, this is a
-		 * safety net to catch them.
-		 */
-		ASSERT3S(page_count(page), >, 0);
-
-		if (bio_add_page(bio, page, size, offset) != size)
-			break;
-
-		bio_ptr  += size;
-		bio_size -= size;
-		offset = 0;
-	}
-
-	return (bio_size);
-}
-
-static unsigned int
-bio_map_abd_off(struct bio *bio, abd_t *abd, unsigned int size, size_t off)
-{
-	if (abd_is_linear(abd))
-		return (bio_map(bio, ((char *)abd_to_buf(abd)) + off, size));
-
-	return (abd_scatter_bio_map_off(bio, abd, size, off));
 }
 
 static inline void
@@ -603,7 +567,7 @@ retry:
 		bio_set_op_attrs(dr->dr_bio[i], rw, flags);
 
 		/* Remaining size is returned to become the new size */
-		bio_size = bio_map_abd_off(dr->dr_bio[i], zio->io_abd,
+		bio_size = abd_bio_map_off(dr->dr_bio[i], zio->io_abd,
 		    bio_size, abd_offset);
 
 		/* Advance in buffer and construct another bio if needed */
@@ -867,3 +831,43 @@ char *zfs_vdev_scheduler = "unused";
 module_param_call(zfs_vdev_scheduler, param_set_vdev_scheduler,
     param_get_charp, &zfs_vdev_scheduler, 0644);
 MODULE_PARM_DESC(zfs_vdev_scheduler, "I/O scheduler");
+
+int
+param_set_min_auto_ashift(const char *buf, zfs_kernel_param_t *kp)
+{
+	uint64_t val;
+	int error;
+
+	error = kstrtoull(buf, 0, &val);
+	if (error < 0)
+		return (SET_ERROR(error));
+
+	if (val < ASHIFT_MIN || val > zfs_vdev_max_auto_ashift)
+		return (SET_ERROR(-EINVAL));
+
+	error = param_set_ulong(buf, kp);
+	if (error < 0)
+		return (SET_ERROR(error));
+
+	return (0);
+}
+
+int
+param_set_max_auto_ashift(const char *buf, zfs_kernel_param_t *kp)
+{
+	uint64_t val;
+	int error;
+
+	error = kstrtoull(buf, 0, &val);
+	if (error < 0)
+		return (SET_ERROR(error));
+
+	if (val > ASHIFT_MAX || val < zfs_vdev_min_auto_ashift)
+		return (SET_ERROR(-EINVAL));
+
+	error = param_set_ulong(buf, kp);
+	if (error < 0)
+		return (SET_ERROR(error));
+
+	return (0);
+}

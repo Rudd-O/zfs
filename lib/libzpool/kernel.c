@@ -26,22 +26,25 @@
 
 #include <assert.h>
 #include <fcntl.h>
+#include <libgen.h>
 #include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <zlib.h>
-#include <libgen.h>
+#include <sys/crypto/icp.h>
+#include <sys/processor.h>
+#include <sys/rrwlock.h>
 #include <sys/spa.h>
 #include <sys/stat.h>
-#include <sys/processor.h>
-#include <sys/zfs_context.h>
-#include <sys/rrwlock.h>
-#include <sys/utsname.h>
-#include <sys/time.h>
 #include <sys/systeminfo.h>
+#include <sys/time.h>
+#include <sys/utsname.h>
+#include <sys/zfs_context.h>
+#include <sys/zfs_onexit.h>
+#include <sys/zstd/zstd.h>
+#include <sys/zvol.h>
 #include <zfs_fletcher.h>
-#include <sys/crypto/icp.h>
+#include <zlib.h>
 
 /*
  * Emulation of kernel services in userland.
@@ -50,7 +53,6 @@
 uint64_t physmem;
 char hw_serial[HW_HOSTID_LEN];
 struct utsname hw_utsname;
-vmem_t *zio_arena = NULL;
 
 /* If set, all blocks read will be copied to the specified directory. */
 char *vn_dumpdir = NULL;
@@ -344,7 +346,7 @@ cv_wait_sig(kcondvar_t *cv, kmutex_t *mp)
 	return (1);
 }
 
-clock_t
+int
 cv_timedwait(kcondvar_t *cv, kmutex_t *mp, clock_t abstime)
 {
 	int error;
@@ -378,7 +380,7 @@ cv_timedwait(kcondvar_t *cv, kmutex_t *mp, clock_t abstime)
 }
 
 /*ARGSUSED*/
-clock_t
+int
 cv_timedwait_hires(kcondvar_t *cv, kmutex_t *mp, hrtime_t tim, hrtime_t res,
     int flag)
 {
@@ -835,6 +837,8 @@ kernel_init(int mode)
 	system_taskq_init();
 	icp_init();
 
+	zstd_init();
+
 	spa_init((spa_mode_t)mode);
 
 	fletcher_4_init();
@@ -847,6 +851,8 @@ kernel_fini(void)
 {
 	fletcher_4_fini();
 	spa_fini();
+
+	zstd_fini();
 
 	icp_fini();
 	system_taskq_fini();
@@ -904,6 +910,12 @@ zfs_secpolicy_destroy_perms(const char *name, cred_t *cr)
 
 int
 secpolicy_zfs(const cred_t *cr)
+{
+	return (0);
+}
+
+int
+secpolicy_zfs_proc(const cred_t *cr, proc_t *proc)
 {
 	return (0);
 }
@@ -973,20 +985,6 @@ zfs_onexit_add_cb(minor_t minor, void (*func)(void *), void *data,
 	return (0);
 }
 
-/* ARGSUSED */
-int
-zfs_onexit_del_cb(minor_t minor, uint64_t action_handle, boolean_t fire)
-{
-	return (0);
-}
-
-/* ARGSUSED */
-int
-zfs_onexit_cb_data(minor_t minor, uint64_t action_handle, void **data)
-{
-	return (0);
-}
-
 fstrans_cookie_t
 spl_fstrans_mark(void)
 {
@@ -1013,17 +1011,12 @@ kmem_cache_reap_active(void)
 void *zvol_tag = "zvol_tag";
 
 void
-zvol_create_minor(spa_t *spa, const char *name, boolean_t async)
+zvol_create_minor(const char *name)
 {
 }
 
 void
-zvol_create_minors_recursive(spa_t *spa, const char *name, boolean_t async)
-{
-}
-
-void
-zvol_remove_minor(spa_t *spa, const char *name, boolean_t async)
+zvol_create_minors_recursive(const char *name)
 {
 }
 

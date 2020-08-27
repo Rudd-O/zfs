@@ -343,7 +343,7 @@ dsl_dir_get_encryption_root_ddobj(dsl_dir_t *dd, uint64_t *rddobj)
 	    DSL_CRYPTO_KEY_ROOT_DDOBJ, 8, 1, rddobj));
 }
 
-int
+static int
 dsl_dir_get_encryption_version(dsl_dir_t *dd, uint64_t *version)
 {
 	*version = 0;
@@ -984,6 +984,7 @@ key_mapping_rele(spa_t *spa, dsl_key_mapping_t *km, void *tag)
 	rw_exit(&spa->spa_keystore.sk_km_lock);
 
 	spa_keystore_dsl_key_rele(spa, km->km_key, km);
+	zfs_refcount_destroy(&km->km_refcnt);
 	kmem_free(km, sizeof (dsl_key_mapping_t));
 }
 
@@ -2303,7 +2304,7 @@ dsl_crypto_recv_raw_key_sync(dsl_dataset_t *ds, nvlist_t *nvl, dmu_tx_t *tx)
 	    iters, tx);
 }
 
-int
+static int
 dsl_crypto_recv_key_check(void *arg, dmu_tx_t *tx)
 {
 	int ret;
@@ -2344,7 +2345,7 @@ out:
 	return (ret);
 }
 
-void
+static void
 dsl_crypto_recv_key_sync(void *arg, dmu_tx_t *tx)
 {
 	dsl_crypto_recv_key_arg_t *dcrka = arg;

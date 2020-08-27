@@ -982,7 +982,7 @@ vdev_raidz_reconstruct_pq(raidz_map_t *rm, int *tgts, int ntgts)
 /* BEGIN CSTYLED */
 /*
  * In the general case of reconstruction, we must solve the system of linear
- * equations defined by the coeffecients used to generate parity as well as
+ * equations defined by the coefficients used to generate parity as well as
  * the contents of the data and parity disks. This can be expressed with
  * vectors for the original data (D) and the actual data (d) and parity (p)
  * and a matrix composed of the identity matrix (I) and a dispersal matrix (V):
@@ -996,7 +996,7 @@ vdev_raidz_reconstruct_pq(raidz_map_t *rm, int *tgts, int ntgts)
  *            ~~   ~~                     ~~     ~~
  *
  * I is simply a square identity matrix of size n, and V is a vandermonde
- * matrix defined by the coeffecients we chose for the various parity columns
+ * matrix defined by the coefficients we chose for the various parity columns
  * (1, 2, 4). Note that these values were chosen both for simplicity, speedy
  * computation as well as linear separability.
  *
@@ -1554,7 +1554,7 @@ vdev_raidz_reconstruct(raidz_map_t *rm, const int *t, int nt)
 
 static int
 vdev_raidz_open(vdev_t *vd, uint64_t *asize, uint64_t *max_asize,
-    uint64_t *ashift)
+    uint64_t *logical_ashift, uint64_t *physical_ashift)
 {
 	vdev_t *cvd;
 	uint64_t nparity = vd->vdev_nparity;
@@ -1583,7 +1583,9 @@ vdev_raidz_open(vdev_t *vd, uint64_t *asize, uint64_t *max_asize,
 
 		*asize = MIN(*asize - 1, cvd->vdev_asize - 1) + 1;
 		*max_asize = MIN(*max_asize - 1, cvd->vdev_max_asize - 1) + 1;
-		*ashift = MAX(*ashift, cvd->vdev_ashift);
+		*logical_ashift = MAX(*logical_ashift, cvd->vdev_ashift);
+		*physical_ashift = MAX(*physical_ashift,
+		    cvd->vdev_physical_ashift);
 	}
 
 	*asize *= vd->vdev_children;

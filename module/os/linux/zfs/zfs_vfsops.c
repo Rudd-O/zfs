@@ -439,6 +439,14 @@ vscan_changed_cb(void *arg, uint64_t newval)
 }
 
 static void
+acl_mode_changed_cb(void *arg, uint64_t newval)
+{
+	zfsvfs_t *zfsvfs = arg;
+
+	zfsvfs->z_acl_mode = newval;
+}
+
+static void
 acl_inherit_changed_cb(void *arg, uint64_t newval)
 {
 	((zfsvfs_t *)arg)->z_acl_inherit = newval;
@@ -497,6 +505,8 @@ zfs_register_callbacks(vfs_t *vfsp)
 	    zfs_prop_to_name(ZFS_PROP_SNAPDIR), snapdir_changed_cb, zfsvfs);
 	error = error ? error : dsl_prop_register(ds,
 	    zfs_prop_to_name(ZFS_PROP_ACLTYPE), acltype_changed_cb, zfsvfs);
+	error = error ? error : dsl_prop_register(ds,
+	    zfs_prop_to_name(ZFS_PROP_ACLMODE), acl_mode_changed_cb, zfsvfs);
 	error = error ? error : dsl_prop_register(ds,
 	    zfs_prop_to_name(ZFS_PROP_ACLINHERIT), acl_inherit_changed_cb,
 	    zfsvfs);
@@ -868,10 +878,10 @@ zfsvfs_setup(zfsvfs_t *zfsvfs, boolean_t mounting)
 			    &zs) == 0) {
 				dataset_kstats_update_nunlinks_kstat(
 				    &zfsvfs->z_kstat, zs.zs_num_entries);
+				dprintf_ds(zfsvfs->z_os->os_dsl_dataset,
+				    "num_entries in unlinked set: %llu",
+				    zs.zs_num_entries);
 			}
-			dprintf_ds(zfsvfs->z_os->os_dsl_dataset,
-			    "num_entries in unlinked set: %llu",
-			    zs.zs_num_entries);
 			zfs_unlinked_drain(zfsvfs);
 			dsl_dir_t *dd = zfsvfs->z_os->os_dsl_dataset->ds_dir;
 			dd->dd_activity_cancelled = B_FALSE;
@@ -961,7 +971,7 @@ zfs_set_fuid_feature(zfsvfs_t *zfsvfs)
 	zfsvfs->z_use_sa = USE_SA(zfsvfs->z_version, zfsvfs->z_os);
 }
 
-void
+static void
 zfs_unregister_callbacks(zfsvfs_t *zfsvfs)
 {
 	objset_t *os = zfsvfs->z_os;
@@ -1011,7 +1021,7 @@ zfs_statfs_project(zfsvfs_t *zfsvfs, znode_t *zp, struct kstatfs *statp,
 
 	strlcpy(buf, DMU_OBJACCT_PREFIX, DMU_OBJACCT_PREFIX_LEN + 1);
 	err = zfs_id_to_fuidstr(zfsvfs, NULL, zp->z_projid, buf + offset,
-	    B_FALSE);
+	    sizeof (buf) - offset, B_FALSE);
 	if (err)
 		return (err);
 
@@ -1078,9 +1088,9 @@ objs:
 }
 
 int
-zfs_statvfs(struct dentry *dentry, struct kstatfs *statp)
+zfs_statvfs(struct inode *ip, struct kstatfs *statp)
 {
-	zfsvfs_t *zfsvfs = dentry->d_sb->s_fs_info;
+	zfsvfs_t *zfsvfs = ITOZSB(ip);
 	uint64_t refdbytes, availbytes, usedobjs, availobjs;
 	int err = 0;
 
@@ -1138,7 +1148,7 @@ zfs_statvfs(struct dentry *dentry, struct kstatfs *statp)
 
 	if (dmu_objset_projectquota_enabled(zfsvfs->z_os) &&
 	    dmu_objset_projectquota_present(zfsvfs->z_os)) {
-		znode_t *zp = ITOZ(dentry->d_inode);
+		znode_t *zp = ITOZ(ip);
 
 		if (zp->z_pflags & ZFS_PROJINHERIT && zp->z_projid &&
 		    zpl_is_valid_projid(zp->z_projid))
@@ -1149,7 +1159,7 @@ zfs_statvfs(struct dentry *dentry, struct kstatfs *statp)
 	return (err);
 }
 
-int
+static int
 zfs_root(zfsvfs_t *zfsvfs, struct inode **ipp)
 {
 	znode_t *rootzp;
@@ -2121,7 +2131,7 @@ zfs_init(void)
 {
 	zfsctl_init();
 	zfs_znode_init();
-	dmu_objset_register_type(DMU_OST_ZFS, zfs_space_delta_cb);
+	dmu_objset_register_type(DMU_OST_ZFS, zpl_get_file_info);
 	register_filesystem(&zpl_fs_type);
 }
 

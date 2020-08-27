@@ -94,6 +94,7 @@ struct zfsvfs {
 	boolean_t	z_fuid_dirty;   /* need to sync fuid table ? */
 	struct zfs_fuid_info	*z_fuid_replay; /* fuid info for replay */
 	zilog_t		*z_log;		/* intent log pointer */
+	uint_t		z_acl_mode;	/* acl chmod/mode behavior */
 	uint_t		z_acl_inherit;	/* acl inheritance behavior */
 	uint_t		z_acl_type;	/* type of ACL usable on this FS */
 	zfs_case_t	z_case;		/* case-sense */
@@ -194,6 +195,9 @@ typedef struct zfid_long {
 #define	SHORT_FID_LEN	(sizeof (zfid_short_t) - sizeof (uint16_t))
 #define	LONG_FID_LEN	(sizeof (zfid_long_t) - sizeof (uint16_t))
 
+extern void zfs_init(void);
+extern void zfs_fini(void);
+
 extern int zfs_suspend_fs(zfsvfs_t *zfsvfs);
 extern int zfs_resume_fs(zfsvfs_t *zfsvfs, struct dsl_dataset *ds);
 extern int zfs_end_fs(zfsvfs_t *zfsvfs, struct dsl_dataset *ds);
@@ -209,7 +213,7 @@ extern int zfs_domount(struct super_block *sb, zfs_mnt_t *zm, int silent);
 extern void zfs_preumount(struct super_block *sb);
 extern int zfs_umount(struct super_block *sb);
 extern int zfs_remount(struct super_block *sb, int *flags, zfs_mnt_t *zm);
-extern int zfs_statvfs(struct dentry *dentry, struct kstatfs *statp);
+extern int zfs_statvfs(struct inode *ip, struct kstatfs *statp);
 extern int zfs_vget(struct super_block *sb, struct inode **ipp, fid_t *fidp);
 extern int zfs_prune(struct super_block *sb, unsigned long nr_to_scan,
     int *objects);

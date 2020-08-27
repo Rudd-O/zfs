@@ -27,6 +27,7 @@
 #ifndef	_SYS_FS_ZFS_VFSOPS_H
 #define	_SYS_FS_ZFS_VFSOPS_H
 
+#include <sys/dataset_kstats.h>
 #include <sys/list.h>
 #include <sys/vfs.h>
 #include <sys/zil.h>
@@ -82,6 +83,7 @@ struct zfsvfs {
 	uint8_t		z_xattr;	/* xattr type in use */
 	uint64_t	z_version;	/* ZPL version */
 	uint64_t	z_shares_dir;	/* hidden shares dir */
+	dataset_kstats_t	z_kstat;	/* fs kstats */
 	kmutex_t	z_lock;
 	uint64_t	z_userquota_obj;
 	uint64_t	z_groupquota_obj;
@@ -150,6 +152,9 @@ typedef struct zfid_long {
 
 extern uint_t zfs_fsyncer_key;
 extern int zfs_super_owner;
+
+extern void zfs_init(void);
+extern void zfs_fini(void);
 
 extern int zfs_suspend_fs(zfsvfs_t *zfsvfs);
 extern int zfs_resume_fs(zfsvfs_t *zfsvfs, struct dsl_dataset *ds);

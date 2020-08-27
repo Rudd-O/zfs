@@ -752,6 +752,24 @@ test_wait_fs(const char *dataset)
 }
 
 static void
+test_get_bootenv(const char *pool)
+{
+	IOC_INPUT_TEST(ZFS_IOC_GET_BOOTENV, pool, NULL, NULL, 0);
+}
+
+static void
+test_set_bootenv(const char *pool)
+{
+	nvlist_t *required = fnvlist_alloc();
+
+	fnvlist_add_string(required, "envmap", "test");
+
+	IOC_INPUT_TEST(ZFS_IOC_SET_BOOTENV, pool, required, NULL, 0);
+
+	nvlist_free(required);
+}
+
+static void
 zfs_ioc_input_tests(const char *pool)
 {
 	char filepath[] = "/tmp/ioc_test_file_XXXXXX";
@@ -840,6 +858,9 @@ zfs_ioc_input_tests(const char *pool)
 	test_wait(pool);
 	test_wait_fs(dataset);
 
+	test_set_bootenv(pool);
+	test_get_bootenv(pool);
+
 	/*
 	 * cleanup
 	 */
@@ -897,7 +918,7 @@ enum zfs_ioc_ref {
  * Canonical reference check of /dev/zfs ioctl numbers.
  * These cannot change and new ioctl numbers must be appended.
  */
-boolean_t
+static boolean_t
 validate_ioc_values(void)
 {
 	boolean_t result = B_TRUE;
@@ -1000,6 +1021,8 @@ validate_ioc_values(void)
 	CHECK(ZFS_IOC_PLATFORM_BASE + 4 == ZFS_IOC_NEXTBOOT);
 	CHECK(ZFS_IOC_PLATFORM_BASE + 5 == ZFS_IOC_JAIL);
 	CHECK(ZFS_IOC_PLATFORM_BASE + 6 == ZFS_IOC_UNJAIL);
+	CHECK(ZFS_IOC_PLATFORM_BASE + 7 == ZFS_IOC_SET_BOOTENV);
+	CHECK(ZFS_IOC_PLATFORM_BASE + 8 == ZFS_IOC_GET_BOOTENV);
 
 #undef CHECK
 

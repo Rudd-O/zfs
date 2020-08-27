@@ -22,7 +22,7 @@
 /*
  * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2011, 2018 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2020 by Delphix. All rights reserved.
  * Copyright 2016 Igor Kozhukhov <ikozhukhov@gmail.com>
  * Copyright (c) 2018 Datto Inc.
  * Copyright (c) 2017 Open-E, Inc. All Rights Reserved.
@@ -429,7 +429,7 @@ zpool_get_prop(zpool_handle_t *zhp, zpool_prop_t prop, char *buf,
  * Assuming bootfs is a valid dataset name.
  */
 static boolean_t
-bootfs_name_valid(const char *pool, char *bootfs)
+bootfs_name_valid(const char *pool, const char *bootfs)
 {
 	int len = strlen(pool);
 	if (bootfs[0] == '\0')
@@ -444,17 +444,6 @@ bootfs_name_valid(const char *pool, char *bootfs)
 
 	return (B_FALSE);
 }
-
-boolean_t
-zpool_is_bootable(zpool_handle_t *zhp)
-{
-	char bootfs[ZFS_MAX_DATASET_NAME_LEN];
-
-	return (zpool_get_prop(zhp, ZPOOL_PROP_BOOTFS, bootfs,
-	    sizeof (bootfs), NULL, B_FALSE) == 0 && strncmp(bootfs, "-",
-	    sizeof (bootfs)) != 0);
-}
-
 
 /*
  * Given an nvlist of zpool properties to be set, validate that they are
@@ -2141,7 +2130,7 @@ xlate_init_err(int err)
  * Begin, suspend, or cancel the initialization (initializing of all free
  * blocks) for the given vdevs in the given pool.
  */
-int
+static int
 zpool_initialize_impl(zpool_handle_t *zhp, pool_initialize_func_t cmd_type,
     nvlist_t *vds, boolean_t wait)
 {
@@ -2277,49 +2266,25 @@ zpool_trim_wait(zpool_handle_t *zhp, nvlist_t *vdev_guids)
 }
 
 /*
- * Begin, suspend, or cancel the TRIM (discarding of all free blocks) for
- * the given vdevs in the given pool.
+ * Check errlist and report any errors, omitting ones which should be
+ * suppressed. Returns B_TRUE if any errors were reported.
  */
-int
-zpool_trim(zpool_handle_t *zhp, pool_trim_func_t cmd_type, nvlist_t *vds,
-    trimflags_t *trim_flags)
+static boolean_t
+check_trim_errs(zpool_handle_t *zhp, trimflags_t *trim_flags,
+    nvlist_t *guids_to_paths, nvlist_t *vds, nvlist_t *errlist)
 {
-	char msg[1024];
-	int err;
-
-	nvlist_t *vdev_guids = fnvlist_alloc();
-	nvlist_t *guids_to_paths = fnvlist_alloc();
-	nvlist_t *vd_errlist = NULL;
-	nvlist_t *errlist;
 	nvpair_t *elem;
+	boolean_t reported_errs = B_FALSE;
+	int num_vds = 0;
+	int num_suppressed_errs = 0;
 
-	err = zpool_translate_vdev_guids(zhp, vds, vdev_guids,
-	    guids_to_paths, &vd_errlist);
-	if (err == 0) {
-		err = lzc_trim(zhp->zpool_name, cmd_type, trim_flags->rate,
-		    trim_flags->secure, vdev_guids, &errlist);
-		if (err == 0) {
-			if (trim_flags->wait)
-				err = zpool_trim_wait(zhp, vdev_guids);
-
-			fnvlist_free(vdev_guids);
-			fnvlist_free(guids_to_paths);
-			return (err);
-		}
-
-		if (errlist != NULL) {
-			vd_errlist = fnvlist_lookup_nvlist(errlist,
-			    ZPOOL_TRIM_VDEVS);
-		}
-
-		(void) snprintf(msg, sizeof (msg),
-		    dgettext(TEXT_DOMAIN, "operation failed"));
-	} else {
-		verify(vd_errlist != NULL);
+	for (elem = nvlist_next_nvpair(vds, NULL);
+	    elem != NULL; elem = nvlist_next_nvpair(vds, elem)) {
+		num_vds++;
 	}
 
-	for (elem = nvlist_next_nvpair(vd_errlist, NULL);
-	    elem != NULL; elem = nvlist_next_nvpair(vd_errlist, elem)) {
+	for (elem = nvlist_next_nvpair(errlist, NULL);
+	    elem != NULL; elem = nvlist_next_nvpair(errlist, elem)) {
 		int64_t vd_error = xlate_trim_err(fnvpair_value_int64(elem));
 		char *path;
 
@@ -2331,9 +2296,11 @@ zpool_trim(zpool_handle_t *zhp, pool_trim_func_t cmd_type, nvlist_t *vds,
 		if (vd_error == EZFS_TRIM_NOTSUP &&
 		    trim_flags->fullpool &&
 		    !trim_flags->secure) {
+			num_suppressed_errs++;
 			continue;
 		}
 
+		reported_errs = B_TRUE;
 		if (nvlist_lookup_string(guids_to_paths, nvpair_name(elem),
 		    &path) != 0)
 			path = nvpair_name(elem);
@@ -2342,15 +2309,72 @@ zpool_trim(zpool_handle_t *zhp, pool_trim_func_t cmd_type, nvlist_t *vds,
 		    "cannot trim '%s'", path);
 	}
 
-	fnvlist_free(vdev_guids);
-	fnvlist_free(guids_to_paths);
-
-	if (vd_errlist != NULL) {
-		fnvlist_free(vd_errlist);
-		return (-1);
+	if (num_suppressed_errs == num_vds) {
+		(void) zfs_error_aux(zhp->zpool_hdl, dgettext(TEXT_DOMAIN,
+		    "no devices in pool support trim operations"));
+		(void) (zfs_error(zhp->zpool_hdl, EZFS_TRIM_NOTSUP,
+		    dgettext(TEXT_DOMAIN, "cannot trim")));
+		reported_errs = B_TRUE;
 	}
 
-	return (zpool_standard_error(zhp->zpool_hdl, err, msg));
+	return (reported_errs);
+}
+
+/*
+ * Begin, suspend, or cancel the TRIM (discarding of all free blocks) for
+ * the given vdevs in the given pool.
+ */
+int
+zpool_trim(zpool_handle_t *zhp, pool_trim_func_t cmd_type, nvlist_t *vds,
+    trimflags_t *trim_flags)
+{
+	int err;
+	int retval = 0;
+
+	nvlist_t *vdev_guids = fnvlist_alloc();
+	nvlist_t *guids_to_paths = fnvlist_alloc();
+	nvlist_t *errlist = NULL;
+
+	err = zpool_translate_vdev_guids(zhp, vds, vdev_guids,
+	    guids_to_paths, &errlist);
+	if (err != 0) {
+		check_trim_errs(zhp, trim_flags, guids_to_paths, vds, errlist);
+		retval = -1;
+		goto out;
+	}
+
+	err = lzc_trim(zhp->zpool_name, cmd_type, trim_flags->rate,
+	    trim_flags->secure, vdev_guids, &errlist);
+	if (err != 0) {
+		nvlist_t *vd_errlist;
+		if (errlist != NULL && nvlist_lookup_nvlist(errlist,
+		    ZPOOL_TRIM_VDEVS, &vd_errlist) == 0) {
+			if (check_trim_errs(zhp, trim_flags, guids_to_paths,
+			    vds, vd_errlist)) {
+				retval = -1;
+				goto out;
+			}
+		} else {
+			char msg[1024];
+
+			(void) snprintf(msg, sizeof (msg),
+			    dgettext(TEXT_DOMAIN, "operation failed"));
+			zpool_standard_error(zhp->zpool_hdl, err, msg);
+			retval = -1;
+			goto out;
+		}
+	}
+
+
+	if (trim_flags->wait)
+		retval = zpool_trim_wait(zhp, vdev_guids);
+
+out:
+	if (errlist != NULL)
+		fnvlist_free(errlist);
+	fnvlist_free(vdev_guids);
+	fnvlist_free(guids_to_paths);
+	return (retval);
 }
 
 /*
@@ -2411,7 +2435,8 @@ zpool_scan(zpool_handle_t *zhp, pool_scan_func_t func, pool_scrub_cmd_t cmd)
 		    ZPOOL_CONFIG_VDEV_TREE, &nvroot) == 0);
 		(void) nvlist_lookup_uint64_array(nvroot,
 		    ZPOOL_CONFIG_SCAN_STATS, (uint64_t **)&ps, &psc);
-		if (ps && ps->pss_func == POOL_SCAN_SCRUB) {
+		if (ps && ps->pss_func == POOL_SCAN_SCRUB &&
+		    ps->pss_state == DSS_SCANNING) {
 			if (cmd == POOL_SCRUB_PAUSE)
 				return (zfs_error(hdl, EZFS_SCRUB_PAUSED, msg));
 			else
@@ -3093,8 +3118,8 @@ is_replacing_spare(nvlist_t *search, nvlist_t *tgt, int which)
  * If 'replacing' is specified, the new disk will replace the old one.
  */
 int
-zpool_vdev_attach(zpool_handle_t *zhp,
-    const char *old_disk, const char *new_disk, nvlist_t *nvroot, int replacing)
+zpool_vdev_attach(zpool_handle_t *zhp, const char *old_disk,
+    const char *new_disk, nvlist_t *nvroot, int replacing, boolean_t rebuild)
 {
 	zfs_cmd_t zc = {"\0"};
 	char msg[1024];
@@ -3107,7 +3132,6 @@ zpool_vdev_attach(zpool_handle_t *zhp,
 	uint_t children;
 	nvlist_t *config_root;
 	libzfs_handle_t *hdl = zhp->zpool_hdl;
-	boolean_t rootpool = zpool_is_bootable(zhp);
 
 	if (replacing)
 		(void) snprintf(msg, sizeof (msg), dgettext(TEXT_DOMAIN,
@@ -3129,6 +3153,14 @@ zpool_vdev_attach(zpool_handle_t *zhp,
 
 	verify(nvlist_lookup_uint64(tgt, ZPOOL_CONFIG_GUID, &zc.zc_guid) == 0);
 	zc.zc_cookie = replacing;
+	zc.zc_simple = rebuild;
+
+	if (rebuild &&
+	    zfeature_lookup_guid("org.openzfs:device_rebuild", NULL) != 0) {
+		zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
+		    "the loaded zfs module doesn't support device rebuilds"));
+		return (zfs_error(hdl, EZFS_POOL_NOTSUP, msg));
+	}
 
 	if (nvlist_lookup_nvlist_array(nvroot, ZPOOL_CONFIG_CHILDREN,
 	    &child, &children) != 0 || children != 1) {
@@ -3167,18 +3199,8 @@ zpool_vdev_attach(zpool_handle_t *zhp,
 
 	zcmd_free_nvlists(&zc);
 
-	if (ret == 0) {
-		if (rootpool) {
-			/*
-			 * XXX need a better way to prevent user from
-			 * booting up a half-baked vdev.
-			 */
-			(void) fprintf(stderr, dgettext(TEXT_DOMAIN, "Make "
-			    "sure to wait until resilver is done "
-			    "before rebooting.\n"));
-		}
+	if (ret == 0)
 		return (0);
-	}
 
 	switch (errno) {
 	case ENOTSUP:
@@ -3189,16 +3211,21 @@ zpool_vdev_attach(zpool_handle_t *zhp,
 			uint64_t version = zpool_get_prop_int(zhp,
 			    ZPOOL_PROP_VERSION, NULL);
 
-			if (islog)
+			if (islog) {
 				zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
 				    "cannot replace a log with a spare"));
-			else if (version >= SPA_VERSION_MULTI_REPLACE)
+			} else if (rebuild) {
+				zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
+				    "only mirror vdevs support sequential "
+				    "reconstruction"));
+			} else if (version >= SPA_VERSION_MULTI_REPLACE) {
 				zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
 				    "already in replacing/spare config; wait "
 				    "for completion or use 'zpool detach'"));
-			else
+			} else {
 				zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
 				    "cannot replace a replacing device"));
+			}
 		} else {
 			zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
 			    "can only attach to mirrors and top-level "
@@ -3452,7 +3479,13 @@ zpool_vdev_split(zpool_handle_t *zhp, char *newname, nvlist_t **newroot,
 		lastlog = 0;
 		verify(nvlist_lookup_string(child[c], ZPOOL_CONFIG_TYPE, &type)
 		    == 0);
-		if (strcmp(type, VDEV_TYPE_MIRROR) != 0) {
+
+		if (strcmp(type, VDEV_TYPE_INDIRECT) == 0) {
+			vdev = child[c];
+			if (nvlist_dup(vdev, &varray[vcount++], 0) != 0)
+				goto out;
+			continue;
+		} else if (strcmp(type, VDEV_TYPE_MIRROR) != 0) {
 			zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
 			    "Source pool must be composed only of mirrors\n"));
 			retval = zfs_error(hdl, EZFS_INVALCONFIG, msg);
@@ -3595,13 +3628,6 @@ zpool_vdev_remove(zpool_handle_t *zhp, const char *path)
 		zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
 		    "pool must be upgraded to support log removal"));
 		return (zfs_error(hdl, EZFS_BADVERSION, msg));
-	}
-
-	if (!islog && !avail_spare && !l2cache && zpool_is_bootable(zhp)) {
-		zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
-		    "root pool can not have removed devices, "
-		    "because GRUB does not understand them"));
-		return (zfs_error(hdl, EINVAL, msg));
 	}
 
 	zc.zc_guid = fnvlist_lookup_uint64(tgt, ZPOOL_CONFIG_GUID);
@@ -4356,9 +4382,9 @@ zpool_events_seek(libzfs_handle_t *hdl, uint64_t eid, int zevent_fd)
 	return (error);
 }
 
-void
-zpool_obj_to_path(zpool_handle_t *zhp, uint64_t dsobj, uint64_t obj,
-    char *pathname, size_t len)
+static void
+zpool_obj_to_path_impl(zpool_handle_t *zhp, uint64_t dsobj, uint64_t obj,
+    char *pathname, size_t len, boolean_t always_unmounted)
 {
 	zfs_cmd_t zc = {"\0"};
 	boolean_t mounted = B_FALSE;
@@ -4385,7 +4411,8 @@ zpool_obj_to_path(zpool_handle_t *zhp, uint64_t dsobj, uint64_t obj,
 	(void) strlcpy(dsname, zc.zc_value, sizeof (dsname));
 
 	/* find out if the dataset is mounted */
-	mounted = is_mounted(zhp->zpool_hdl, dsname, &mntpnt);
+	mounted = !always_unmounted && is_mounted(zhp->zpool_hdl, dsname,
+	    &mntpnt);
 
 	/* get the corrupted object's path */
 	(void) strlcpy(zc.zc_name, dsname, sizeof (zc.zc_name));
@@ -4406,6 +4433,19 @@ zpool_obj_to_path(zpool_handle_t *zhp, uint64_t dsobj, uint64_t obj,
 	free(mntpnt);
 }
 
+void
+zpool_obj_to_path(zpool_handle_t *zhp, uint64_t dsobj, uint64_t obj,
+    char *pathname, size_t len)
+{
+	zpool_obj_to_path_impl(zhp, dsobj, obj, pathname, len, B_FALSE);
+}
+
+void
+zpool_obj_to_path_ds(zpool_handle_t *zhp, uint64_t dsobj, uint64_t obj,
+    char *pathname, size_t len)
+{
+	zpool_obj_to_path_impl(zhp, dsobj, obj, pathname, len, B_TRUE);
+}
 /*
  * Wait while the specified activity is in progress in the pool.
  */
@@ -4452,4 +4492,40 @@ zpool_wait_status(zpool_handle_t *zhp, zpool_wait_activity_t activity,
 	}
 
 	return (error);
+}
+
+int
+zpool_set_bootenv(zpool_handle_t *zhp, const char *envmap)
+{
+	int error = lzc_set_bootenv(zhp->zpool_name, envmap);
+	if (error != 0) {
+		(void) zpool_standard_error_fmt(zhp->zpool_hdl, error,
+		    dgettext(TEXT_DOMAIN,
+		    "error setting bootenv in pool '%s'"), zhp->zpool_name);
+	}
+
+	return (error);
+}
+
+int
+zpool_get_bootenv(zpool_handle_t *zhp, char *outbuf, size_t size, off_t offset)
+{
+	nvlist_t *nvl = NULL;
+	int error = lzc_get_bootenv(zhp->zpool_name, &nvl);
+	if (error != 0) {
+		(void) zpool_standard_error_fmt(zhp->zpool_hdl, error,
+		    dgettext(TEXT_DOMAIN,
+		    "error getting bootenv in pool '%s'"), zhp->zpool_name);
+		return (-1);
+	}
+	char *envmap = fnvlist_lookup_string(nvl, "envmap");
+	if (offset >= strlen(envmap)) {
+		fnvlist_free(nvl);
+		return (0);
+	}
+
+	strncpy(outbuf, envmap + offset, size);
+	int bytes = MIN(strlen(envmap + offset), size);
+	fnvlist_free(nvl);
+	return (bytes);
 }

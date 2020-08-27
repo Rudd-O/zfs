@@ -27,7 +27,6 @@
 #include <sys/spa_impl.h>
 #include <sys/txg.h>
 #include <sys/vdev_impl.h>
-#include <sys/refcount.h>
 #include <sys/metaslab_impl.h>
 #include <sys/dsl_synctask.h>
 #include <sys/zap.h>
@@ -558,6 +557,8 @@ vdev_initialize_thread(void *arg)
 	vd->vdev_initialize_thread = NULL;
 	cv_broadcast(&vd->vdev_initialize_cv);
 	mutex_exit(&vd->vdev_initialize_lock);
+
+	thread_exit();
 }
 
 /*

@@ -114,5 +114,11 @@ install() {
 		if ! [ -L "${initdir}/$systemdsystemunitdir/initrd.target.wants"/zfs-import.target ]; then
 			ln -s ../zfs-import.target "${initdir}/$systemdsystemunitdir/initrd.target.wants"/zfs-import.target
 		fi
+		for _service in zfs-snapshot-bootfs.service zfs-rollback-bootfs.service ; do
+			inst "${moddir}"/$_service "${systemdsystemunitdir}"/$_service
+			if ! [ -L "${initdir}/$systemdsystemunitdir/initrd.target.wants"/$_service ]; then
+				ln -s ../$_service "${initdir}/$systemdsystemunitdir/initrd.target.wants"/$_service
+			fi
+		done
 	fi
 }

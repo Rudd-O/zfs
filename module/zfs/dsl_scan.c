@@ -360,7 +360,7 @@ scan_init(void)
 	for (int i = 0; i < SPA_DVAS_PER_BP; i++) {
 		char name[36];
 
-		(void) sprintf(name, "sio_cache_%d", i);
+		(void) snprintf(name, sizeof (name), "sio_cache_%d", i);
 		sio_cache[i] = kmem_cache_create(name,
 		    (sizeof (scan_io_t) + ((i + 1) * sizeof (dva_t))),
 		    0, NULL, NULL, NULL, NULL, NULL, 0);
@@ -542,6 +542,22 @@ dsl_scan_init(dsl_pool_t *dp, uint64_t txg)
 			zfs_dbgmsg("new-style scrub was modified "
 			    "by old software; restarting in txg %llu",
 			    (longlong_t)scn->scn_restart_txg);
+		} else if (dsl_scan_resilvering(dp)) {
+			/*
+			 * If a resilver is in progress and there are already
+			 * errors, restart it instead of finishing this scan and
+			 * then restarting it. If there haven't been any errors
+			 * then remember that the incore DTL is valid.
+			 */
+			if (scn->scn_phys.scn_errors > 0) {
+				scn->scn_restart_txg = txg;
+				zfs_dbgmsg("resilver can't excise DTL_MISSING "
+				    "when finished; restarting in txg %llu",
+				    (u_longlong_t)scn->scn_restart_txg);
+			} else {
+				/* it's safe to excise DTL when finished */
+				spa->spa_scrub_started = B_TRUE;
+			}
 		}
 	}
 
@@ -688,8 +704,9 @@ static int
 dsl_scan_setup_check(void *arg, dmu_tx_t *tx)
 {
 	dsl_scan_t *scn = dmu_tx_pool(tx)->dp_scan;
+	vdev_t *rvd = scn->scn_dp->dp_spa->spa_root_vdev;
 
-	if (dsl_scan_is_running(scn))
+	if (dsl_scan_is_running(scn) || vdev_rebuild_active(rvd))
 		return (SET_ERROR(EBUSY));
 
 	return (0);
@@ -730,8 +747,12 @@ dsl_scan_setup_sync(void *arg, dmu_tx_t *tx)
 
 		if (vdev_resilver_needed(spa->spa_root_vdev,
 		    &scn->scn_phys.scn_min_txg, &scn->scn_phys.scn_max_txg)) {
-			spa_event_notify(spa, NULL, NULL,
+			nvlist_t *aux = fnvlist_alloc();
+			fnvlist_add_string(aux, ZFS_EV_RESILVER_TYPE,
+			    "healing");
+			spa_event_notify(spa, NULL, aux,
 			    ESC_ZFS_RESILVER_START);
+			nvlist_free(aux);
 		} else {
 			spa_event_notify(spa, NULL, NULL, ESC_ZFS_SCRUB_START);
 		}
@@ -745,6 +766,21 @@ dsl_scan_setup_sync(void *arg, dmu_tx_t *tx)
 		if (scn->scn_phys.scn_min_txg > TXG_INITIAL)
 			scn->scn_phys.scn_ddt_class_max = DDT_CLASS_DITTO;
 
+		/*
+		 * When starting a resilver clear any existing rebuild state.
+		 * This is required to prevent stale rebuild status from
+		 * being reported when a rebuild is run, then a resilver and
+		 * finally a scrub.  In which case only the scrub status
+		 * should be reported by 'zpool status'.
+		 */
+		if (scn->scn_phys.scn_func == POOL_SCAN_RESILVER) {
+			vdev_t *rvd = spa->spa_root_vdev;
+			for (uint64_t i = 0; i < rvd->vdev_children; i++) {
+				vdev_t *vd = rvd->vdev_child[i];
+				vdev_rebuild_clear_sync(
+				    (void *)(uintptr_t)vd->vdev_id, tx);
+			}
+		}
 	}
 
 	/* back to the generic stuff */
@@ -887,7 +923,6 @@ dsl_scan_done(dsl_scan_t *scn, boolean_t complete, dmu_tx_t *tx)
 		    "errors=%llu", (u_longlong_t)spa_get_errlog_size(spa));
 
 	if (DSL_SCAN_IS_SCRUB_RESILVER(scn)) {
-		spa->spa_scrub_started = B_FALSE;
 		spa->spa_scrub_active = B_FALSE;
 
 		/*
@@ -903,16 +938,30 @@ dsl_scan_done(dsl_scan_t *scn, boolean_t complete, dmu_tx_t *tx)
 		if (complete &&
 		    !spa_feature_is_active(spa, SPA_FEATURE_POOL_CHECKPOINT)) {
 			vdev_dtl_reassess(spa->spa_root_vdev, tx->tx_txg,
-			    scn->scn_phys.scn_max_txg, B_TRUE);
+			    scn->scn_phys.scn_max_txg, B_TRUE, B_FALSE);
 
-			spa_event_notify(spa, NULL, NULL,
-			    scn->scn_phys.scn_min_txg ?
-			    ESC_ZFS_RESILVER_FINISH : ESC_ZFS_SCRUB_FINISH);
+			if (scn->scn_phys.scn_min_txg) {
+				nvlist_t *aux = fnvlist_alloc();
+				fnvlist_add_string(aux, ZFS_EV_RESILVER_TYPE,
+				    "healing");
+				spa_event_notify(spa, NULL, aux,
+				    ESC_ZFS_RESILVER_FINISH);
+				nvlist_free(aux);
+			} else {
+				spa_event_notify(spa, NULL, NULL,
+				    ESC_ZFS_SCRUB_FINISH);
+			}
 		} else {
 			vdev_dtl_reassess(spa->spa_root_vdev, tx->tx_txg,
-			    0, B_TRUE);
+			    0, B_TRUE, B_FALSE);
 		}
 		spa_errlog_rotate(spa);
+
+		/*
+		 * Don't clear flag until after vdev_dtl_reassess to ensure that
+		 * DTL_MISSING will get updated when possible.
+		 */
+		spa->spa_scrub_started = B_FALSE;
 
 		/*
 		 * We may have finished replacing a device.
@@ -1577,7 +1626,7 @@ dsl_scan_prefetch_dnode(dsl_scan_t *scn, dnode_phys_t *dnp,
 	scan_prefetch_ctx_rele(spc, FTAG);
 }
 
-void
+static void
 dsl_scan_prefetch_cb(zio_t *zio, const zbookmark_phys_t *zb, const blkptr_t *bp,
     arc_buf_t *buf, void *private)
 {

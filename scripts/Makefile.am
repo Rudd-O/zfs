@@ -1,11 +1,11 @@
 pkgdatadir = $(datadir)/@PACKAGE@
 
 dist_pkgdata_SCRIPTS = \
-	$(top_srcdir)/scripts/zimport.sh \
-	$(top_srcdir)/scripts/zfs.sh \
-	$(top_srcdir)/scripts/zfs-tests.sh \
-	$(top_srcdir)/scripts/zloop.sh \
-	$(top_srcdir)/scripts/zfs-helpers.sh
+	zimport.sh \
+	zfs.sh \
+	zfs-tests.sh \
+	zloop.sh \
+	zfs-helpers.sh
 
 EXTRA_DIST = \
 	commitcheck.sh \
@@ -52,6 +52,7 @@ export KMOD_ZLUA=@abs_top_builddir@/module/lua/zlua.ko
 export KMOD_ICP=@abs_top_builddir@/module/icp/icp.ko
 export KMOD_ZFS=@abs_top_builddir@/module/zfs/zfs.ko
 export KMOD_FREEBSD=@abs_top_builddir@/module/openzfs.ko
+export KMOD_ZZSTD=@abs_top_builddir@/module/zstd/zzstd.ko
 endef
 
 export EXTRA_ENVIRONMENT

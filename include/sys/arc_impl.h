@@ -200,7 +200,7 @@ typedef struct l2arc_log_blkptr {
 	/*
 	 * lbp_prop has the following format:
 	 *	* logical size (in bytes)
-	 *	* physical (compressed) size (in bytes)
+	 *	* aligned (after compression) size (in bytes)
 	 *	* compression algorithm (we always LZ4-compress l2arc logs)
 	 *	* checksum algorithm (used for lbp_cksum)
 	 */
@@ -221,22 +221,33 @@ typedef struct l2arc_dev_hdr_phys {
 	 */
 	uint64_t	dh_spa_guid;
 	uint64_t	dh_vdev_guid;
-	uint64_t	dh_log_blk_ent;		/* entries per log blk */
+	uint64_t	dh_log_entries;		/* mirror of l2ad_log_entries */
 	uint64_t	dh_evict;		/* evicted offset in bytes */
 	uint64_t	dh_flags;		/* l2arc_dev_hdr_flags_t */
 	/*
 	 * Used in zdb.c for determining if a log block is valid, in the same
 	 * way that l2arc_rebuild() does.
 	 */
-	uint64_t	dh_start;
-	uint64_t	dh_end;
-
+	uint64_t	dh_start;		/* mirror of l2ad_start */
+	uint64_t	dh_end;			/* mirror of l2ad_end */
 	/*
 	 * Start of log block chain. [0] -> newest log, [1] -> one older (used
 	 * for initiating prefetch).
 	 */
 	l2arc_log_blkptr_t	dh_start_lbps[2];
-	const uint64_t		dh_pad[34];	/* pad to 512 bytes */
+	/*
+	 * Aligned size of all log blocks as accounted by vdev_space_update().
+	 */
+	uint64_t	dh_lb_asize;		/* mirror of l2ad_lb_asize */
+	uint64_t	dh_lb_count;		/* mirror of l2ad_lb_count */
+	/*
+	 * Mirrors of vdev_trim_action_time and vdev_trim_state, used to
+	 * display when the cache device was fully trimmed for the last
+	 * time.
+	 */
+	uint64_t		dh_trim_action_time;
+	uint64_t		dh_trim_state;
+	const uint64_t		dh_pad[30];	/* pad to 512 bytes */
 	zio_eck_t		dh_tail;
 } l2arc_dev_hdr_phys_t;
 CTASSERT_GLOBAL(sizeof (l2arc_dev_hdr_phys_t) == SPA_MINBLOCKSIZE);
@@ -258,12 +269,13 @@ typedef struct l2arc_log_ent_phys {
 	 */
 	uint64_t		le_prop;
 	uint64_t		le_daddr;	/* buf location on l2dev */
+	uint64_t		le_complevel;
 	/*
 	 * We pad the size of each entry to a power of 2 so that the size of
 	 * l2arc_log_blk_phys_t is power-of-2 aligned with SPA_MINBLOCKSHIFT,
 	 * because of the L2ARC_SET_*SIZE macros.
 	 */
-	const uint64_t		le_pad[3];	/* pad to 64 bytes	 */
+	const uint64_t		le_pad[2];	/* pad to 64 bytes	 */
 } l2arc_log_ent_phys_t;
 
 #define	L2ARC_LOG_BLK_MAX_ENTRIES	(1022)
@@ -387,6 +399,15 @@ typedef struct l2arc_dev {
 	uint64_t		l2ad_evict;	 /* evicted offset in bytes */
 	/* List of pointers to log blocks present in the L2ARC device */
 	list_t			l2ad_lbptr_list;
+	/*
+	 * Aligned size of all log blocks as accounted by vdev_space_update().
+	 */
+	zfs_refcount_t		l2ad_lb_asize;
+	/*
+	 * Number of log blocks present on the device.
+	 */
+	zfs_refcount_t		l2ad_lb_count;
+	boolean_t		l2ad_trim_all; /* TRIM whole device */
 } l2arc_dev_t;
 
 /*
@@ -440,6 +461,9 @@ struct arc_buf_hdr {
 	uint64_t		b_birth;
 
 	arc_buf_contents_t	b_type;
+	uint8_t			b_complevel;
+	uint8_t			b_reserved1; /* used for 4 byte alignment */
+	uint16_t		b_reserved2; /* used for 4 byte alignment */
 	arc_buf_hdr_t		*b_hash_next;
 	arc_flags_t		b_flags;
 
@@ -595,6 +619,13 @@ typedef struct arc_stats {
 	 * Not updated directly; only synced in arc_kstat_update.
 	 */
 	kstat_named_t arcstat_bonus_size;
+#if defined(COMPAT_FREEBSD11)
+	/*
+	 * Sum of the previous three counters, provided for compatibility.
+	 */
+	kstat_named_t arcstat_other_size;
+#endif
+
 	/*
 	 * Total number of bytes consumed by ARC buffers residing in the
 	 * arc_anon state. This includes *all* buffers in the arc_anon
@@ -738,14 +769,18 @@ typedef struct arc_stats {
 	 */
 	kstat_named_t arcstat_l2_log_blk_writes;
 	/*
-	 * Moving average of the physical size of the L2ARC log blocks, in
+	 * Moving average of the aligned size of the L2ARC log blocks, in
 	 * bytes. Updated during L2ARC rebuild and during writing of L2ARC
 	 * log blocks.
 	 */
-	kstat_named_t arcstat_l2_log_blk_avg_size;
+	kstat_named_t arcstat_l2_log_blk_avg_asize;
+	/* Aligned size of L2ARC log blocks on L2ARC devices. */
+	kstat_named_t arcstat_l2_log_blk_asize;
+	/* Number of L2ARC log blocks present on L2ARC devices. */
+	kstat_named_t arcstat_l2_log_blk_count;
 	/*
-	 * Moving average of the physical size of L2ARC restored data, in bytes,
-	 * to the physical size of their metadata in ARC, in bytes.
+	 * Moving average of the aligned size of L2ARC restored data, in bytes,
+	 * to the aligned size of their metadata in L2ARC, in bytes.
 	 * Updated during L2ARC rebuild and during writing of L2ARC log blocks.
 	 */
 	kstat_named_t arcstat_l2_data_to_meta_ratio;
@@ -780,6 +815,8 @@ typedef struct arc_stats {
 	kstat_named_t arcstat_l2_rebuild_abort_lowmem;
 	/* Logical size of L2ARC restored data, in bytes. */
 	kstat_named_t arcstat_l2_rebuild_size;
+	/* Aligned size of L2ARC restored data, in bytes. */
+	kstat_named_t arcstat_l2_rebuild_asize;
 	/*
 	 * Number of L2ARC log entries (buffers) that were successfully
 	 * restored in ARC.
@@ -790,8 +827,6 @@ typedef struct arc_stats {
 	 * were not restored again.
 	 */
 	kstat_named_t arcstat_l2_rebuild_bufs_precached;
-	/* Physical size of L2ARC restored data, in bytes. */
-	kstat_named_t arcstat_l2_rebuild_psize;
 	/*
 	 * Number of L2ARC log blocks that were restored successfully. Each
 	 * log block may hold up to L2ARC_LOG_BLK_MAX_ENTRIES buffers.
@@ -820,17 +855,14 @@ typedef struct arc_stats {
 	kstat_named_t arcstat_sys_free;
 	kstat_named_t arcstat_raw_size;
 	kstat_named_t arcstat_cached_only_in_progress;
+	kstat_named_t arcstat_abd_chunk_waste_size;
 } arc_stats_t;
 
-typedef enum free_memory_reason_t {
-	FMR_UNKNOWN,
-	FMR_NEEDFREE,
-	FMR_LOTSFREE,
-	FMR_SWAPFS_MINFREE,
-	FMR_PAGES_PP_MAXIMUM,
-	FMR_HEAP_ARENA,
-	FMR_ZIO_ARENA,
-} free_memory_reason_t;
+typedef struct arc_evict_waiter {
+	list_node_t aew_node;
+	kcondvar_t aew_cv;
+	uint64_t aew_count;
+} arc_evict_waiter_t;
 
 #define	ARCSTAT(stat)	(arc_stats.stat.value.ui64)
 
@@ -846,19 +878,14 @@ typedef enum free_memory_reason_t {
 #define	arc_c_min	ARCSTAT(arcstat_c_min)	/* min target cache size */
 #define	arc_c_max	ARCSTAT(arcstat_c_max)	/* max target cache size */
 #define	arc_sys_free	ARCSTAT(arcstat_sys_free) /* target system free bytes */
-#define	arc_need_free	ARCSTAT(arcstat_need_free) /* bytes to be freed */
 
-extern int arc_zio_arena_free_shift;
 extern taskq_t *arc_prune_taskq;
 extern arc_stats_t arc_stats;
 extern hrtime_t arc_growtime;
 extern boolean_t arc_warm;
 extern int arc_grow_retry;
+extern int arc_no_grow_shift;
 extern int arc_shrink_shift;
-extern zthr_t		*arc_adjust_zthr;
-extern kmutex_t		arc_adjust_lock;
-extern kcondvar_t	arc_adjust_waiters_cv;
-extern boolean_t	arc_adjust_needed;
 extern kmutex_t arc_prune_mtx;
 extern list_t arc_prune_list;
 extern aggsum_t arc_size;
@@ -866,10 +893,14 @@ extern arc_state_t	*arc_mfu;
 extern arc_state_t	*arc_mru;
 extern uint_t zfs_arc_pc_percent;
 extern int arc_lotsfree_percent;
+extern unsigned long zfs_arc_min;
+extern unsigned long zfs_arc_max;
 
 extern void arc_reduce_target_size(int64_t to_free);
 extern boolean_t arc_reclaim_needed(void);
 extern void arc_kmem_reap_soon(void);
+extern boolean_t arc_is_overflowing(void);
+extern void arc_wait_for_eviction(uint64_t);
 
 extern void arc_lowmem_init(void);
 extern void arc_lowmem_fini(void);
@@ -885,6 +916,10 @@ extern int param_set_arc_int(ZFS_MODULE_PARAM_ARGS);
 /* used in zdb.c */
 boolean_t l2arc_log_blkptr_valid(l2arc_dev_t *dev,
     const l2arc_log_blkptr_t *lbp);
+
+/* used in vdev_trim.c */
+void l2arc_dev_hdr_update(l2arc_dev_t *dev);
+l2arc_dev_t *l2arc_vdev_get(vdev_t *vd);
 
 #ifdef __cplusplus
 }
