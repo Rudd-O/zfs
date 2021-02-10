@@ -91,14 +91,7 @@ SYSCTL_INT(_debug_sizeof, OID_AUTO, znode, CTLFLAG_RD,
  * (such as VFS logic) that will not compile easily in userland.
  */
 #ifdef _KERNEL
-/*
- * Needed to close a small window in zfs_znode_move() that allows the zfsvfs to
- * be freed before it can be safely accessed.
- */
-krwlock_t zfsvfs_lock;
-
-#if defined(_KERNEL) && !defined(KMEM_DEBUG) && \
-    __FreeBSD_version >= 1300102
+#if !defined(KMEM_DEBUG) && __FreeBSD_version >= 1300102
 #define	_ZFS_USE_SMR
 static uma_zone_t znode_uma_zone;
 #else
@@ -156,7 +149,6 @@ zfs_znode_cache_constructor(void *buf, void *arg, int kmflags)
 
 	zp->z_acl_cached = NULL;
 	zp->z_vnode = NULL;
-	zp->z_moved = 0;
 	return (0);
 }
 
@@ -200,7 +192,6 @@ zfs_znode_init(void)
 	/*
 	 * Initialize zcache
 	 */
-	rw_init(&zfsvfs_lock, NULL, RW_DEFAULT, NULL);
 	ASSERT(znode_uma_zone == NULL);
 	znode_uma_zone = uma_zcreate("zfs_znode_cache",
 	    sizeof (znode_t), zfs_znode_cache_constructor_smr,
@@ -228,7 +219,6 @@ zfs_znode_init(void)
 	/*
 	 * Initialize zcache
 	 */
-	rw_init(&zfsvfs_lock, NULL, RW_DEFAULT, NULL);
 	ASSERT(znode_cache == NULL);
 	znode_cache = kmem_cache_create("zfs_znode_cache",
 	    sizeof (znode_t), 0, zfs_znode_cache_constructor,
@@ -267,7 +257,6 @@ zfs_znode_fini(void)
 		znode_cache = NULL;
 	}
 #endif
-	rw_destroy(&zfsvfs_lock);
 }
 
 
@@ -288,7 +277,6 @@ zfs_create_share_dir(zfsvfs_t *zfsvfs, dmu_tx_t *tx)
 
 	sharezp = zfs_znode_alloc_kmem(KM_SLEEP);
 	ASSERT(!POINTER_IS_VALID(sharezp->z_zfsvfs));
-	sharezp->z_moved = 0;
 	sharezp->z_unlinked = 0;
 	sharezp->z_atime_dirty = 0;
 	sharezp->z_zfsvfs = zfsvfs;
@@ -384,7 +372,7 @@ zfs_znode_dmu_fini(znode_t *zp)
 {
 	ASSERT(MUTEX_HELD(ZFS_OBJ_MUTEX(zp->z_zfsvfs, zp->z_id)) ||
 	    zp->z_unlinked ||
-	    RW_WRITE_HELD(&zp->z_zfsvfs->z_teardown_inactive_lock));
+	    ZFS_TEARDOWN_INACTIVE_WLOCKED(zp->z_zfsvfs));
 
 	sa_handle_destroy(zp->z_sa_hdl);
 	zp->z_sa_hdl = NULL;
@@ -447,12 +435,7 @@ zfs_znode_alloc(zfsvfs_t *zfsvfs, dmu_buf_t *db, int blksz,
 	vp->v_data = zp;
 
 	ASSERT(!POINTER_IS_VALID(zp->z_zfsvfs));
-	zp->z_moved = 0;
 
-	/*
-	 * Defer setting z_zfsvfs until the znode is ready to be a candidate for
-	 * the zfs_znode_move() callback.
-	 */
 	zp->z_sa_hdl = NULL;
 	zp->z_unlinked = 0;
 	zp->z_atime_dirty = 0;
@@ -529,11 +512,6 @@ zfs_znode_alloc(zfsvfs_t *zfsvfs, dmu_buf_t *db, int blksz,
 	mutex_enter(&zfsvfs->z_znodes_lock);
 	list_insert_tail(&zfsvfs->z_all_znodes, zp);
 	zfsvfs->z_nr_znodes++;
-	membar_producer();
-	/*
-	 * Everything else must be valid before assigning z_zfsvfs makes the
-	 * znode eligible for zfs_znode_move().
-	 */
 	zp->z_zfsvfs = zfsvfs;
 	mutex_exit(&zfsvfs->z_znodes_lock);
 
@@ -1711,7 +1689,6 @@ zfs_create_fs(objset_t *os, cred_t *cr, nvlist_t *zplprops, dmu_tx_t *tx)
 
 	rootzp = zfs_znode_alloc_kmem(KM_SLEEP);
 	ASSERT(!POINTER_IS_VALID(rootzp->z_zfsvfs));
-	rootzp->z_moved = 0;
 	rootzp->z_unlinked = 0;
 	rootzp->z_atime_dirty = 0;
 	rootzp->z_is_sa = USE_SA(version, os);
@@ -1928,8 +1905,10 @@ zfs_obj_to_path_impl(objset_t *osp, uint64_t obj, sa_handle_t *hdl,
 		size_t complen;
 		int is_xattrdir;
 
-		if (prevdb)
+		if (prevdb) {
+			ASSERT(prevhdl != NULL);
 			zfs_release_sa_handle(prevhdl, prevdb, FTAG);
+		}
 
 		if ((error = zfs_obj_to_pobj(osp, sa_hdl, sa_table, &pobj,
 		    &is_xattrdir)) != 0)
@@ -2033,6 +2012,20 @@ zfs_obj_to_stats(objset_t *osp, uint64_t obj, zfs_stat_t *sb,
 	zfs_release_sa_handle(hdl, db, FTAG);
 	return (error);
 }
+
+
+void
+zfs_znode_update_vfs(znode_t *zp)
+{
+	vm_object_t object;
+
+	if ((object = ZTOV(zp)->v_object) == NULL ||
+	    zp->z_size == object->un_pager.vnp.vnp_size)
+		return;
+
+	vnode_pager_setsize(ZTOV(zp), zp->z_size);
+}
+
 
 #ifdef _KERNEL
 int

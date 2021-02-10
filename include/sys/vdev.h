@@ -33,6 +33,7 @@
 #include <sys/zio.h>
 #include <sys/dmu.h>
 #include <sys/space_map.h>
+#include <sys/metaslab.h>
 #include <sys/fs/zfs.h>
 
 #ifdef	__cplusplus
@@ -49,10 +50,13 @@ typedef enum vdev_dtl_type {
 
 extern int zfs_nocacheflush;
 
+typedef boolean_t vdev_open_children_func_t(vdev_t *vd);
+
 extern void vdev_dbgmsg(vdev_t *vd, const char *fmt, ...);
 extern void vdev_dbgmsg_print_tree(vdev_t *, int);
 extern int vdev_open(vdev_t *);
 extern void vdev_open_children(vdev_t *);
+extern void vdev_open_children_subset(vdev_t *, vdev_open_children_func_t *);
 extern int vdev_validate(vdev_t *);
 extern int vdev_copy_path_strict(vdev_t *, vdev_t *);
 extern void vdev_copy_path_relaxed(vdev_t *, vdev_t *);
@@ -71,7 +75,10 @@ extern void vdev_dtl_dirty(vdev_t *vd, vdev_dtl_type_t d,
 extern boolean_t vdev_dtl_contains(vdev_t *vd, vdev_dtl_type_t d,
     uint64_t txg, uint64_t size);
 extern boolean_t vdev_dtl_empty(vdev_t *vd, vdev_dtl_type_t d);
-extern boolean_t vdev_dtl_need_resilver(vdev_t *vd, uint64_t off, size_t size);
+extern boolean_t vdev_default_need_resilver(vdev_t *vd, const dva_t *dva,
+    size_t psize, uint64_t phys_birth);
+extern boolean_t vdev_dtl_need_resilver(vdev_t *vd, const dva_t *dva,
+    size_t psize, uint64_t phys_birth);
 extern void vdev_dtl_reassess(vdev_t *vd, uint64_t txg, uint64_t scrub_txg,
     boolean_t scrub_done, boolean_t rebuild_done);
 extern boolean_t vdev_dtl_required(vdev_t *vd);
@@ -94,14 +101,22 @@ extern void vdev_rele(vdev_t *);
 extern int vdev_metaslab_init(vdev_t *vd, uint64_t txg);
 extern void vdev_metaslab_fini(vdev_t *vd);
 extern void vdev_metaslab_set_size(vdev_t *);
-extern void vdev_ashift_optimize(vdev_t *);
 extern void vdev_expand(vdev_t *vd, uint64_t txg);
 extern void vdev_split(vdev_t *vd);
 extern void vdev_deadman(vdev_t *vd, char *tag);
+
+typedef void vdev_xlate_func_t(void *arg, range_seg64_t *physical_rs);
+
+extern boolean_t vdev_xlate_is_empty(range_seg64_t *rs);
 extern void vdev_xlate(vdev_t *vd, const range_seg64_t *logical_rs,
-    range_seg64_t *physical_rs);
+    range_seg64_t *physical_rs, range_seg64_t *remain_rs);
+extern void vdev_xlate_walk(vdev_t *vd, const range_seg64_t *logical_rs,
+    vdev_xlate_func_t *func, void *arg);
 
 extern void vdev_get_stats_ex(vdev_t *vd, vdev_stat_t *vs, vdev_stat_ex_t *vsx);
+
+extern metaslab_group_t *vdev_get_mg(vdev_t *vd, metaslab_class_t *mc);
+
 extern void vdev_get_stats(vdev_t *vd, vdev_stat_t *vs);
 extern void vdev_clear_stats(vdev_t *vd);
 extern void vdev_stat_update(zio_t *zio, uint64_t psize);
@@ -181,7 +196,7 @@ extern void vdev_config_generate_stats(vdev_t *vd, nvlist_t *nv);
 extern void vdev_label_write(zio_t *zio, vdev_t *vd, int l, abd_t *buf, uint64_t
     offset, uint64_t size, zio_done_func_t *done, void *priv, int flags);
 extern int vdev_label_read_bootenv(vdev_t *, nvlist_t *);
-extern int vdev_label_write_bootenv(vdev_t *, char *);
+extern int vdev_label_write_bootenv(vdev_t *, nvlist_t *);
 
 typedef enum {
 	VDEV_LABEL_CREATE,	/* create/add a new device */

@@ -242,16 +242,11 @@ txg_thread_wait(tx_state_t *tx, callb_cpr_t *cpr, kcondvar_t *cv, clock_t time)
 {
 	CALLB_CPR_SAFE_BEGIN(cpr);
 
-	/*
-	 * cv_wait_sig() is used instead of cv_wait() in order to prevent
-	 * this process from incorrectly contributing to the system load
-	 * average when idle.
-	 */
 	if (time) {
-		(void) cv_timedwait_sig(cv, &tx->tx_sync_lock,
+		(void) cv_timedwait_idle(cv, &tx->tx_sync_lock,
 		    ddi_get_lbolt() + time);
 	} else {
-		cv_wait_sig(cv, &tx->tx_sync_lock);
+		cv_wait_idle(cv, &tx->tx_sync_lock);
 	}
 
 	CALLB_CPR_SAFE_END(cpr, &tx->tx_sync_lock);
@@ -297,6 +292,27 @@ txg_sync_stop(dsl_pool_t *dp)
 	mutex_exit(&tx->tx_sync_lock);
 }
 
+/*
+ * Get a handle on the currently open txg and keep it open.
+ *
+ * The txg is guaranteed to stay open until txg_rele_to_quiesce() is called for
+ * the handle. Once txg_rele_to_quiesce() has been called, the txg stays
+ * in quiescing state until txg_rele_to_sync() is called for the handle.
+ *
+ * It is guaranteed that subsequent calls return monotonically increasing
+ * txgs for the same dsl_pool_t. Of course this is not strong monotonicity,
+ * because the same txg can be returned multiple times in a row. This
+ * guarantee holds both for subsequent calls from one thread and for multiple
+ * threads. For example, it is impossible to observe the following sequence
+ * of events:
+ *
+ *           Thread 1                            Thread 2
+ *
+ *   1 <- txg_hold_open(P, ...)
+ *                                       2 <- txg_hold_open(P, ...)
+ *   1 <- txg_hold_open(P, ...)
+ *
+ */
 uint64_t
 txg_hold_open(dsl_pool_t *dp, txg_handle_t *th)
 {
@@ -310,9 +326,7 @@ txg_hold_open(dsl_pool_t *dp, txg_handle_t *th)
 	 * significance to the chosen tx_cpu. Because.. Why not use
 	 * the current cpu to index into the array?
 	 */
-	kpreempt_disable();
-	tc = &tx->tx_cpu[CPU_SEQID];
-	kpreempt_enable();
+	tc = &tx->tx_cpu[CPU_SEQID_UNSTABLE];
 
 	mutex_enter(&tc->tc_open_lock);
 	txg = tx->tx_open_txg;
@@ -400,7 +414,8 @@ txg_quiesce(dsl_pool_t *dp, uint64_t txg)
 	spa_txg_history_add(dp->dp_spa, txg + 1, tx_open_time);
 
 	/*
-	 * Quiesce the transaction group by waiting for everyone to txg_exit().
+	 * Quiesce the transaction group by waiting for everyone to
+	 * call txg_rele_to_sync() for their open transaction handles.
 	 */
 	for (c = 0; c < max_ncpus; c++) {
 		tx_cpu_t *tc = &tx->tx_cpu[c];
@@ -453,8 +468,9 @@ txg_dispatch_callbacks(dsl_pool_t *dp, uint64_t txg)
 			 * Commit callback taskq hasn't been created yet.
 			 */
 			tx->tx_commit_cb_taskq = taskq_create("tx_commit_cb",
-			    boot_ncpus, defclsyspri, boot_ncpus, boot_ncpus * 2,
-			    TASKQ_PREPOPULATE | TASKQ_DYNAMIC);
+			    100, defclsyspri, boot_ncpus, boot_ncpus * 2,
+			    TASKQ_PREPOPULATE | TASKQ_DYNAMIC |
+			    TASKQ_THREADS_CPU_PCT);
 		}
 
 		cb_list = kmem_alloc(sizeof (list_t), KM_SLEEP);
@@ -760,7 +776,8 @@ txg_wait_open(dsl_pool_t *dp, uint64_t txg, boolean_t should_quiesce)
 		if (should_quiesce == B_TRUE) {
 			cv_wait_io(&tx->tx_quiesce_done_cv, &tx->tx_sync_lock);
 		} else {
-			cv_wait_sig(&tx->tx_quiesce_done_cv, &tx->tx_sync_lock);
+			cv_wait_idle(&tx->tx_quiesce_done_cv,
+			    &tx->tx_sync_lock);
 		}
 	}
 	mutex_exit(&tx->tx_sync_lock);

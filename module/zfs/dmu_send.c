@@ -643,7 +643,7 @@ dump_freeobjects(dmu_send_cookie_t *dscp, uint64_t firstobj, uint64_t numobjs)
 	 * receiving side.
 	 */
 	if (maxobj > 0) {
-		if (maxobj < firstobj)
+		if (maxobj <= firstobj)
 			return (0);
 
 		if (maxobj < firstobj + numobjs)
@@ -663,8 +663,6 @@ dump_freeobjects(dmu_send_cookie_t *dscp, uint64_t firstobj, uint64_t numobjs)
 			return (SET_ERROR(EINTR));
 		dscp->dsc_pending_op = PENDING_NONE;
 	}
-	if (numobjs == 0)
-		numobjs = UINT64_MAX - firstobj;
 
 	if (dscp->dsc_pending_op == PENDING_FREEOBJECTS) {
 		/*
@@ -2628,7 +2626,7 @@ dmu_send_obj(const char *pool, uint64_t tosnap, uint64_t fromsnap,
 {
 	int err;
 	dsl_dataset_t *fromds;
-	ds_hold_flags_t dsflags = (rawok) ? 0 : DS_HOLD_FLAG_DECRYPT;
+	ds_hold_flags_t dsflags;
 	struct dmu_send_params dspp = {0};
 	dspp.embedok = embedok;
 	dspp.large_block_ok = large_block_ok;
@@ -2640,6 +2638,7 @@ dmu_send_obj(const char *pool, uint64_t tosnap, uint64_t fromsnap,
 	dspp.rawok = rawok;
 	dspp.savedok = savedok;
 
+	dsflags = (rawok) ? DS_HOLD_FLAG_NONE : DS_HOLD_FLAG_DECRYPT;
 	err = dsl_pool_hold(pool, FTAG, &dspp.dp);
 	if (err != 0)
 		return (err);
@@ -2686,12 +2685,15 @@ dmu_send_obj(const char *pool, uint64_t tosnap, uint64_t fromsnap,
 			bcopy(fromredact, dspp.fromredactsnaps, size);
 		}
 
-		if (!dsl_dataset_is_before(dspp.to_ds, fromds, 0)) {
+		boolean_t is_before =
+		    dsl_dataset_is_before(dspp.to_ds, fromds, 0);
+		dspp.is_clone = (dspp.to_ds->ds_dir !=
+		    fromds->ds_dir);
+		dsl_dataset_rele(fromds, FTAG);
+		if (!is_before) {
+			dsl_pool_rele(dspp.dp, FTAG);
 			err = SET_ERROR(EXDEV);
 		} else {
-			dspp.is_clone = (dspp.to_ds->ds_dir !=
-			    fromds->ds_dir);
-			dsl_dataset_rele(fromds, FTAG);
 			err = dmu_send_impl(&dspp);
 		}
 	} else {
@@ -2710,12 +2712,13 @@ dmu_send(const char *tosnap, const char *fromsnap, boolean_t embedok,
     dmu_send_outparams_t *dsop)
 {
 	int err = 0;
-	ds_hold_flags_t dsflags = (rawok) ? 0 : DS_HOLD_FLAG_DECRYPT;
+	ds_hold_flags_t dsflags;
 	boolean_t owned = B_FALSE;
 	dsl_dataset_t *fromds = NULL;
 	zfs_bookmark_phys_t book = {0};
 	struct dmu_send_params dspp = {0};
 
+	dsflags = (rawok) ? DS_HOLD_FLAG_NONE : DS_HOLD_FLAG_DECRYPT;
 	dspp.tosnap = tosnap;
 	dspp.embedok = embedok;
 	dspp.large_block_ok = large_block_ok;

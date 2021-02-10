@@ -96,6 +96,9 @@
  * which each have their own compilation environments and subsequent
  * requirements. Each of these environments must be considered when adding
  * dependencies from avl.c.
+ *
+ * Link to Illumos.org for more information on avl function:
+ * [1] https://illumos.org/man/9f/avl
  */
 
 #include <sys/types.h>
@@ -489,7 +492,6 @@ avl_insert(avl_tree_t *tree, void *new_data, avl_index_t where)
 	int which_child = AVL_INDEX2CHILD(where);
 	size_t off = tree->avl_offset;
 
-	ASSERT(tree);
 #ifdef _LP64
 	ASSERT(((uintptr_t)new_data & 0x7) == 0);
 #endif
@@ -676,8 +678,6 @@ avl_remove(avl_tree_t *tree, void *data)
 	int right;
 	int which_child;
 	size_t off = tree->avl_offset;
-
-	ASSERT(tree);
 
 	delete = AVL_DATA2NODE(data, off);
 

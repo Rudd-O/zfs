@@ -25,7 +25,9 @@
 #include <libzutil.h>
 
 #include <sys/nvpair.h>
+#include <sys/vdev_impl.h>
 #include <sys/zfs_ioctl.h>
+#include <sys/zfs_bootenv.h>
 
 /*
  * Test the nvpair inputs for the non-legacy zfs ioctl commands.
@@ -762,9 +764,10 @@ test_set_bootenv(const char *pool)
 {
 	nvlist_t *required = fnvlist_alloc();
 
-	fnvlist_add_string(required, "envmap", "test");
+	fnvlist_add_uint64(required, "version", VB_RAW);
+	fnvlist_add_string(required, GRUB_ENVMAP, "test");
 
-	IOC_INPUT_TEST(ZFS_IOC_SET_BOOTENV, pool, required, NULL, 0);
+	IOC_INPUT_TEST_WILD(ZFS_IOC_SET_BOOTENV, pool, required, NULL, 0);
 
 	nvlist_free(required);
 }
@@ -793,7 +796,7 @@ zfs_ioc_input_tests(const char *pool)
 	(void) snprintf(clonesnap, sizeof (clonesnap), "%s@snap", clone);
 	(void) snprintf(backup, sizeof (backup), "%s/backup", pool);
 
-	err = lzc_create(dataset, DMU_OST_ZFS, NULL, NULL, 0);
+	err = lzc_create(dataset, LZC_DATSET_TYPE_ZFS, NULL, NULL, -1);
 	if (err) {
 		(void) fprintf(stderr, "could not create '%s': %s\n",
 		    dataset, strerror(errno));

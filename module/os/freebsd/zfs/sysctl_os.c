@@ -114,6 +114,7 @@ SYSCTL_NODE(_vfs_zfs, OID_AUTO, spa, CTLFLAG_RW, 0, "ZFS space allocation");
 SYSCTL_NODE(_vfs_zfs, OID_AUTO, trim, CTLFLAG_RW, 0, "ZFS TRIM");
 SYSCTL_NODE(_vfs_zfs, OID_AUTO, txg, CTLFLAG_RW, 0, "ZFS transaction group");
 SYSCTL_NODE(_vfs_zfs, OID_AUTO, vdev, CTLFLAG_RW, 0, "ZFS VDEV");
+SYSCTL_NODE(_vfs_zfs, OID_AUTO, vnops, CTLFLAG_RW, 0, "ZFS VNOPS");
 SYSCTL_NODE(_vfs_zfs, OID_AUTO, zevent, CTLFLAG_RW, 0, "ZFS event");
 SYSCTL_NODE(_vfs_zfs, OID_AUTO, zil, CTLFLAG_RW, 0, "ZFS ZIL");
 SYSCTL_NODE(_vfs_zfs, OID_AUTO, zio, CTLFLAG_RW, 0, "ZFS ZIO");
@@ -121,6 +122,7 @@ SYSCTL_NODE(_vfs_zfs, OID_AUTO, zio, CTLFLAG_RW, 0, "ZFS ZIO");
 SYSCTL_NODE(_vfs_zfs_livelist, OID_AUTO, condense, CTLFLAG_RW, 0,
     "ZFS livelist condense");
 SYSCTL_NODE(_vfs_zfs_vdev, OID_AUTO, cache, CTLFLAG_RW, 0, "ZFS VDEV Cache");
+SYSCTL_NODE(_vfs_zfs_vdev, OID_AUTO, file, CTLFLAG_RW, 0, "ZFS VDEV file");
 SYSCTL_NODE(_vfs_zfs_vdev, OID_AUTO, mirror, CTLFLAG_RD, 0,
     "ZFS VDEV mirror");
 
@@ -227,23 +229,23 @@ SYSCTL_UQUAD(_vfs_zfs, OID_AUTO, l2c_only_size, CTLFLAG_RD,
 static int
 sysctl_vfs_zfs_arc_no_grow_shift(SYSCTL_HANDLER_ARGS)
 {
-	uint32_t val;
-	int err;
+	int err, val;
 
 	val = arc_no_grow_shift;
-	err = sysctl_handle_32(oidp, &val, 0, req);
+	err = sysctl_handle_int(oidp, &val, 0, req);
 	if (err != 0 || req->newptr == NULL)
 		return (err);
 
-        if (val >= arc_shrink_shift)
+        if (val < 0 || val >= arc_shrink_shift)
 		return (EINVAL);
 
 	arc_no_grow_shift = val;
 	return (0);
 }
 
-SYSCTL_PROC(_vfs_zfs, OID_AUTO, arc_no_grow_shift, CTLTYPE_U32 | CTLFLAG_RWTUN,
-    0, sizeof (uint32_t), sysctl_vfs_zfs_arc_no_grow_shift, "U",
+SYSCTL_PROC(_vfs_zfs, OID_AUTO, arc_no_grow_shift,
+    CTLTYPE_INT | CTLFLAG_RWTUN | CTLFLAG_MPSAFE, NULL, sizeof (int),
+    sysctl_vfs_zfs_arc_no_grow_shift, "I",
     "log2(fraction of ARC which must be free to allow growing)");
 
 int
@@ -274,10 +276,12 @@ param_set_arc_int(SYSCTL_HANDLER_ARGS)
 	return (0);
 }
 
-SYSCTL_PROC(_vfs_zfs, OID_AUTO, arc_min, CTLTYPE_ULONG | CTLFLAG_RWTUN,
+SYSCTL_PROC(_vfs_zfs, OID_AUTO, arc_min,
+    CTLTYPE_ULONG | CTLFLAG_RWTUN | CTLFLAG_MPSAFE,
     &zfs_arc_min, sizeof (zfs_arc_min), param_set_arc_long, "LU",
     "min arc size (LEGACY)");
-SYSCTL_PROC(_vfs_zfs, OID_AUTO, arc_max, CTLTYPE_ULONG | CTLFLAG_RWTUN,
+SYSCTL_PROC(_vfs_zfs, OID_AUTO, arc_max,
+    CTLTYPE_ULONG | CTLFLAG_RWTUN | CTLFLAG_MPSAFE,
     &zfs_arc_max, sizeof (zfs_arc_max), param_set_arc_long, "LU",
     "max arc size (LEGACY)");
 
@@ -296,8 +300,9 @@ SYSCTL_UINT(_vfs_zfs_zfetch, OID_AUTO, max_distance, CTLFLAG_RWTUN,
 
 /* max bytes to prefetch indirects for per stream (default 64MB) */
 extern uint32_t	zfetch_max_idistance;
-SYSCTL_UINT(_vfs_zfs_prefetch, OID_AUTO, max_idistance, CTLFLAG_RWTUN,
-    &zfetch_max_idistance, 0, "Max bytes to prefetch indirects for per stream");
+SYSCTL_UINT(_vfs_zfs_zfetch, OID_AUTO, max_idistance, CTLFLAG_RWTUN,
+    &zfetch_max_idistance, 0,
+    "Max bytes to prefetch indirects for per stream (LEGACY)");
 
 /* dsl_pool.c */
 
@@ -557,11 +562,13 @@ param_set_max_auto_ashift(SYSCTL_HANDLER_ARGS)
 	return (0);
 }
 
-SYSCTL_PROC(_vfs_zfs, OID_AUTO, min_auto_ashift, CTLTYPE_U64 | CTLFLAG_RWTUN,
+SYSCTL_PROC(_vfs_zfs, OID_AUTO, min_auto_ashift,
+    CTLTYPE_U64 | CTLFLAG_RWTUN | CTLFLAG_MPSAFE,
     &zfs_vdev_min_auto_ashift, sizeof (zfs_vdev_min_auto_ashift),
     param_set_min_auto_ashift, "QU",
     "Min ashift used when creating new top-level vdev. (LEGACY)");
-SYSCTL_PROC(_vfs_zfs, OID_AUTO, max_auto_ashift, CTLTYPE_U64 | CTLFLAG_RWTUN,
+SYSCTL_PROC(_vfs_zfs, OID_AUTO, max_auto_ashift,
+    CTLTYPE_U64 | CTLFLAG_RWTUN | CTLFLAG_MPSAFE,
     &zfs_vdev_max_auto_ashift, sizeof (zfs_vdev_max_auto_ashift),
     param_set_max_auto_ashift, "QU",
     "Max ashift used when optimizing for logical -> physical sector size on "

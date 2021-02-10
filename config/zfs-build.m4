@@ -153,6 +153,9 @@ AC_DEFUN([ZFS_AC_DEBUG_KMEM_TRACKING], [
 ])
 
 AC_DEFUN([ZFS_AC_CONFIG_ALWAYS], [
+	AX_COUNT_CPUS([])
+	AC_SUBST(CPU_COUNT)
+
 	ZFS_AC_CONFIG_ALWAYS_CC_NO_UNUSED_BUT_SET_VARIABLE
 	ZFS_AC_CONFIG_ALWAYS_CC_NO_BOOL_COMPARE
 	ZFS_AC_CONFIG_ALWAYS_CC_FRAME_LARGER_THAN
@@ -167,6 +170,7 @@ AC_DEFUN([ZFS_AC_CONFIG_ALWAYS], [
 	ZFS_AC_CONFIG_ALWAYS_PYTHON
 	ZFS_AC_CONFIG_ALWAYS_PYZFS
 	ZFS_AC_CONFIG_ALWAYS_SED
+	ZFS_AC_CONFIG_ALWAYS_CPPCHECK
 ])
 
 AC_DEFUN([ZFS_AC_CONFIG], [
@@ -180,7 +184,7 @@ AC_DEFUN([ZFS_AC_CONFIG], [
 		[Config file 'kernel|user|all|srpm']),
 		[ZFS_CONFIG="$withval"])
 	AC_ARG_ENABLE([linux-builtin],
-		[AC_HELP_STRING([--enable-linux-builtin],
+		[AS_HELP_STRING([--enable-linux-builtin],
 		[Configure for builtin in-tree kernel modules @<:@default=no@:>@])],
 		[],
 		[enable_linux_builtin=no])
@@ -191,12 +195,10 @@ AC_DEFUN([ZFS_AC_CONFIG], [
 
 	ZFS_AC_CONFIG_ALWAYS
 
-
 	AM_COND_IF([BUILD_LINUX], [
-		AC_ARG_VAR([TEST_JOBS],
-		    [simultaneous jobs during configure (defaults to $(nproc))])
+		AC_ARG_VAR([TEST_JOBS], [simultaneous jobs during configure])
 		if test "x$ac_cv_env_TEST_JOBS_set" != "xset"; then
-			TEST_JOBS=$(nproc)
+			TEST_JOBS=$CPU_COUNT
 		fi
 		AC_SUBST(TEST_JOBS)
 	])
@@ -282,7 +284,6 @@ AC_DEFUN([ZFS_AC_RPM], [
 	AS_IF([test -n "$udevruledir" ], [
 		RPM_DEFINE_UTIL=${RPM_DEFINE_UTIL}' --define "_udevruledir $(udevruledir)"'
 	])
-	RPM_DEFINE_UTIL=${RPM_DEFINE_UTIL}' $(DEFINE_INITRAMFS)'
 	RPM_DEFINE_UTIL=${RPM_DEFINE_UTIL}' $(DEFINE_SYSTEMD)'
 	RPM_DEFINE_UTIL=${RPM_DEFINE_UTIL}' $(DEFINE_PYZFS)'
 	RPM_DEFINE_UTIL=${RPM_DEFINE_UTIL}' $(DEFINE_PAM)'
@@ -542,13 +543,13 @@ AC_DEFUN([ZFS_AC_DEFAULT_PACKAGE], [
 
 	AC_MSG_CHECKING([whether initramfs-tools is available])
 	if test -d /usr/share/initramfs-tools ; then
-		DEFINE_INITRAMFS='--define "_initramfs 1"'
+		RPM_DEFINE_INITRAMFS='--define "_initramfs 1"'
 		AC_MSG_RESULT([yes])
 	else
-		DEFINE_INITRAMFS=''
+		RPM_DEFINE_INITRAMFS=''
 		AC_MSG_RESULT([no])
 	fi
-	AC_SUBST(DEFINE_INITRAMFS)
+	AC_SUBST(RPM_DEFINE_INITRAMFS)
 ])
 
 dnl #

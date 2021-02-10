@@ -40,11 +40,15 @@ libzutil_la_SOURCES = $(USER_C)
 libzutil_la_LIBADD = \
 	$(abs_top_builddir)/lib/libavl/libavl.la \
 	$(abs_top_builddir)/lib/libtpool/libtpool.la \
+	$(abs_top_builddir)/lib/libnvpair/libnvpair.la \
 	$(abs_top_builddir)/lib/libspl/libspl.la
 
 if BUILD_LINUX
 libzutil_la_LIBADD += \
-        $(abs_top_builddir)/lib/libefi/libefi.la
+	$(abs_top_builddir)/lib/libefi/libefi.la \
+	-lrt
 endif
 
 libzutil_la_LIBADD += -lm $(LIBBLKID_LIBS) $(LIBUDEV_LIBS)
+
+include $(top_srcdir)/config/CppCheck.am

@@ -27,7 +27,6 @@ USER_C = \
 	strlcat.c \
 	strlcpy.c \
 	timestamp.c \
-	zone.c \
 	include/sys/list.h \
 	include/sys/list_impl.h
 
@@ -35,7 +34,8 @@ if BUILD_LINUX
 USER_C += \
 	os/linux/getexecname.c \
 	os/linux/gethostid.c \
-	os/linux/getmntany.c
+	os/linux/getmntany.c \
+	os/linux/zone.c
 endif
 
 if BUILD_FREEBSD
@@ -43,7 +43,8 @@ USER_C += \
 	os/freebsd/getexecname.c \
 	os/freebsd/gethostid.c \
 	os/freebsd/getmntany.c \
-	os/freebsd/mnttab.c
+	os/freebsd/mnttab.c \
+	os/freebsd/zone.c
 endif
 
 libspl_la_SOURCES = \
@@ -54,3 +55,12 @@ libspl_la_LIBADD = \
 	libspl_assert.la
 
 libspl_la_LIBADD += $(LIBCLOCK_GETTIME)
+
+include $(top_srcdir)/config/CppCheck.am
+
+# Override the default SOURCES which includes TARGET_CPU_ATOMIC_SOURCE
+# in order to always evaluate the generic asm-generic/atomic.c source.
+CPPCHECKSRC = $(USER_C) asm-generic/atomic.c
+cppcheck:
+	$(CPPCHECK) -j$(CPU_COUNT) $(CPPCHECKFLAGS) --force \
+		$(DEFAULT_INCLUDES) $(CPPCHECKSRC)

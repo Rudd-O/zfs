@@ -274,10 +274,10 @@ static int
 zpl_xattr_get_dir(struct inode *ip, const char *name, void *value,
     size_t size, cred_t *cr)
 {
+	fstrans_cookie_t cookie;
 	struct inode *xip = NULL;
 	znode_t *dxzp = NULL;
 	znode_t *xzp = NULL;
-	loff_t pos = 0;
 	int error;
 
 	/* Lookup the xattr directory */
@@ -302,7 +302,19 @@ zpl_xattr_get_dir(struct inode *ip, const char *name, void *value,
 		goto out;
 	}
 
-	error = zpl_read_common(xip, value, size, &pos, UIO_SYSSPACE, 0, cr);
+	struct iovec iov;
+	iov.iov_base = (void *)value;
+	iov.iov_len = size;
+
+	zfs_uio_t uio;
+	zfs_uio_iovec_init(&uio, &iov, 1, 0, UIO_SYSSPACE, size, 0);
+
+	cookie = spl_fstrans_mark();
+	error = -zfs_read(ITOZ(xip), &uio, 0, cr);
+	spl_fstrans_unmark(cookie);
+
+	if (error == 0)
+		error = size - zfs_uio_resid(&uio);
 out:
 	if (xzp)
 		zrele(xzp);
@@ -441,7 +453,6 @@ zpl_xattr_set_dir(struct inode *ip, const char *name, const void *value,
 	znode_t *dxzp = NULL;
 	znode_t *xzp = NULL;
 	vattr_t *vap = NULL;
-	ssize_t wrote;
 	int lookup_flags, error;
 	const int xattr_mode = S_IFREG | 0644;
 	loff_t pos = 0;
@@ -496,13 +507,8 @@ zpl_xattr_set_dir(struct inode *ip, const char *name, const void *value,
 	if (error)
 		goto out;
 
-	wrote = zpl_write_common(ZTOI(xzp), value, size, &pos,
-	    UIO_SYSSPACE, 0, cr);
-	if (wrote < 0)
-		error = wrote;
-
+	error = -zfs_write_simple(xzp, value, size, pos, NULL);
 out:
-
 	if (error == 0) {
 		ip->i_ctime = current_time(ip);
 		zfs_mark_inode_dirty(ip);
@@ -1058,7 +1064,7 @@ zpl_init_acl(struct inode *ip, struct inode *dir)
 	struct posix_acl *acl = NULL;
 	int error = 0;
 
-	if (ITOZSB(ip)->z_acl_type != ZFS_ACLTYPE_POSIXACL)
+	if (ITOZSB(ip)->z_acl_type != ZFS_ACLTYPE_POSIX)
 		return (0);
 
 	if (!S_ISLNK(ip->i_mode)) {
@@ -1103,7 +1109,7 @@ zpl_chmod_acl(struct inode *ip)
 	struct posix_acl *acl;
 	int error;
 
-	if (ITOZSB(ip)->z_acl_type != ZFS_ACLTYPE_POSIXACL)
+	if (ITOZSB(ip)->z_acl_type != ZFS_ACLTYPE_POSIX)
 		return (0);
 
 	if (S_ISLNK(ip->i_mode))
@@ -1129,7 +1135,7 @@ __zpl_xattr_acl_list_access(struct inode *ip, char *list, size_t list_size,
 	char *xattr_name = XATTR_NAME_POSIX_ACL_ACCESS;
 	size_t xattr_size = sizeof (XATTR_NAME_POSIX_ACL_ACCESS);
 
-	if (ITOZSB(ip)->z_acl_type != ZFS_ACLTYPE_POSIXACL)
+	if (ITOZSB(ip)->z_acl_type != ZFS_ACLTYPE_POSIX)
 		return (0);
 
 	if (list && xattr_size <= list_size)
@@ -1146,7 +1152,7 @@ __zpl_xattr_acl_list_default(struct inode *ip, char *list, size_t list_size,
 	char *xattr_name = XATTR_NAME_POSIX_ACL_DEFAULT;
 	size_t xattr_size = sizeof (XATTR_NAME_POSIX_ACL_DEFAULT);
 
-	if (ITOZSB(ip)->z_acl_type != ZFS_ACLTYPE_POSIXACL)
+	if (ITOZSB(ip)->z_acl_type != ZFS_ACLTYPE_POSIX)
 		return (0);
 
 	if (list && xattr_size <= list_size)
@@ -1168,7 +1174,7 @@ __zpl_xattr_acl_get_access(struct inode *ip, const char *name,
 	if (strcmp(name, "") != 0)
 		return (-EINVAL);
 #endif
-	if (ITOZSB(ip)->z_acl_type != ZFS_ACLTYPE_POSIXACL)
+	if (ITOZSB(ip)->z_acl_type != ZFS_ACLTYPE_POSIX)
 		return (-EOPNOTSUPP);
 
 	acl = zpl_get_acl(ip, type);
@@ -1196,7 +1202,7 @@ __zpl_xattr_acl_get_default(struct inode *ip, const char *name,
 	if (strcmp(name, "") != 0)
 		return (-EINVAL);
 #endif
-	if (ITOZSB(ip)->z_acl_type != ZFS_ACLTYPE_POSIXACL)
+	if (ITOZSB(ip)->z_acl_type != ZFS_ACLTYPE_POSIX)
 		return (-EOPNOTSUPP);
 
 	acl = zpl_get_acl(ip, type);
@@ -1224,7 +1230,7 @@ __zpl_xattr_acl_set_access(struct inode *ip, const char *name,
 	if (strcmp(name, "") != 0)
 		return (-EINVAL);
 #endif
-	if (ITOZSB(ip)->z_acl_type != ZFS_ACLTYPE_POSIXACL)
+	if (ITOZSB(ip)->z_acl_type != ZFS_ACLTYPE_POSIX)
 		return (-EOPNOTSUPP);
 
 	if (!inode_owner_or_capable(ip))
@@ -1264,7 +1270,7 @@ __zpl_xattr_acl_set_default(struct inode *ip, const char *name,
 	if (strcmp(name, "") != 0)
 		return (-EINVAL);
 #endif
-	if (ITOZSB(ip)->z_acl_type != ZFS_ACLTYPE_POSIXACL)
+	if (ITOZSB(ip)->z_acl_type != ZFS_ACLTYPE_POSIX)
 		return (-EOPNOTSUPP);
 
 	if (!inode_owner_or_capable(ip))

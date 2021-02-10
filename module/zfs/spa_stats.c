@@ -122,14 +122,11 @@ static void
 spa_read_history_init(spa_t *spa)
 {
 	spa_history_list_t *shl = &spa->spa_stats.read_history;
-	char *module;
 
 	shl->size = 0;
-
-	module = kmem_asprintf("zfs/%s", spa_name(spa));
-
 	shl->procfs_list.pl_private = shl;
-	procfs_list_install(module,
+	procfs_list_install("zfs",
+	    spa_name(spa),
 	    "reads",
 	    0600,
 	    &shl->procfs_list,
@@ -137,8 +134,6 @@ spa_read_history_init(spa_t *spa)
 	    spa_read_history_show_header,
 	    spa_read_history_clear,
 	    offsetof(spa_read_history_t, srh_node));
-
-	kmem_strfree(module);
 }
 
 static void
@@ -293,14 +288,11 @@ static void
 spa_txg_history_init(spa_t *spa)
 {
 	spa_history_list_t *shl = &spa->spa_stats.txg_history;
-	char *module;
 
 	shl->size = 0;
-
-	module = kmem_asprintf("zfs/%s", spa_name(spa));
-
 	shl->procfs_list.pl_private = shl;
-	procfs_list_install(module,
+	procfs_list_install("zfs",
+	    spa_name(spa),
 	    "txgs",
 	    0644,
 	    &shl->procfs_list,
@@ -308,8 +300,6 @@ spa_txg_history_init(spa_t *spa)
 	    spa_txg_history_show_header,
 	    spa_txg_history_clear,
 	    offsetof(spa_txg_history_t, sth_node));
-
-	kmem_strfree(module);
 }
 
 static void
@@ -699,14 +689,12 @@ static void
 spa_mmp_history_init(spa_t *spa)
 {
 	spa_history_list_t *shl = &spa->spa_stats.mmp_history;
-	char *module;
 
 	shl->size = 0;
 
-	module = kmem_asprintf("zfs/%s", spa_name(spa));
-
 	shl->procfs_list.pl_private = shl;
-	procfs_list_install(module,
+	procfs_list_install("zfs",
+	    spa_name(spa),
 	    "multihost",
 	    0644,
 	    &shl->procfs_list,
@@ -714,8 +702,6 @@ spa_mmp_history_init(spa_t *spa)
 	    spa_mmp_history_show_header,
 	    spa_mmp_history_clear,
 	    offsetof(spa_mmp_history_t, smh_node));
-
-	kmem_strfree(module);
 }
 
 static void
@@ -835,7 +821,9 @@ spa_mmp_history_add(spa_t *spa, uint64_t txg, uint64_t timestamp,
 static void *
 spa_state_addr(kstat_t *ksp, loff_t n)
 {
-	return (ksp->ks_private);	/* return the spa_t */
+	if (n == 0)
+		return (ksp->ks_private);	/* return the spa_t */
+	return (NULL);
 }
 
 static int
@@ -1026,22 +1014,16 @@ spa_stats_destroy(spa_t *spa)
 	spa_mmp_history_destroy(spa);
 }
 
-#if defined(_KERNEL)
-/* CSTYLED */
-module_param(zfs_read_history, int, 0644);
-MODULE_PARM_DESC(zfs_read_history,
-	"Historical statistics for the last N reads");
+/* BEGIN CSTYLED */
+ZFS_MODULE_PARAM(zfs, zfs_, read_history, INT, ZMOD_RW,
+    "Historical statistics for the last N reads");
 
-module_param(zfs_read_history_hits, int, 0644);
-MODULE_PARM_DESC(zfs_read_history_hits,
-	"Include cache hits in read history");
+ZFS_MODULE_PARAM(zfs, zfs_, read_history_hits, INT, ZMOD_RW,
+    "Include cache hits in read history");
 
-module_param(zfs_txg_history, int, 0644);
-MODULE_PARM_DESC(zfs_txg_history,
-	"Historical statistics for the last N txgs");
+ZFS_MODULE_PARAM(zfs_txg, zfs_txg_, history, INT, ZMOD_RW,
+    "Historical statistics for the last N txgs");
 
-module_param(zfs_multihost_history, int, 0644);
-MODULE_PARM_DESC(zfs_multihost_history,
-	"Historical statistics for last N multihost writes");
+ZFS_MODULE_PARAM(zfs_multihost, zfs_multihost_, history, INT, ZMOD_RW,
+    "Historical statistics for last N multihost writes");
 /* END CSTYLED */
-#endif

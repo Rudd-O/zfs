@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012, 2019 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2020 by Delphix. All rights reserved.
  * Copyright (c) 2014 Spectra Logic Corporation, All rights reserved.
  */
 
@@ -609,7 +609,6 @@ dnode_allocate(dnode_t *dn, dmu_object_type_t ot, int blocksize, int ibs,
 	ASSERT0(dn->dn_maxblkid);
 	ASSERT0(dn->dn_allocated_txg);
 	ASSERT0(dn->dn_assigned_txg);
-	ASSERT0(dn->dn_dirty_txg);
 	ASSERT(zfs_refcount_is_zero(&dn->dn_tx_holds));
 	ASSERT3U(zfs_refcount_count(&dn->dn_holds), <=, 1);
 	ASSERT(avl_is_empty(&dn->dn_dbufs));
@@ -649,6 +648,7 @@ dnode_allocate(dnode_t *dn, dmu_object_type_t ot, int blocksize, int ibs,
 
 	dn->dn_free_txg = 0;
 	dn->dn_dirtyctx_firstset = NULL;
+	dn->dn_dirty_txg = 0;
 
 	dn->dn_allocated_txg = tx->tx_txg;
 	dn->dn_id_flags = 0;
@@ -1197,7 +1197,7 @@ dnode_special_open(objset_t *os, dnode_phys_t *dnp, uint64_t object,
 	dnode_t *dn;
 
 	zrl_init(&dnh->dnh_zrlock);
-	zrl_tryenter(&dnh->dnh_zrlock);
+	VERIFY3U(1, ==, zrl_tryenter(&dnh->dnh_zrlock));
 
 	dn = dnode_create(os, dnp, NULL, object, dnh);
 	DNODE_VERIFY(dn);
@@ -1355,7 +1355,8 @@ dnode_hold_impl(objset_t *os, uint64_t object, int flag, int slots,
 	 * We do not need to decrypt to read the dnode so it doesn't matter
 	 * if we get the encrypted or decrypted version.
 	 */
-	err = dbuf_read(db, NULL, DB_RF_CANFAIL | DB_RF_NO_DECRYPT);
+	err = dbuf_read(db, NULL, DB_RF_CANFAIL |
+	    DB_RF_NO_DECRYPT | DB_RF_NOPREFETCH);
 	if (err) {
 		DNODE_STAT_BUMP(dnode_hold_dbuf_read);
 		dbuf_rele(db, FTAG);
@@ -1811,6 +1812,7 @@ dnode_set_nlevels_impl(dnode_t *dn, int new_nlevels, dmu_tx_t *tx)
 
 	ASSERT(RW_WRITE_HELD(&dn->dn_struct_rwlock));
 
+	ASSERT3U(new_nlevels, >, dn->dn_nlevels);
 	dn->dn_nlevels = new_nlevels;
 
 	ASSERT3U(new_nlevels, >, dn->dn_next_nlevels[txgoff]);
@@ -1828,10 +1830,12 @@ dnode_set_nlevels_impl(dnode_t *dn, int new_nlevels, dmu_tx_t *tx)
 	list = &dn->dn_dirty_records[txgoff];
 	for (dr = list_head(list); dr; dr = dr_next) {
 		dr_next = list_next(&dn->dn_dirty_records[txgoff], dr);
-		if (dr->dr_dbuf->db_level != new_nlevels-1 &&
+
+		IMPLY(dr->dr_dbuf == NULL, old_nlevels == 1);
+		if (dr->dr_dbuf == NULL ||
+		    (dr->dr_dbuf->db_level == old_nlevels - 1 &&
 		    dr->dr_dbuf->db_blkid != DMU_BONUS_BLKID &&
-		    dr->dr_dbuf->db_blkid != DMU_SPILL_BLKID) {
-			ASSERT(dr->dr_dbuf->db_level == old_nlevels-1);
+		    dr->dr_dbuf->db_blkid != DMU_SPILL_BLKID)) {
 			list_remove(&dn->dn_dirty_records[txgoff], dr);
 			list_insert_tail(&new->dt.di.dr_children, dr);
 			dr->dr_parent = new;
@@ -1949,18 +1953,20 @@ static void
 dnode_dirty_l1range(dnode_t *dn, uint64_t start_blkid, uint64_t end_blkid,
     dmu_tx_t *tx)
 {
-	dmu_buf_impl_t db_search;
+	dmu_buf_impl_t *db_search;
 	dmu_buf_impl_t *db;
 	avl_index_t where;
 
+	db_search = kmem_zalloc(sizeof (dmu_buf_impl_t), KM_SLEEP);
+
 	mutex_enter(&dn->dn_dbufs_mtx);
 
-	db_search.db_level = 1;
-	db_search.db_blkid = start_blkid + 1;
-	db_search.db_state = DB_SEARCH;
+	db_search->db_level = 1;
+	db_search->db_blkid = start_blkid + 1;
+	db_search->db_state = DB_SEARCH;
 	for (;;) {
 
-		db = avl_find(&dn->dn_dbufs, &db_search, &where);
+		db = avl_find(&dn->dn_dbufs, db_search, &where);
 		if (db == NULL)
 			db = avl_nearest(&dn->dn_dbufs, where, AVL_AFTER);
 
@@ -1972,7 +1978,7 @@ dnode_dirty_l1range(dnode_t *dn, uint64_t start_blkid, uint64_t end_blkid,
 		/*
 		 * Setup the next blkid we want to search for.
 		 */
-		db_search.db_blkid = db->db_blkid + 1;
+		db_search->db_blkid = db->db_blkid + 1;
 		ASSERT3U(db->db_blkid, >=, start_blkid);
 
 		/*
@@ -1992,10 +1998,10 @@ dnode_dirty_l1range(dnode_t *dn, uint64_t start_blkid, uint64_t end_blkid,
 	/*
 	 * Walk all the in-core level-1 dbufs and verify they have been dirtied.
 	 */
-	db_search.db_level = 1;
-	db_search.db_blkid = start_blkid + 1;
-	db_search.db_state = DB_SEARCH;
-	db = avl_find(&dn->dn_dbufs, &db_search, &where);
+	db_search->db_level = 1;
+	db_search->db_blkid = start_blkid + 1;
+	db_search->db_state = DB_SEARCH;
+	db = avl_find(&dn->dn_dbufs, db_search, &where);
 	if (db == NULL)
 		db = avl_nearest(&dn->dn_dbufs, where, AVL_AFTER);
 	for (; db != NULL; db = AVL_NEXT(&dn->dn_dbufs, db)) {
@@ -2005,6 +2011,7 @@ dnode_dirty_l1range(dnode_t *dn, uint64_t start_blkid, uint64_t end_blkid,
 			ASSERT(db->db_dirtycnt > 0);
 	}
 #endif
+	kmem_free(db_search, sizeof (dmu_buf_impl_t));
 	mutex_exit(&dn->dn_dbufs_mtx);
 }
 
@@ -2393,7 +2400,8 @@ dnode_next_offset_level(dnode_t *dn, int flags, uint64_t *offset,
 			return (SET_ERROR(ESRCH));
 		}
 		error = dbuf_read(db, NULL,
-		    DB_RF_CANFAIL | DB_RF_HAVESTRUCT | DB_RF_NO_DECRYPT);
+		    DB_RF_CANFAIL | DB_RF_HAVESTRUCT |
+		    DB_RF_NO_DECRYPT | DB_RF_NOPREFETCH);
 		if (error) {
 			dbuf_rele(db, FTAG);
 			return (error);
