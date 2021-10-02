@@ -73,7 +73,7 @@ function scan_scsi_hosts
 function block_device_wait
 {
 	if is_linux; then
-		udevadm trigger $*
+		udevadm trigger $* 2>/dev/null
 		typeset start=$SECONDS
 		udevadm settle
 		typeset elapsed=$((SECONDS - start))
@@ -93,7 +93,7 @@ function block_device_wait
 		typeset missing=false
 		typeset dev
 		for dev in "${@}"; do
-			if ! [[ -f $dev ]]; then
+			if ! [[ -e $dev ]]; then
 				missing=true
 				break
 			fi

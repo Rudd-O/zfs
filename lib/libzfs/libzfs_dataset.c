@@ -1363,9 +1363,8 @@ badlabel:
 				(void) zfs_error(hdl, EZFS_BADPROP, errbuf);
 				goto error;
 			}
+			fallthrough;
 		}
-
-			/*FALLTHRU*/
 
 		case ZFS_PROP_SHARESMB:
 		case ZFS_PROP_SHARENFS:
@@ -3775,8 +3774,8 @@ zfs_create(libzfs_handle_t *hdl, const char *path, zfs_type_t type,
 			if (type == ZFS_TYPE_VOLUME)
 				return (zfs_error(hdl, EZFS_VOLTOOBIG,
 				    errbuf));
+			fallthrough;
 #endif
-			/* FALLTHROUGH */
 		default:
 			return (zfs_standard_error(hdl, errno, errbuf));
 		}
@@ -3885,9 +3884,12 @@ zfs_destroy_snaps(zfs_handle_t *zhp, char *snapname, boolean_t defer)
 int
 zfs_destroy_snaps_nvl(libzfs_handle_t *hdl, nvlist_t *snaps, boolean_t defer)
 {
-	int ret;
 	nvlist_t *errlist = NULL;
 	nvpair_t *pair;
+
+	int ret = zfs_destroy_snaps_nvl_os(hdl, snaps);
+	if (ret != 0)
+		return (ret);
 
 	ret = lzc_destroy_snaps(snaps, defer, &errlist);
 
