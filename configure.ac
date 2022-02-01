@@ -147,8 +147,6 @@ AC_CONFIG_FILES([
 	lib/libshare/Makefile
 	lib/libspl/Makefile
 	lib/libspl/include/Makefile
-	lib/libspl/include/ia32/Makefile
-	lib/libspl/include/ia32/sys/Makefile
 	lib/libspl/include/os/Makefile
 	lib/libspl/include/os/freebsd/Makefile
 	lib/libspl/include/os/freebsd/sys/Makefile
@@ -213,6 +211,7 @@ AC_CONFIG_FILES([
 	tests/zfs-tests/cmd/file_trunc/Makefile
 	tests/zfs-tests/cmd/file_write/Makefile
 	tests/zfs-tests/cmd/get_diff/Makefile
+	tests/zfs-tests/cmd/getversion/Makefile
 	tests/zfs-tests/cmd/largest_file/Makefile
 	tests/zfs-tests/cmd/libzfs_input_check/Makefile
 	tests/zfs-tests/cmd/mkbusy/Makefile
@@ -388,6 +387,7 @@ AC_CONFIG_FILES([
 	tests/zfs-tests/tests/functional/snapshot/Makefile
 	tests/zfs-tests/tests/functional/snapused/Makefile
 	tests/zfs-tests/tests/functional/sparse/Makefile
+	tests/zfs-tests/tests/functional/stat/Makefile
 	tests/zfs-tests/tests/functional/suid/Makefile
 	tests/zfs-tests/tests/functional/threadsappend/Makefile
 	tests/zfs-tests/tests/functional/tmpfile/Makefile

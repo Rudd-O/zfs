@@ -73,7 +73,7 @@ distclean-local::
 		-o -name 'core' -o -name 'Makefile' -o -name 'Module.symvers' \
 		-o -name '*.order' -o -name '*.markers' -o -name '*.gcda' \
 		-o -name '*.gcno' \) \
-		-type f -print | xargs $(RM)
+		-type f -delete
 
 all-local:
 	-[ -x ${top_builddir}/scripts/zfs-tests.sh ] && \
@@ -115,6 +115,11 @@ commitcheck:
 		${top_srcdir}/scripts/commitcheck.sh; \
 	fi
 
+if HAVE_PARALLEL
+cstyle_line = -print0 | parallel -X0 ${top_srcdir}/scripts/cstyle.pl -cpP {}
+else
+cstyle_line = -exec ${top_srcdir}/scripts/cstyle.pl -cpP {} +
+endif
 PHONY += cstyle
 cstyle:
 	@find ${top_srcdir} -name build -prune \
@@ -122,7 +127,10 @@ cstyle:
 		! -name 'zfs_config.*' ! -name '*.mod.c' \
 		! -name 'opt_global.h' ! -name '*_if*.h' \
 		! -path './module/zstd/lib/*' \
-		-exec ${top_srcdir}/scripts/cstyle.pl -cpP {} \+
+		! -path './include/sys/lua/*' \
+		! -path './module/lua/l*.[ch]' \
+		! -path './module/zfs/lz4.c' \
+		$(cstyle_line)
 
 filter_executable = -exec test -x '{}' \; -print
 
@@ -151,21 +159,14 @@ PHONY += mancheck
 mancheck:
 	${top_srcdir}/scripts/mancheck.sh ${top_srcdir}/man ${top_srcdir}/tests/test-runner/man
 
-if BUILD_LINUX
-stat_fmt = -c '%A %n'
-else
-stat_fmt = -f '%Sp %N'
-endif
-
 PHONY += testscheck
 testscheck:
-	@find ${top_srcdir}/tests/zfs-tests -type f \
+	@[ $$(find ${top_srcdir}/tests/zfs-tests -type f \
 		\( -name '*.ksh' -not ${filter_executable} \) -o \
 		\( -name '*.kshlib' ${filter_executable} \) -o \
 		\( -name '*.shlib' ${filter_executable} \) -o \
 		\( -name '*.cfg' ${filter_executable} \) | \
-		xargs -r stat ${stat_fmt} | \
-		awk '{c++; print} END {if(c>0) exit 1}'
+		tee /dev/stderr | wc -l) -eq 0 ]
 
 PHONY += vcscheck
 vcscheck:
@@ -208,13 +209,13 @@ PHONY += ctags
 ctags:
 	$(RM) tags
 	find $(top_srcdir) -name '.?*' -prune \
-		-o -type f -name '*.[hcS]' -print | xargs ctags -a
+		-o -type f -name '*.[hcS]' -exec ctags -a {} +
 
 PHONY += etags
 etags:
 	$(RM) TAGS
 	find $(top_srcdir) -name '.?*' -prune \
-		-o -type f -name '*.[hcS]' -print | xargs etags -a
+		-o -type f -name '*.[hcS]' -exec etags -a {} +
 
 PHONY += cscopelist
 cscopelist:
