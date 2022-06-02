@@ -86,7 +86,7 @@ static int zfs_dmu_offset_next_sync = 1;
  * helps to limit the amount of memory that can be used by prefetching.
  * Larger objects should be prefetched a bit at a time.
  */
-static int dmu_prefetch_max = 8 * SPA_MAXBLOCKSIZE;
+int dmu_prefetch_max = 8 * SPA_MAXBLOCKSIZE;
 
 const dmu_object_type_info_t dmu_ot[DMU_OT_NUMTYPES] = {
 	{DMU_BSWAP_UINT8,  TRUE,  FALSE, FALSE, "unallocated"		},
@@ -1012,7 +1012,7 @@ dmu_read_impl(dnode_t *dn, uint64_t offset, uint64_t size,
 	if (dn->dn_maxblkid == 0) {
 		uint64_t newsz = offset > dn->dn_datablksz ? 0 :
 		    MIN(size, dn->dn_datablksz - offset);
-		bzero((char *)buf + newsz, size - newsz);
+		memset((char *)buf + newsz, 0, size - newsz);
 		size = newsz;
 	}
 
@@ -2077,9 +2077,9 @@ dmu_write_policy(objset_t *os, dnode_t *dn, int level, int wp, zio_prop_t *zp)
 	zp->zp_nopwrite = nopwrite;
 	zp->zp_encrypt = encrypt;
 	zp->zp_byteorder = ZFS_HOST_BYTEORDER;
-	bzero(zp->zp_salt, ZIO_DATA_SALT_LEN);
-	bzero(zp->zp_iv, ZIO_DATA_IV_LEN);
-	bzero(zp->zp_mac, ZIO_DATA_MAC_LEN);
+	memset(zp->zp_salt, 0, ZIO_DATA_SALT_LEN);
+	memset(zp->zp_iv, 0, ZIO_DATA_IV_LEN);
+	memset(zp->zp_mac, 0, ZIO_DATA_MAC_LEN);
 	zp->zp_zpl_smallblk = DMU_OT_IS_FILE(zp->zp_type) ?
 	    os->os_zpl_special_smallblock : 0;
 

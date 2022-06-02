@@ -898,6 +898,7 @@ typedef struct spa_stats {
 	spa_history_kstat_t	tx_assign_histogram;
 	spa_history_list_t	mmp_history;
 	spa_history_kstat_t	state;		/* pool state */
+	spa_history_kstat_t	guid;		/* pool guid */
 	spa_history_kstat_t	iostats;
 } spa_stats_t;
 
@@ -1144,11 +1145,17 @@ extern void zfs_post_remove(spa_t *spa, vdev_t *vd);
 extern void zfs_post_state_change(spa_t *spa, vdev_t *vd, uint64_t laststate);
 extern void zfs_post_autoreplace(spa_t *spa, vdev_t *vd);
 extern uint64_t spa_get_errlog_size(spa_t *spa);
-extern int spa_get_errlog(spa_t *spa, void *uaddr, size_t *count);
+extern int spa_get_errlog(spa_t *spa, void *uaddr, uint64_t *count);
 extern void spa_errlog_rotate(spa_t *spa);
 extern void spa_errlog_drain(spa_t *spa);
 extern void spa_errlog_sync(spa_t *spa, uint64_t txg);
 extern void spa_get_errlists(spa_t *spa, avl_tree_t *last, avl_tree_t *scrub);
+extern void spa_delete_dataset_errlog(spa_t *spa, uint64_t ds, dmu_tx_t *tx);
+extern void spa_swap_errlog(spa_t *spa, uint64_t new_head_ds,
+    uint64_t old_head_ds, dmu_tx_t *tx);
+extern void sync_error_list(spa_t *spa, avl_tree_t *t, uint64_t *obj,
+    dmu_tx_t *tx);
+extern void spa_upgrade_errlog(spa_t *spa, dmu_tx_t *tx);
 
 /* vdev cache */
 extern void vdev_cache_stat_init(void);
@@ -1182,6 +1189,11 @@ extern int spa_wait_tag(const char *name, zpool_wait_activity_t activity,
     uint64_t tag, boolean_t *waited);
 extern void spa_notify_waiters(spa_t *spa);
 extern void spa_wake_waiters(spa_t *spa);
+
+extern void spa_import_os(spa_t *spa);
+extern void spa_export_os(spa_t *spa);
+extern void spa_activate_os(spa_t *spa);
+extern void spa_deactivate_os(spa_t *spa);
 
 /* module param call functions */
 int param_set_deadman_ziotime(ZFS_MODULE_PARAM_ARGS);

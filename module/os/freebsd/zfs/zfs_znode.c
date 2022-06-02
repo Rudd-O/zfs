@@ -153,13 +153,16 @@ zfs_znode_cache_constructor(void *buf, void *arg, int kmflags)
 	zp->z_xattr_cached = NULL;
 	zp->z_xattr_parent = 0;
 	zp->z_vnode = NULL;
+	zp->z_sync_writes_cnt = 0;
+	zp->z_async_writes_cnt = 0;
+
 	return (0);
 }
 
-/*ARGSUSED*/
 static void
 zfs_znode_cache_destructor(void *buf, void *arg)
 {
+	(void) arg;
 	znode_t *zp = buf;
 
 	ASSERT(!POINTER_IS_VALID(zp->z_zfsvfs));
@@ -172,6 +175,9 @@ zfs_znode_cache_destructor(void *buf, void *arg)
 
 	ASSERT3P(zp->z_acl_cached, ==, NULL);
 	ASSERT3P(zp->z_xattr_cached, ==, NULL);
+
+	ASSERT0(atomic_load_32(&zp->z_sync_writes_cnt));
+	ASSERT0(atomic_load_32(&zp->z_async_writes_cnt));
 }
 
 
@@ -453,6 +459,8 @@ zfs_znode_alloc(zfsvfs_t *zfsvfs, dmu_buf_t *db, int blksz,
 	zp->z_blksz = blksz;
 	zp->z_seq = 0x7A4653;
 	zp->z_sync_cnt = 0;
+	zp->z_sync_writes_cnt = 0;
+	zp->z_async_writes_cnt = 0;
 #if __FreeBSD_version >= 1300139
 	atomic_store_ptr(&zp->z_cached_symlink, NULL);
 #endif
@@ -833,7 +841,9 @@ zfs_xvattr_set(znode_t *zp, xvattr_t *xvap, dmu_tx_t *tx)
 	xoap = xva_getxoptattr(xvap);
 	ASSERT3P(xoap, !=, NULL);
 
-	ASSERT_VOP_IN_SEQC(ZTOV(zp));
+	if (zp->z_zfsvfs->z_replay == B_FALSE) {
+		ASSERT_VOP_IN_SEQC(ZTOV(zp));
+	}
 
 	if (XVA_ISSET_REQ(xvap, XAT_CREATETIME)) {
 		uint64_t times[2];
@@ -1975,7 +1985,7 @@ zfs_obj_to_path_impl(objset_t *osp, uint64_t obj, sa_handle_t *hdl,
 		complen = strlen(component);
 		path -= complen;
 		ASSERT3P(path, >=, buf);
-		bcopy(component, path, complen);
+		memcpy(path, component, complen);
 		obj = pobj;
 
 		if (sa_hdl != hdl) {

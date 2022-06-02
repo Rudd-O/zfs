@@ -157,7 +157,7 @@ separated by whitespace and/or commas.
 Only features present in all files are enabled.
 .Pp
 Simple sanity checks are applied to the files:
-they must be between 1B and 16kB in size, and must end with a newline character.
+they must be between 1 B and 16 KiB in size, and must end with a newline character.
 .Pp
 The requested features are applied when a pool is created using
 .Nm zpool Cm create Fl o Sy compatibility Ns = Ns Ar …
@@ -403,8 +403,8 @@ on a top-level vdev, and will never return to being
 This feature enables use of the
 .Sy draid
 vdev type.
-dRAID is a variant of raidz which provides integrated distributed
-hot spares that allow faster resilvering while retaining the benefits of raidz.
+dRAID is a variant of RAID-Z which provides integrated distributed
+hot spares that allow faster resilvering while retaining the benefits of RAID-Z.
 Data, parity, and spare space are organized in redundancy groups
 and distributed evenly over all of the devices.
 .Pp
@@ -446,7 +446,7 @@ or smaller can take advantage of this feature.
 When this feature is enabled, the contents of highly-compressible blocks are
 stored in the block "pointer" itself (a misnomer in this case, as it contains
 the compressed data, rather than a pointer to its location on disk).
-Thus the space of the block (one sector, typically 512B or 4kB) is saved,
+Thus the space of the block (one sector, typically 512 B or 4 KiB) is saved,
 and no additional I/O is needed to read and write the data block.
 .
 \*[instant-never]
@@ -474,8 +474,7 @@ This has no user-visible impact, but other features may depend on this feature.
 .Pp
 This feature becomes
 .Sy active
- as soon as it is enabled and will
-never return to being
+as soon as it is enabled and will never return to being
 .Sy enabled .
 .
 .feature com.datto encryption no bookmark_v2 extensible_dataset
@@ -504,8 +503,20 @@ can be created at the point in the tree on which the limits are set.
 .Pp
 This feature is
 .Sy active
-once either of the limit properties has been set on a dataset.
-Once activated the feature is never deactivated.
+once either of the limit properties has been set on a dataset
+and will never return to being
+.Sy enabled .
+.
+.feature com.delphix head_errlog no
+This feature enables the upgraded version of errlog, which required an on-disk
+error log format change.
+Now the error log of each head dataset is stored separately in the zap object
+and keyed by the head id.
+With this feature enabled, every dataset affected by an error block is listed
+in the output of
+.Nm zpool Cm status .
+.Pp
+\*[instant-never]
 .
 .feature com.delphix hole_birth no enabled_txg
 This feature has/had bugs, the result of which is that, if you do a
@@ -554,29 +565,29 @@ already exist on the receiving side.
 \*[instant-never]
 .
 .feature org.open-zfs large_blocks no extensible_dataset
-This feature allows the record size on a dataset to be set larger than 128kB.
+This feature allows the record size on a dataset to be set larger than 128 KiB.
 .Pp
 This feature becomes
 .Sy active
-once a dataset contains a file with a block size larger than 128kB,
+once a dataset contains a file with a block size larger than 128 KiB,
 and will return to being
 .Sy enabled
-once all filesystems that have ever had their recordsize larger than 128kB
+once all filesystems that have ever had their recordsize larger than 128 KiB
 are destroyed.
 .
 .feature org.zfsonlinux large_dnode no extensible_dataset
-This feature allows the size of dnodes in a dataset to be set larger than 512B.
+This feature allows the size of dnodes in a dataset to be set larger than 512 B.
 .
 This feature becomes
 .Sy active
-once a dataset contains an object with a dnode larger than 512B,
+once a dataset contains an object with a dnode larger than 512 B,
 which occurs as a result of setting the
 .Sy dnodesize
 dataset property to a value other than
 .Sy legacy .
 The feature will return to being
 .Sy enabled
-once all filesystems that have ever contained a dnode larger than 512B
+once all filesystems that have ever contained a dnode larger than 512 B
 are destroyed.
 Large dnodes allow more data to be stored in the bonus buffer,
 thus potentially improving performance by avoiding the use of spill blocks.
@@ -700,8 +711,8 @@ For more information about redacted sends, see
 .
 .feature com.delphix redacted_datasets no extensible_dataset
 This feature enables the receiving of redacted
-.Nm zfs Cm send Ns
-streams. which create redacted datasets when received.
+.Nm zfs Cm send
+streams, which create redacted datasets when received.
 These datasets are missing some of their blocks,
 and so cannot be safely mounted, and their contents cannot be safely read.
 For more information about redacted receives, see
@@ -777,6 +788,24 @@ by user and group.
 .Pp
 \*[instant-never]
 \*[remount-upgrade]
+.
+.feature org.openzfs zilsaxattr yes extensible_dataset
+This feature enables
+.Sy xattr Ns = Ns Sy sa
+extended attribute logging in the ZIL.
+If enabled, extended attribute changes
+.Pq both Sy xattrdir Ns = Ns Sy dir No and Sy xattr Ns = Ns Sy sa
+are guaranteed to be durable if either the dataset had
+.Sy sync Ns = Ns Sy always
+set at the time the changes were made, or
+.Xr sync 2
+is called on the dataset after the changes were made.
+.Pp
+This feature becomes
+.Sy active
+when a ZIL is created for at least one dataset and will be returned to the
+.Sy enabled
+state when it is destroyed for all datasets that use this feature.
 .
 .feature com.delphix zpool_checkpoint yes
 This feature enables the

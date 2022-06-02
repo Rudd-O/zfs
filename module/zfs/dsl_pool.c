@@ -105,9 +105,8 @@ int zfs_dirty_data_max_percent = 10;
 int zfs_dirty_data_max_max_percent = 25;
 
 /*
- * zfs_wrlog_data_max, the upper limit of TX_WRITE log data.
- * Once it is reached, write operation is blocked,
- * until log data is cleared out after txg sync.
+ * The upper limit of TX_WRITE log data.  Write operations are throttled
+ * when approaching the limit until log data is cleared out after txg sync.
  * It only counts TX_WRITE log with WR_COPIED or WR_NEED_COPY.
  */
 unsigned long zfs_wrlog_data_max = 0;
@@ -623,15 +622,18 @@ dsl_pool_wrlog_count(dsl_pool_t *dp, int64_t size, uint64_t txg)
 
 	/* Choose a value slightly bigger than min dirty sync bytes */
 	uint64_t sync_min =
-	    zfs_dirty_data_max * (zfs_dirty_data_sync_percent + 10) / 100;
+	    zfs_wrlog_data_max * (zfs_dirty_data_sync_percent + 10) / 200;
 	if (aggsum_compare(&dp->dp_wrlog_pertxg[txg & TXG_MASK], sync_min) > 0)
 		txg_kick(dp, txg);
 }
 
 boolean_t
-dsl_pool_wrlog_over_max(dsl_pool_t *dp)
+dsl_pool_need_wrlog_delay(dsl_pool_t *dp)
 {
-	return (aggsum_compare(&dp->dp_wrlog_total, zfs_wrlog_data_max) > 0);
+	uint64_t delay_min_bytes =
+	    zfs_wrlog_data_max * zfs_delay_min_dirty_percent / 100;
+
+	return (aggsum_compare(&dp->dp_wrlog_total, delay_min_bytes) > 0);
 }
 
 static void
@@ -641,6 +643,9 @@ dsl_pool_wrlog_clear(dsl_pool_t *dp, uint64_t txg)
 	delta = -(int64_t)aggsum_value(&dp->dp_wrlog_pertxg[txg & TXG_MASK]);
 	aggsum_add(&dp->dp_wrlog_pertxg[txg & TXG_MASK], delta);
 	aggsum_add(&dp->dp_wrlog_total, delta);
+	/* Compact per-CPU sums after the big change. */
+	(void) aggsum_value(&dp->dp_wrlog_pertxg[txg & TXG_MASK]);
+	(void) aggsum_value(&dp->dp_wrlog_total);
 }
 
 #ifdef ZFS_DEBUG
@@ -950,6 +955,12 @@ dsl_pool_unreserved_space(dsl_pool_t *dp, zfs_space_check_t slop_policy)
 	return (quota);
 }
 
+uint64_t
+dsl_pool_deferred_space(dsl_pool_t *dp)
+{
+	return (metaslab_class_get_deferred(spa_normal_class(dp->dp_spa)));
+}
+
 boolean_t
 dsl_pool_need_dirty_delay(dsl_pool_t *dp)
 {
@@ -1010,7 +1021,6 @@ dsl_pool_undirty_space(dsl_pool_t *dp, int64_t space, uint64_t txg)
 	mutex_exit(&dp->dp_lock);
 }
 
-/* ARGSUSED */
 static int
 upgrade_clones_cb(dsl_pool_t *dp, dsl_dataset_t *hds, void *arg)
 {
@@ -1101,7 +1111,6 @@ dsl_pool_upgrade_clones(dsl_pool_t *dp, dmu_tx_t *tx)
 	    tx, DS_FIND_CHILDREN | DS_FIND_SERIALIZE));
 }
 
-/* ARGSUSED */
 static int
 upgrade_dir_clones_cb(dsl_pool_t *dp, dsl_dataset_t *ds, void *arg)
 {

@@ -140,7 +140,7 @@ int zfs_removal_suspend_progress = 0;
 
 #define	VDEV_REMOVAL_ZAP_OBJS	"lzap"
 
-static void spa_vdev_remove_thread(void *arg);
+static __attribute__((noreturn)) void spa_vdev_remove_thread(void *arg);
 static int spa_vdev_remove_cancel_impl(spa_t *spa);
 
 static void
@@ -1364,6 +1364,8 @@ vdev_remove_complete(spa_t *spa)
 	ASSERT3P(vd->vdev_initialize_thread, ==, NULL);
 	ASSERT3P(vd->vdev_trim_thread, ==, NULL);
 	ASSERT3P(vd->vdev_autotrim_thread, ==, NULL);
+	vdev_rebuild_stop_wait(vd);
+	ASSERT3P(vd->vdev_rebuild_thread, ==, NULL);
 	uint64_t vdev_space = spa_deflate(spa) ?
 	    vd->vdev_stat.vs_dspace : vd->vdev_stat.vs_space;
 
@@ -1386,7 +1388,6 @@ vdev_remove_complete(spa_t *spa)
 		vdev_metaslab_fini(vd);
 		metaslab_group_destroy(vd->vdev_mg);
 		vd->vdev_mg = NULL;
-		spa_log_sm_set_blocklimit(spa);
 	}
 	if (vd->vdev_log_mg != NULL) {
 		ASSERT0(vd->vdev_ms_count);
@@ -1589,7 +1590,7 @@ spa_remove_max_segment(spa_t *spa)
  * TXG have completed (see spa_txg_zio) and writes the new mappings to disk
  * (see vdev_mapping_sync()).
  */
-static void
+static __attribute__((noreturn)) void
 spa_vdev_remove_thread(void *arg)
 {
 	spa_t *spa = arg;
@@ -2131,7 +2132,6 @@ spa_vdev_remove_log(vdev_t *vd, uint64_t *txg)
 	 * metaslab_class_histogram_verify()
 	 */
 	vdev_metaslab_fini(vd);
-	spa_log_sm_set_blocklimit(spa);
 
 	spa_vdev_config_exit(spa, NULL, *txg, 0, FTAG);
 	*txg = spa_vdev_config_enter(spa);
@@ -2251,7 +2251,6 @@ spa_vdev_remove_top_check(vdev_t *vd)
 	 * and not be raidz or draid.
 	 */
 	vdev_t *rvd = spa->spa_root_vdev;
-	int num_indirect = 0;
 	for (uint64_t id = 0; id < rvd->vdev_children; id++) {
 		vdev_t *cvd = rvd->vdev_child[id];
 
@@ -2267,8 +2266,6 @@ spa_vdev_remove_top_check(vdev_t *vd)
 		if (cvd->vdev_ashift != 0 &&
 		    cvd->vdev_alloc_bias == VDEV_BIAS_NONE)
 			ASSERT3U(cvd->vdev_ashift, ==, spa->spa_max_ashift);
-		if (cvd->vdev_ops == &vdev_indirect_ops)
-			num_indirect++;
 		if (!vdev_is_concrete(cvd))
 			continue;
 		if (vdev_get_nparity(cvd) != 0)

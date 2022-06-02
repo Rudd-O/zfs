@@ -475,7 +475,7 @@ vdev_add_child(vdev_t *pvd, vdev_t *cvd)
 
 	newchild = kmem_alloc(newsize, KM_SLEEP);
 	if (pvd->vdev_child != NULL) {
-		bcopy(pvd->vdev_child, newchild, oldsize);
+		memcpy(newchild, pvd->vdev_child, oldsize);
 		kmem_free(pvd->vdev_child, oldsize);
 	}
 
@@ -1426,7 +1426,7 @@ vdev_metaslab_init(vdev_t *vd, uint64_t txg)
 	mspp = vmem_zalloc(newc * sizeof (*mspp), KM_SLEEP);
 
 	if (expanding) {
-		bcopy(vd->vdev_ms, mspp, oldc * sizeof (*mspp));
+		memcpy(mspp, vd->vdev_ms, oldc * sizeof (*mspp));
 		vmem_free(vd->vdev_ms, oldc * sizeof (*mspp));
 	}
 
@@ -1522,13 +1522,6 @@ vdev_metaslab_init(vdev_t *vd, uint64_t txg)
 
 	if (txg == 0)
 		spa_config_exit(spa, SCL_ALLOC, FTAG);
-
-	/*
-	 * Regardless whether this vdev was just added or it is being
-	 * expanded, the metaslab count has changed. Recalculate the
-	 * block limit.
-	 */
-	spa_log_sm_set_blocklimit(spa);
 
 	return (0);
 }
@@ -4418,12 +4411,13 @@ vdev_get_stats_ex(vdev_t *vd, vdev_stat_t *vs, vdev_stat_ex_t *vsx)
 	vdev_t *tvd = vd->vdev_top;
 	mutex_enter(&vd->vdev_stat_lock);
 	if (vs) {
-		bcopy(&vd->vdev_stat, vs, sizeof (*vs));
+		memcpy(vs, &vd->vdev_stat, sizeof (*vs));
 		vs->vs_timestamp = gethrtime() - vs->vs_timestamp;
 		vs->vs_state = vd->vdev_state;
 		vs->vs_rsize = vdev_get_min_asize(vd);
 
 		if (vd->vdev_ops->vdev_op_leaf) {
+			vs->vs_pspace = vd->vdev_psize;
 			vs->vs_rsize += VDEV_LABEL_START_SIZE +
 			    VDEV_LABEL_END_SIZE;
 			/*
@@ -4531,8 +4525,8 @@ vdev_stat_update(zio_t *zio, uint64_t psize)
 	vdev_t *vd = zio->io_vd ? zio->io_vd : rvd;
 	vdev_t *pvd;
 	uint64_t txg = zio->io_txg;
-	vdev_stat_t *vs = &vd->vdev_stat;
-	vdev_stat_ex_t *vsx = &vd->vdev_stat_ex;
+	vdev_stat_t *vs = vd ? &vd->vdev_stat : NULL;
+	vdev_stat_ex_t *vsx = vd ? &vd->vdev_stat_ex : NULL;
 	zio_type_t type = zio->io_type;
 	int flags = zio->io_flags;
 

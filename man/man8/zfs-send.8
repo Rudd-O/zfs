@@ -29,7 +29,7 @@
 .\" Copyright 2018 Nexenta Systems, Inc.
 .\" Copyright 2019 Joyent, Inc.
 .\"
-.Dd April 15, 2021
+.Dd March 16, 2022
 .Dt ZFS-SEND 8
 .Os
 .
@@ -39,7 +39,8 @@
 .Sh SYNOPSIS
 .Nm zfs
 .Cm send
-.Op Fl DLPRbcehnpsvw
+.Op Fl DLPbcehnpsvw
+.Op Fl R Op Fl X Ar dataset Ns Oo , Ns Ar dataset Oc Ns …
 .Op Oo Fl I Ns | Ns Fl i Oc Ar snapshot
 .Ar snapshot
 .Nm zfs
@@ -72,7 +73,8 @@
 .It Xo
 .Nm zfs
 .Cm send
-.Op Fl DLPRbcehnpvw
+.Op Fl DLPbcehnpsvw
+.Op Fl R Op Fl X Ar dataset Ns Oo , Ns Ar dataset Oc Ns …
 .Op Oo Fl I Ns | Ns Fl i Oc Ar snapshot
 .Ar snapshot
 .Xc
@@ -100,12 +102,12 @@ The incremental source may be specified as with the
 .Fl i
 option.
 .It Fl L , -large-block
-Generate a stream which may contain blocks larger than 128KB.
+Generate a stream which may contain blocks larger than 128 KiB.
 This flag has no effect if the
 .Sy large_blocks
 pool feature is disabled, or if the
 .Sy recordsize
-property of this filesystem has never been set above 128KB.
+property of this filesystem has never been set above 128 KiB.
 The receiving system must have the
 .Sy large_blocks
 pool feature enabled as well.
@@ -140,6 +142,16 @@ If the
 flag is used to send encrypted datasets, then
 .Fl w
 must also be specified.
+.It Fl X , -exclude Ar dataset Ns Oo , Ns Ar dataset Oc Ns …
+With
+.Fl R ,
+.Fl X
+specifies a set of datasets (and, hence, their descendants),
+to be excluded from the send stream.
+The root dataset may not be excluded.
+.Fl X Ar a Fl X Ar b
+is equivalent to
+.Fl X Ar a , Ns Ar b .
 .It Fl e , -embed
 Generate a more compact stream by using
 .Sy WRITE_EMBEDDED
@@ -305,12 +317,12 @@ Deduplicated send is no longer supported.
 This flag is accepted for backwards compatibility, but a regular,
 non-deduplicated stream will be generated.
 .It Fl L , -large-block
-Generate a stream which may contain blocks larger than 128KB.
+Generate a stream which may contain blocks larger than 128 KiB.
 This flag has no effect if the
 .Sy large_blocks
 pool feature is disabled, or if the
 .Sy recordsize
-property of this filesystem has never been set above 128KB.
+property of this filesystem has never been set above 128 KiB.
 The receiving system must have the
 .Sy large_blocks
 pool feature enabled as well.
@@ -647,6 +659,48 @@ to and received on the target server; these snapshots are identical to the
 ones on the source, and are ready to be used, while the parent snapshot on the
 target contains none of the username and password data present on the source,
 because it was removed by the redacted send operation.
+.
+.Sh EXAMPLES
+.\" These are, respectively, examples 12, 13 from zfs.8
+.\" Make sure to update them bidirectionally
+.Ss Example 1 : No Remotely Replicating ZFS Data
+The following commands send a full stream and then an incremental stream to a
+remote machine, restoring them into
+.Em poolB/received/fs@a
+and
+.Em poolB/received/fs@b ,
+respectively.
+.Em poolB
+must contain the file system
+.Em poolB/received ,
+and must not initially contain
+.Em poolB/received/fs .
+.Bd -literal -compact -offset Ds
+.No # Nm zfs Cm send Ar pool/fs@a |
+.No "   " Nm ssh Ar host Nm zfs Cm receive Ar poolB/received/fs Ns @ Ns Ar a
+.No # Nm zfs Cm send Fl i Ar a pool/fs@b |
+.No "   " Nm ssh Ar host Nm zfs Cm receive Ar poolB/received/fs
+.Ed
+.
+.Ss Example 2 : No Using the Nm zfs Cm receive Fl d No Option
+The following command sends a full stream of
+.Ar poolA/fsA/fsB@snap
+to a remote machine, receiving it into
+.Ar poolB/received/fsA/fsB@snap .
+The
+.Ar fsA/fsB@snap
+portion of the received snapshot's name is determined from the name of the sent
+snapshot.
+.Ar poolB
+must contain the file system
+.Ar poolB/received .
+If
+.Ar poolB/received/fsA
+does not exist, it is created as an empty file system.
+.Bd -literal -compact -offset Ds
+.No # Nm zfs Cm send Ar poolA/fsA/fsB@snap |
+.No "   " Nm ssh Ar host Nm zfs Cm receive Fl d Ar poolB/received
+.Ed
 .
 .Sh SEE ALSO
 .Xr zfs-bookmark 8 ,

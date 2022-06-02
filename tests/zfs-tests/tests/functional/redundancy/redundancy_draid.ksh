@@ -77,7 +77,7 @@ function test_selfheal # <pool> <parity> <dir>
 	log_must zpool import -o cachefile=none -d $dir $pool
 
 	typeset mntpnt=$(get_prop mountpoint $pool/fs)
-	log_must find $mntpnt -type f -exec cksum {} + >> /dev/null 2>&1
+	log_must eval "find $mntpnt -type f -exec cksum {} + >> /dev/null 2>&1"
 	log_must check_pool_status $pool "errors" "No known data errors"
 
 	#
@@ -100,7 +100,7 @@ function test_selfheal # <pool> <parity> <dir>
 	log_must zpool import -o cachefile=none -d $dir $pool
 
 	typeset mntpnt=$(get_prop mountpoint $pool/fs)
-	log_must find $mntpnt -type f -exec cksum {} + >> /dev/null 2>&1
+	log_must eval "find $mntpnt -type f -exec cksum {} + >> /dev/null 2>&1"
 	log_must check_pool_status $pool "errors" "No known data errors"
 
 	log_must zpool scrub -w $pool
@@ -219,7 +219,7 @@ for nparity in 1 2 3; do
 	raid=draid$nparity
 	dir=$TEST_BASE_DIR
 
-	log_must zpool create -f -o cachefile=none $TESTPOOL $raid ${disks[@]}
+	log_must zpool create -O compression=off -f -o cachefile=none $TESTPOOL $raid ${disks[@]}
 	log_must zfs set primarycache=metadata $TESTPOOL
 
 	log_must zfs create $TESTPOOL/fs

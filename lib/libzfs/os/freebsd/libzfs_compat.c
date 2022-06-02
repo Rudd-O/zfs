@@ -38,11 +38,6 @@
 #define	ZFS_KMOD	"openzfs"
 #endif
 
-void
-libzfs_set_pipe_max(int infd)
-{
-	/* FreeBSD automatically resizes */
-}
 
 static int
 execvPe(const char *name, const char *path, char * const *argv,
@@ -108,9 +103,9 @@ execvPe(const char *name, const char *path, char * const *argv,
 			    16);
 			continue;
 		}
-		bcopy(p, buf, lp);
+		memcpy(buf, p, lp);
 		buf[lp] = '/';
-		bcopy(name, buf + lp + 1, ln);
+		memcpy(buf + lp + 1, name, ln);
 		buf[lp + ln + 1] = '\0';
 
 retry:		(void) execve(bp, argv, envp);
@@ -140,7 +135,7 @@ retry:		(void) execve(bp, argv, envp);
 			if (cnt > 0) {
 				memp[0] = argv[0];
 				memp[1] = bp;
-				bcopy(argv + 1, memp + 2,
+				memcpy(memp + 2, argv + 1,
 				    cnt * sizeof (char *));
 			} else {
 				memp[0] = "sh";
@@ -198,7 +193,7 @@ execvpe(const char *name, char * const argv[], char * const envp[])
 	return (execvPe(name, path, argv, envp));
 }
 
-#define	ERRBUFLEN 256
+#define	ERRBUFLEN 1024
 
 static __thread char errbuf[ERRBUFLEN];
 
@@ -206,10 +201,10 @@ const char *
 libzfs_error_init(int error)
 {
 	char *msg = errbuf;
-	size_t len, msglen = ERRBUFLEN;
+	size_t msglen = sizeof (errbuf);
 
 	if (modfind("zfs") < 0) {
-		len = snprintf(msg, msglen, dgettext(TEXT_DOMAIN,
+		size_t len = snprintf(msg, msglen, dgettext(TEXT_DOMAIN,
 		    "Failed to load %s module: "), ZFS_KMOD);
 		msg += len;
 		msglen -= len;
@@ -251,24 +246,28 @@ libzfs_load_module(void)
 int
 zpool_relabel_disk(libzfs_handle_t *hdl, const char *path, const char *msg)
 {
+	(void) hdl, (void) path, (void) msg;
 	return (0);
 }
 
 int
 zpool_label_disk(libzfs_handle_t *hdl, zpool_handle_t *zhp, const char *name)
 {
+	(void) hdl, (void) zhp, (void) name;
 	return (0);
 }
 
 int
 find_shares_object(differ_info_t *di)
 {
+	(void) di;
 	return (0);
 }
 
 int
 zfs_destroy_snaps_nvl_os(libzfs_handle_t *hdl, nvlist_t *snaps)
 {
+	(void) hdl, (void) snaps;
 	return (0);
 }
 
@@ -280,7 +279,6 @@ zfs_jail(zfs_handle_t *zhp, int jailid, int attach)
 {
 	libzfs_handle_t *hdl = zhp->zfs_hdl;
 	zfs_cmd_t zc = {"\0"};
-	char errbuf[1024];
 	unsigned long cmd;
 	int ret;
 
@@ -309,6 +307,10 @@ zfs_jail(zfs_handle_t *zhp, int jailid, int attach)
 		zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
 		    "vdevs can not be jailed"));
 		return (zfs_error(hdl, EZFS_BADTYPE, errbuf));
+	case ZFS_TYPE_INVALID:
+		zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
+		    "invalid zfs_type_t: ZFS_TYPE_INVALID"));
+		return (zfs_error(hdl, EZFS_BADTYPE, errbuf));
 	case ZFS_TYPE_POOL:
 	case ZFS_TYPE_FILESYSTEM:
 		/* OK */
@@ -336,29 +338,35 @@ zpool_nextboot(libzfs_handle_t *hdl, uint64_t pool_guid, uint64_t dev_guid,
 {
 	zfs_cmd_t zc = {"\0"};
 	nvlist_t *args;
-	int error;
 
 	args = fnvlist_alloc();
 	fnvlist_add_uint64(args, ZPOOL_CONFIG_POOL_GUID, pool_guid);
 	fnvlist_add_uint64(args, ZPOOL_CONFIG_GUID, dev_guid);
 	fnvlist_add_string(args, "command", command);
-	error = zcmd_write_src_nvlist(hdl, &zc, args);
-	if (error == 0)
-		error = zfs_ioctl(hdl, ZFS_IOC_NEXTBOOT, &zc);
+	zcmd_write_src_nvlist(hdl, &zc, args);
+	int error = zfs_ioctl(hdl, ZFS_IOC_NEXTBOOT, &zc);
 	zcmd_free_nvlists(&zc);
 	nvlist_free(args);
 	return (error);
 }
 
 /*
- * Fill given version buffer with zfs kernel version.
- * Returns 0 on success, and -1 on error (with errno set)
+ * Return allocated loaded module version, or NULL on error (with errno set)
  */
-int
-zfs_version_kernel(char *version, int len)
+char *
+zfs_version_kernel(void)
 {
-	size_t l = len;
-
-	return (sysctlbyname("vfs.zfs.version.module",
-	    version, &l, NULL, 0));
+	size_t l;
+	if (sysctlbyname("vfs.zfs.version.module",
+	    NULL, &l, NULL, 0) == -1)
+		return (NULL);
+	char *version = malloc(l);
+	if (version == NULL)
+		return (NULL);
+	if (sysctlbyname("vfs.zfs.version.module",
+	    version, &l, NULL, 0) == -1) {
+		free(version);
+		return (NULL);
+	}
+	return (version);
 }

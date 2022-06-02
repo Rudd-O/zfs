@@ -385,8 +385,7 @@ int dsl_dataset_snap_lookup(dsl_dataset_t *ds, const char *name,
 void dsl_dataset_dirty(dsl_dataset_t *ds, dmu_tx_t *tx);
 
 int get_clones_stat_impl(dsl_dataset_t *ds, nvlist_t *val);
-char *get_receive_resume_stats_impl(dsl_dataset_t *ds);
-char *get_child_receive_stats(dsl_dataset_t *ds);
+char *get_receive_resume_token(dsl_dataset_t *ds);
 uint64_t dsl_get_refratio(dsl_dataset_t *ds);
 uint64_t dsl_get_logicalreferenced(dsl_dataset_t *ds);
 uint64_t dsl_get_compressratio(dsl_dataset_t *ds);
@@ -487,6 +486,9 @@ boolean_t dsl_dataset_get_uint64_array_feature(dsl_dataset_t *ds,
 
 void dsl_dataset_activate_redaction(dsl_dataset_t *ds, uint64_t *redact_snaps,
     uint64_t num_redact_snaps, dmu_tx_t *tx);
+
+int dsl_dataset_oldest_snapshot(spa_t *spa, uint64_t head_ds, uint64_t min_txg,
+    uint64_t *oldest_dsobj);
 
 #ifdef ZFS_DEBUG
 #define	dprintf_ds(ds, fmt, ...) do { \

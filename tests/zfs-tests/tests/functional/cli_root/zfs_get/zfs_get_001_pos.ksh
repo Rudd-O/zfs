@@ -102,16 +102,15 @@ function check_return_value
 		found=0
 
 		while read line; do
-			typeset item
-			typeset value
+			typeset item value _
 
-			item=$(echo $line | awk '{print $2}' 2>&1)
+			read -r _ item _ <<<"$line"
 			if [[ $item == $p ]]; then
 				((found += 1))
 				cols=$(echo $line | awk '{print NF}')
 			fi
 
-			value=$(echo $line | awk '{print $3}' 2>&1)
+			read -r _ _ value _ <<<"$line"
 			if [[ $value == $uint64_max ]]; then
 				log_fail "'zfs get $opt $props $dst' return " \
 				    "UINT64_MAX constant."
@@ -154,12 +153,7 @@ typeset -i i=0
 while ((i < ${#dataset[@]})); do
 	for opt in "${options[@]}"; do
 		for prop in ${all_props[@]}; do
-			eval "zfs get $opt $prop ${dataset[i]} > \
-			    $TESTDIR/$TESTFILE0"
-			ret=$?
-			if [[ $ret != 0 ]]; then
-				log_fail "zfs get returned: $ret"
-			fi
+			log_must eval "zfs get $opt $prop ${dataset[i]} > $TESTDIR/$TESTFILE0"
 			check_return_value ${dataset[i]} "$prop" "$opt"
 		done
 	done
@@ -170,12 +164,7 @@ i=0
 while ((i < ${#bookmark[@]})); do
 	for opt in "${options[@]}"; do
 		for prop in ${bookmark_props[@]}; do
-			eval "zfs get $opt $prop ${bookmark[i]} > \
-			    $TESTDIR/$TESTFILE0"
-			ret=$?
-			if [[ $ret != 0 ]]; then
-				log_fail "zfs get returned: $ret"
-			fi
+			log_must eval "zfs get $opt $prop ${bookmark[i]} > $TESTDIR/$TESTFILE0"
 			check_return_value ${bookmark[i]} "$prop" "$opt"
 		done
 	done

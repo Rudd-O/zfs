@@ -947,8 +947,8 @@ spa_get_errlists(spa_t *spa, avl_tree_t *last, avl_tree_t *scrub)
 {
 	ASSERT(MUTEX_HELD(&spa->spa_errlist_lock));
 
-	bcopy(&spa->spa_errlist_last, last, sizeof (avl_tree_t));
-	bcopy(&spa->spa_errlist_scrub, scrub, sizeof (avl_tree_t));
+	memcpy(last, &spa->spa_errlist_last, sizeof (avl_tree_t));
+	memcpy(scrub, &spa->spa_errlist_scrub, sizeof (avl_tree_t));
 
 	avl_create(&spa->spa_errlist_scrub,
 	    spa_error_entry_compare, sizeof (spa_error_entry_t),
@@ -1315,6 +1315,8 @@ spa_activate(spa_t *spa, spa_mode_t mode)
 	    spa_error_entry_compare, sizeof (spa_error_entry_t),
 	    offsetof(spa_error_entry_t, se_avl));
 
+	spa_activate_os(spa);
+
 	spa_keystore_init(&spa->spa_keystore);
 
 	/*
@@ -1451,6 +1453,9 @@ spa_deactivate(spa_t *spa)
 		thread_join(spa->spa_did);
 		spa->spa_did = 0;
 	}
+
+	spa_deactivate_os(spa);
+
 }
 
 /*
@@ -1597,25 +1602,33 @@ spa_unload(spa_t *spa)
 	spa_wake_waiters(spa);
 
 	/*
-	 * If the log space map feature is enabled and the pool is getting
-	 * exported (but not destroyed), we want to spend some time flushing
-	 * as many metaslabs as we can in an attempt to destroy log space
-	 * maps and save import time.
+	 * If we have set the spa_final_txg, we have already performed the
+	 * tasks below in spa_export_common(). We should not redo it here since
+	 * we delay the final TXGs beyond what spa_final_txg is set at.
 	 */
-	if (spa_should_flush_logs_on_unload(spa))
-		spa_unload_log_sm_flush_all(spa);
+	if (spa->spa_final_txg == UINT64_MAX) {
+		/*
+		 * If the log space map feature is enabled and the pool is
+		 * getting exported (but not destroyed), we want to spend some
+		 * time flushing as many metaslabs as we can in an attempt to
+		 * destroy log space maps and save import time.
+		 */
+		if (spa_should_flush_logs_on_unload(spa))
+			spa_unload_log_sm_flush_all(spa);
 
-	/*
-	 * Stop async tasks.
-	 */
-	spa_async_suspend(spa);
+		/*
+		 * Stop async tasks.
+		 */
+		spa_async_suspend(spa);
 
-	if (spa->spa_root_vdev) {
-		vdev_t *root_vdev = spa->spa_root_vdev;
-		vdev_initialize_stop_all(root_vdev, VDEV_INITIALIZE_ACTIVE);
-		vdev_trim_stop_all(root_vdev, VDEV_TRIM_ACTIVE);
-		vdev_autotrim_stop_all(spa);
-		vdev_rebuild_stop_all(spa);
+		if (spa->spa_root_vdev) {
+			vdev_t *root_vdev = spa->spa_root_vdev;
+			vdev_initialize_stop_all(root_vdev,
+			    VDEV_INITIALIZE_ACTIVE);
+			vdev_trim_stop_all(root_vdev, VDEV_TRIM_ACTIVE);
+			vdev_autotrim_stop_all(spa);
+			vdev_rebuild_stop_all(spa);
+		}
 	}
 
 	/*
@@ -2251,6 +2264,7 @@ spa_claim_notify(zio_t *zio)
 }
 
 typedef struct spa_load_error {
+	boolean_t	sle_verify_data;
 	uint64_t	sle_meta_count;
 	uint64_t	sle_data_count;
 } spa_load_error_t;
@@ -2291,11 +2305,11 @@ static int
 spa_load_verify_cb(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
     const zbookmark_phys_t *zb, const dnode_phys_t *dnp, void *arg)
 {
+	zio_t *rio = arg;
+	spa_load_error_t *sle = rio->io_private;
+
 	(void) zilog, (void) dnp;
 
-	if (zb->zb_level == ZB_DNODE_LEVEL || BP_IS_HOLE(bp) ||
-	    BP_IS_EMBEDDED(bp) || BP_IS_REDACTED(bp))
-		return (0);
 	/*
 	 * Note: normally this routine will not be called if
 	 * spa_load_verify_metadata is not set.  However, it may be useful
@@ -2303,12 +2317,28 @@ spa_load_verify_cb(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
 	 */
 	if (!spa_load_verify_metadata)
 		return (0);
-	if (!BP_IS_METADATA(bp) && !spa_load_verify_data)
+
+	/*
+	 * Sanity check the block pointer in order to detect obvious damage
+	 * before using the contents in subsequent checks or in zio_read().
+	 * When damaged consider it to be a metadata error since we cannot
+	 * trust the BP_GET_TYPE and BP_GET_LEVEL values.
+	 */
+	if (!zfs_blkptr_verify(spa, bp, B_FALSE, BLK_VERIFY_LOG)) {
+		atomic_inc_64(&sle->sle_meta_count);
+		return (0);
+	}
+
+	if (zb->zb_level == ZB_DNODE_LEVEL || BP_IS_HOLE(bp) ||
+	    BP_IS_EMBEDDED(bp) || BP_IS_REDACTED(bp))
+		return (0);
+
+	if (!BP_IS_METADATA(bp) &&
+	    (!spa_load_verify_data || !sle->sle_verify_data))
 		return (0);
 
 	uint64_t maxinflight_bytes =
 	    arc_target_bytes() >> spa_load_verify_shift;
-	zio_t *rio = arg;
 	size_t size = BP_GET_PSIZE(bp);
 
 	mutex_enter(&spa->spa_scrub_lock);
@@ -2346,7 +2376,8 @@ spa_load_verify(spa_t *spa)
 
 	zpool_get_load_policy(spa->spa_config, &policy);
 
-	if (policy.zlp_rewind & ZPOOL_NEVER_REWIND)
+	if (policy.zlp_rewind & ZPOOL_NEVER_REWIND ||
+	    policy.zlp_maxmeta == UINT64_MAX)
 		return (0);
 
 	dsl_pool_config_enter(spa->spa_dsl_pool, FTAG);
@@ -2356,6 +2387,13 @@ spa_load_verify(spa_t *spa)
 	dsl_pool_config_exit(spa->spa_dsl_pool, FTAG);
 	if (error != 0)
 		return (error);
+
+	/*
+	 * Verify data only if we are rewinding or error limit was set.
+	 * Otherwise nothing except dbgmsg care about it to waste time.
+	 */
+	sle.sle_verify_data = (policy.zlp_rewind & ZPOOL_REWIND_MASK) ||
+	    (policy.zlp_maxdata < UINT64_MAX);
 
 	rio = zio_root(spa, NULL, &sle,
 	    ZIO_FLAG_CANFAIL | ZIO_FLAG_SPECULATIVE);
@@ -2400,6 +2438,8 @@ spa_load_verify(spa_t *spa)
 		    spa->spa_load_txg_ts);
 		fnvlist_add_int64(spa->spa_load_info, ZPOOL_CONFIG_REWIND_TIME,
 		    loss);
+		fnvlist_add_uint64(spa->spa_load_info,
+		    ZPOOL_CONFIG_LOAD_META_ERRORS, sle.sle_meta_count);
 		fnvlist_add_uint64(spa->spa_load_info,
 		    ZPOOL_CONFIG_LOAD_DATA_ERRORS, sle.sle_data_count);
 	} else {
@@ -4328,7 +4368,7 @@ spa_ld_load_vdev_metadata(spa_t *spa)
 
 	error = spa_ld_log_spacemaps(spa);
 	if (error != 0) {
-		spa_load_failed(spa, "spa_ld_log_sm_data failed [error=%d]",
+		spa_load_failed(spa, "spa_ld_log_spacemaps failed [error=%d]",
 		    error);
 		return (spa_vdev_err(rvd, VDEV_AUX_CORRUPT_DATA, error));
 	}
@@ -6009,6 +6049,8 @@ spa_create(const char *pool, nvlist_t *nvroot, nvlist_t *props,
 	spa->spa_minref = zfs_refcount_count(&spa->spa_refcount);
 	spa->spa_load_state = SPA_LOAD_NONE;
 
+	spa_import_os(spa);
+
 	mutex_exit(&spa_namespace_lock);
 
 	return (0);
@@ -6191,6 +6233,8 @@ spa_import(char *pool, nvlist_t *config, nvlist_t *props, uint64_t flags)
 	mutex_exit(&spa_namespace_lock);
 
 	zvol_create_minors_recursive(pool);
+
+	spa_import_os(spa);
 
 	return (0);
 }
@@ -6413,14 +6457,34 @@ spa_export_common(const char *pool, int new_state, nvlist_t **oldconfig,
 		if (new_state != POOL_STATE_UNINITIALIZED && !hardforce) {
 			spa_config_enter(spa, SCL_ALL, FTAG, RW_WRITER);
 			spa->spa_state = new_state;
+			vdev_config_dirty(spa->spa_root_vdev);
+			spa_config_exit(spa, SCL_ALL, FTAG);
+		}
+
+		/*
+		 * If the log space map feature is enabled and the pool is
+		 * getting exported (but not destroyed), we want to spend some
+		 * time flushing as many metaslabs as we can in an attempt to
+		 * destroy log space maps and save import time. This has to be
+		 * done before we set the spa_final_txg, otherwise
+		 * spa_sync() -> spa_flush_metaslabs() may dirty the final TXGs.
+		 * spa_should_flush_logs_on_unload() should be called after
+		 * spa_state has been set to the new_state.
+		 */
+		if (spa_should_flush_logs_on_unload(spa))
+			spa_unload_log_sm_flush_all(spa);
+
+		if (new_state != POOL_STATE_UNINITIALIZED && !hardforce) {
+			spa_config_enter(spa, SCL_ALL, FTAG, RW_WRITER);
 			spa->spa_final_txg = spa_last_synced_txg(spa) +
 			    TXG_DEFER_SIZE + 1;
-			vdev_config_dirty(spa->spa_root_vdev);
 			spa_config_exit(spa, SCL_ALL, FTAG);
 		}
 	}
 
 export_spa:
+	spa_export_os(spa);
+
 	if (new_state == POOL_STATE_DESTROYED)
 		spa_event_notify(spa, NULL, NULL, ESC_ZFS_POOL_DESTROY);
 	else if (new_state == POOL_STATE_EXPORTED)
@@ -8088,7 +8152,7 @@ spa_async_autoexpand(spa_t *spa, vdev_t *vd)
 	spa_event_notify(vd->vdev_spa, vd, NULL, ESC_ZFS_VDEV_AUTOEXPAND);
 }
 
-static void
+static __attribute__((noreturn)) void
 spa_async_thread(void *arg)
 {
 	spa_t *spa = (spa_t *)arg;
@@ -8444,7 +8508,7 @@ spa_sync_nvlist(spa_t *spa, uint64_t obj, nvlist_t *nv, dmu_tx_t *tx)
 
 	VERIFY(nvlist_pack(nv, &packed, &nvsize, NV_ENCODE_XDR,
 	    KM_SLEEP) == 0);
-	bzero(packed + nvsize, bufsize - nvsize);
+	memset(packed + nvsize, 0, bufsize - nvsize);
 
 	dmu_write(spa->spa_meta_objset, obj, 0, bufsize, packed, tx);
 
@@ -9715,7 +9779,7 @@ spa_activity_in_progress(spa_t *spa, zpool_wait_activity_t activity,
 	case ZPOOL_WAIT_RESILVER:
 		if ((*in_progress = vdev_rebuild_active(spa->spa_root_vdev)))
 			break;
-		fallthrough;
+		zfs_fallthrough;
 	case ZPOOL_WAIT_SCRUB:
 	{
 		boolean_t scanning, paused, is_scrub;

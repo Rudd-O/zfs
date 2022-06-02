@@ -36,7 +36,6 @@
 #include <sys/crypto/api.h>
 #include <sys/crypto/impl.h>
 #include <sys/crypto/sched_impl.h>
-#include <sys/modhash_impl.h>
 #include <sys/crypto/icp.h>
 
 /*
@@ -105,7 +104,7 @@
  * ZFS Makefiles.
  */
 
-void __exit
+void
 icp_fini(void)
 {
 	skein_mod_fini();
@@ -114,16 +113,12 @@ icp_fini(void)
 	kcf_sched_destroy();
 	kcf_prov_tab_destroy();
 	kcf_destroy_mech_tabs();
-	mod_hash_fini();
 }
 
 /* roughly equivalent to kcf.c: _init() */
 int __init
 icp_init(void)
 {
-	/* initialize the mod hash module */
-	mod_hash_init();
-
 	/* initialize the mechanisms tables supported out-of-the-box */
 	kcf_init_mech_tabs();
 
@@ -144,10 +139,7 @@ icp_init(void)
 	return (0);
 }
 
-#if defined(_KERNEL)
+#if defined(_KERNEL) && defined(__FreeBSD__)
 module_exit(icp_fini);
 module_init(icp_init);
-MODULE_AUTHOR(ZFS_META_AUTHOR);
-MODULE_LICENSE(ZFS_META_LICENSE);
-MODULE_VERSION(ZFS_META_VERSION "-" ZFS_META_RELEASE);
 #endif

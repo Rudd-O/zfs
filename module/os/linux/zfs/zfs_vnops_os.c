@@ -174,11 +174,10 @@
  *	ZFS_EXIT(zfsvfs);		// finished in zfs
  *	return (error);			// done, report error
  */
-
-/* ARGSUSED */
 int
 zfs_open(struct inode *ip, int mode, int flag, cred_t *cr)
 {
+	(void) cr;
 	znode_t	*zp = ITOZ(ip);
 	zfsvfs_t *zfsvfs = ITOZSB(ip);
 
@@ -200,10 +199,10 @@ zfs_open(struct inode *ip, int mode, int flag, cred_t *cr)
 	return (0);
 }
 
-/* ARGSUSED */
 int
 zfs_close(struct inode *ip, int flag, cred_t *cr)
 {
+	(void) cr;
 	znode_t	*zp = ITOZ(ip);
 	zfsvfs_t *zfsvfs = ITOZSB(ip);
 
@@ -415,7 +414,6 @@ zfs_zrele_async(znode_t *zp)
  * Timestamps:
  *	NA
  */
-/* ARGSUSED */
 int
 zfs_lookup(znode_t *zdp, char *nm, znode_t **zpp, int flags, cred_t *cr,
     int *direntflags, pathname_t *realpnp)
@@ -476,7 +474,7 @@ zfs_lookup(znode_t *zdp, char *nm, znode_t **zpp, int flags, cred_t *cr,
 		 */
 
 		if ((error = zfs_zaccess(*zpp, ACE_EXECUTE, 0,
-		    B_FALSE, cr))) {
+		    B_TRUE, cr))) {
 			zrele(*zpp);
 			*zpp = NULL;
 		}
@@ -535,8 +533,6 @@ zfs_lookup(znode_t *zdp, char *nm, znode_t **zpp, int flags, cred_t *cr,
  *	dzp - ctime|mtime updated if new entry created
  *	 zp - ctime|mtime always, atime if new
  */
-
-/* ARGSUSED */
 int
 zfs_create(znode_t *dzp, char *name, vattr_t *vap, int excl,
     int mode, znode_t **zpp, cred_t *cr, int flag, vsecattr_t *vsecp)
@@ -782,11 +778,11 @@ out:
 	return (error);
 }
 
-/* ARGSUSED */
 int
 zfs_tmpfile(struct inode *dip, vattr_t *vap, int excl,
     int mode, struct inode **ipp, cred_t *cr, int flag, vsecattr_t *vsecp)
 {
+	(void) excl, (void) mode, (void) flag;
 	znode_t		*zp = NULL, *dzp = ITOZ(dip);
 	zfsvfs_t	*zfsvfs = ITOZSB(dip);
 	objset_t	*os;
@@ -918,9 +914,8 @@ out:
  *	 ip - ctime (if nlink > 0)
  */
 
-uint64_t null_xattr = 0;
+static uint64_t null_xattr = 0;
 
-/*ARGSUSED*/
 int
 zfs_remove(znode_t *dzp, char *name, cred_t *cr, int flags)
 {
@@ -1160,7 +1155,6 @@ out:
  *	dzp - ctime|mtime updated
  *	zpp - ctime|mtime|atime updated
  */
-/*ARGSUSED*/
 int
 zfs_mkdir(znode_t *dzp, char *dirname, vattr_t *vap, znode_t **zpp,
     cred_t *cr, int flags, vsecattr_t *vsecp)
@@ -1349,7 +1343,6 @@ out:
  * Timestamps:
  *	dzp - ctime|mtime updated
  */
-/*ARGSUSED*/
 int
 zfs_rmdir(znode_t *dzp, char *name, znode_t *cwd, cred_t *cr,
     int flags)
@@ -1482,10 +1475,10 @@ out:
  * We use 0 for '.', and 1 for '..'.  If this is the root of the filesystem,
  * we use the offset 2 for the '.zfs' directory.
  */
-/* ARGSUSED */
 int
 zfs_readdir(struct inode *ip, zpl_dir_context_t *ctx, cred_t *cr)
 {
+	(void) cr;
 	znode_t		*zp = ITOZ(ip);
 	zfsvfs_t	*zfsvfs = ITOZSB(ip);
 	objset_t	*os;
@@ -1635,7 +1628,6 @@ out:
  *
  *	RETURN:	0 (always succeeds)
  */
-/* ARGSUSED */
 int
 zfs_getattr_fast(struct user_namespace *user_ns, struct inode *ip,
     struct kstat *sp)
@@ -1823,7 +1815,6 @@ next:
  * Timestamps:
  *	ip - ctime updated, mtime updated if size changed.
  */
-/* ARGSUSED */
 int
 zfs_setattr(znode_t *zp, vattr_t *vap, int flags, cred_t *cr)
 {
@@ -2652,7 +2643,6 @@ zfs_rename_lock(znode_t *szp, znode_t *tdzp, znode_t *sdzp, zfs_zlock_t **zlpp)
  * Timestamps:
  *	sdzp,tdzp - ctime|mtime updated
  */
-/*ARGSUSED*/
 int
 zfs_rename(znode_t *sdzp, char *snm, znode_t *tdzp, char *tnm,
     cred_t *cr, int flags)
@@ -3020,7 +3010,6 @@ out:
  * Timestamps:
  *	dip - ctime|mtime updated
  */
-/*ARGSUSED*/
 int
 zfs_symlink(znode_t *dzp, char *name, vattr_t *vap, char *link,
     znode_t **zpp, cred_t *cr, int flags)
@@ -3188,10 +3177,10 @@ top:
  * Timestamps:
  *	ip - atime updated
  */
-/* ARGSUSED */
 int
 zfs_readlink(struct inode *ip, zfs_uio_t *uio, cred_t *cr)
 {
+	(void) cr;
 	znode_t		*zp = ITOZ(ip);
 	zfsvfs_t	*zfsvfs = ITOZSB(ip);
 	int		error;
@@ -3227,7 +3216,6 @@ zfs_readlink(struct inode *ip, zfs_uio_t *uio, cred_t *cr)
  *	tdzp - ctime|mtime updated
  *	 szp - ctime updated
  */
-/* ARGSUSED */
 int
 zfs_link(znode_t *tdzp, znode_t *szp, char *name, cred_t *cr,
     int flags)
@@ -3408,7 +3396,7 @@ top:
 }
 
 static void
-zfs_putpage_commit_cb(void *arg)
+zfs_putpage_sync_commit_cb(void *arg)
 {
 	struct page *pp = arg;
 
@@ -3416,13 +3404,26 @@ zfs_putpage_commit_cb(void *arg)
 	end_page_writeback(pp);
 }
 
+static void
+zfs_putpage_async_commit_cb(void *arg)
+{
+	struct page *pp = arg;
+	znode_t *zp = ITOZ(pp->mapping->host);
+
+	ClearPageError(pp);
+	end_page_writeback(pp);
+	atomic_dec_32(&zp->z_async_writes_cnt);
+}
+
 /*
  * Push a page out to disk, once the page is on stable storage the
  * registered commit callback will be run as notification of completion.
  *
- *	IN:	ip	- page mapped for inode.
- *		pp	- page to push (page is locked)
- *		wbc	- writeback control data
+ *	IN:	ip	 - page mapped for inode.
+ *		pp	 - page to push (page is locked)
+ *		wbc	 - writeback control data
+ *		for_sync - does the caller intend to wait synchronously for the
+ *			   page writeback to complete?
  *
  *	RETURN:	0 if success
  *		error code if failure
@@ -3430,9 +3431,9 @@ zfs_putpage_commit_cb(void *arg)
  * Timestamps:
  *	ip - ctime|mtime updated
  */
-/* ARGSUSED */
 int
-zfs_putpage(struct inode *ip, struct page *pp, struct writeback_control *wbc)
+zfs_putpage(struct inode *ip, struct page *pp, struct writeback_control *wbc,
+    boolean_t for_sync)
 {
 	znode_t		*zp = ITOZ(ip);
 	zfsvfs_t	*zfsvfs = ITOZSB(ip);
@@ -3530,6 +3531,16 @@ zfs_putpage(struct inode *ip, struct page *pp, struct writeback_control *wbc)
 		zfs_rangelock_exit(lr);
 
 		if (wbc->sync_mode != WB_SYNC_NONE) {
+			/*
+			 * Speed up any non-sync page writebacks since
+			 * they may take several seconds to complete.
+			 * Refer to the comment in zpl_fsync() (when
+			 * HAVE_FSYNC_RANGE is defined) for details.
+			 */
+			if (atomic_load_32(&zp->z_async_writes_cnt) > 0) {
+				zil_commit(zfsvfs->z_log, zp->z_id);
+			}
+
 			if (PageWriteback(pp))
 #ifdef HAVE_PAGEMAP_FOLIO_WAIT_BIT
 				folio_wait_bit(page_folio(pp), PG_writeback);
@@ -3555,6 +3566,8 @@ zfs_putpage(struct inode *ip, struct page *pp, struct writeback_control *wbc)
 	 * was in fact not skipped and should not be counted as if it were.
 	 */
 	wbc->pages_skipped--;
+	if (!for_sync)
+		atomic_inc_32(&zp->z_async_writes_cnt);
 	set_page_writeback(pp);
 	unlock_page(pp);
 
@@ -3569,9 +3582,15 @@ zfs_putpage(struct inode *ip, struct page *pp, struct writeback_control *wbc)
 			dmu_tx_wait(tx);
 
 		dmu_tx_abort(tx);
+#ifdef HAVE_VFS_FILEMAP_DIRTY_FOLIO
+		filemap_dirty_folio(page_mapping(pp), page_folio(pp));
+#else
 		__set_page_dirty_nobuffers(pp);
+#endif
 		ClearPageError(pp);
 		end_page_writeback(pp);
+		if (!for_sync)
+			atomic_dec_32(&zp->z_async_writes_cnt);
 		zfs_rangelock_exit(lr);
 		ZFS_EXIT(zfsvfs);
 		return (err);
@@ -3596,7 +3615,9 @@ zfs_putpage(struct inode *ip, struct page *pp, struct writeback_control *wbc)
 	err = sa_bulk_update(zp->z_sa_hdl, bulk, cnt, tx);
 
 	zfs_log_write(zfsvfs->z_log, tx, TX_WRITE, zp, pgoff, pglen, 0,
-	    zfs_putpage_commit_cb, pp);
+	    for_sync ? zfs_putpage_sync_commit_cb :
+	    zfs_putpage_async_commit_cb, pp);
+
 	dmu_tx_commit(tx);
 
 	zfs_rangelock_exit(lr);
@@ -3608,7 +3629,19 @@ zfs_putpage(struct inode *ip, struct page *pp, struct writeback_control *wbc)
 		 * performance reasons.
 		 */
 		zil_commit(zfsvfs->z_log, zp->z_id);
+	} else if (!for_sync && atomic_load_32(&zp->z_sync_writes_cnt) > 0) {
+		/*
+		 * If the caller does not intend to wait synchronously
+		 * for this page writeback to complete and there are active
+		 * synchronous calls on this file, do a commit so that
+		 * the latter don't accidentally end up waiting for
+		 * our writeback to complete. Refer to the comment in
+		 * zpl_fsync() (when HAVE_FSYNC_RANGE is defined) for details.
+		 */
+		zil_commit(zfsvfs->z_log, zp->z_id);
 	}
+
+	dataset_kstats_update_write_kstats(&zfsvfs->z_kstat, pglen);
 
 	ZFS_EXIT(zfsvfs);
 	return (err);
@@ -3685,7 +3718,6 @@ out:
 	return (error);
 }
 
-/*ARGSUSED*/
 void
 zfs_inactive(struct inode *ip)
 {
@@ -3789,7 +3821,6 @@ zfs_fillpage(struct inode *ip, struct page *pl[], int nr_pages)
  * Timestamps:
  *	vp - atime updated
  */
-/* ARGSUSED */
 int
 zfs_getpage(struct inode *ip, struct page *pl[], int nr_pages)
 {
@@ -3804,6 +3835,8 @@ zfs_getpage(struct inode *ip, struct page *pl[], int nr_pages)
 	ZFS_VERIFY_ZP(zp);
 
 	err = zfs_fillpage(ip, pl, nr_pages);
+
+	dataset_kstats_update_read_kstats(&zfsvfs->z_kstat, nr_pages*PAGESIZE);
 
 	ZFS_EXIT(zfsvfs);
 	return (err);
@@ -3821,11 +3854,11 @@ zfs_getpage(struct inode *ip, struct page *pl[], int nr_pages)
  *	RETURN:	0 if success
  *		error code if failure
  */
-/*ARGSUSED*/
 int
 zfs_map(struct inode *ip, offset_t off, caddr_t *addrp, size_t len,
     unsigned long vm_flags)
 {
+	(void) addrp;
 	znode_t  *zp = ITOZ(ip);
 	zfsvfs_t *zfsvfs = ITOZSB(ip);
 
@@ -3871,11 +3904,11 @@ zfs_map(struct inode *ip, offset_t off, caddr_t *addrp, size_t len,
  * Timestamps:
  *	zp - ctime|mtime updated
  */
-/* ARGSUSED */
 int
 zfs_space(znode_t *zp, int cmd, flock64_t *bfp, int flag,
     offset_t offset, cred_t *cr)
 {
+	(void) offset;
 	zfsvfs_t	*zfsvfs = ZTOZSB(zp);
 	uint64_t	off, len;
 	int		error;
@@ -3922,7 +3955,6 @@ zfs_space(znode_t *zp, int cmd, flock64_t *bfp, int flag,
 	return (error);
 }
 
-/*ARGSUSED*/
 int
 zfs_fid(struct inode *ip, fid_t *fidp)
 {

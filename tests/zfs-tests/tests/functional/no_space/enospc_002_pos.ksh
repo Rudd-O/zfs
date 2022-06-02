@@ -61,12 +61,9 @@ done
 
 log_mustnot_expect space zfs create $TESTPOOL/$TESTFS/subfs
 log_mustnot_expect space zfs clone $TESTPOOL/$TESTFS@snap $TESTPOOL/clone
-log_mustnot_expect space zfs snapshot $TESTPOOL/$TESTFS@snap2
-log_mustnot_expect space zfs bookmark \
-    $TESTPOOL/$TESTFS@snap $TESTPOOL/$TESTFS#bookmark
 
-log_must zfs send $TESTPOOL/$TESTFS@snap > $TEST_BASE_DIR/stream.$$
-log_mustnot_expect space zfs receive $TESTPOOL/$TESTFS/recvd < $TEST_BASE_DIR/stream.$$
+log_must eval "zfs send $TESTPOOL/$TESTFS@snap > $TEST_BASE_DIR/stream.$$"
+log_mustnot_expect space eval "zfs receive $TESTPOOL/$TESTFS/recvd < $TEST_BASE_DIR/stream.$$"
 log_must rm $TEST_BASE_DIR/stream.$$
 
 log_must zfs rename $TESTPOOL/$TESTFS@snap $TESTPOOL/$TESTFS@snap_newname

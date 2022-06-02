@@ -55,6 +55,7 @@
 %bcond_with    debug
 %bcond_with    debuginfo
 %bcond_with    asan
+%bcond_with    ubsan
 %bcond_with    systemd
 %bcond_with    pam
 %bcond_without pyzfs
@@ -89,12 +90,12 @@ License:        @ZFS_META_LICENSE@
 URL:            https://github.com/openzfs/zfs
 Source0:        %{name}-%{version}.tar.gz
 BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
-Requires:       libzpool5 = %{version}
-Requires:       libnvpair3 = %{version}
-Requires:       libuutil3 = %{version}
-Requires:       libzfs5 = %{version}
+Requires:       libzpool5%{?_isa} = %{version}-%{release}
+Requires:       libnvpair3%{?_isa} = %{version}-%{release}
+Requires:       libuutil3%{?_isa} = %{version}-%{release}
+Requires:       libzfs5%{?_isa} = %{version}-%{release}
 Requires:       %{name}-kmod = %{version}
-Provides:       %{name}-kmod-common = %{version}
+Provides:       %{name}-kmod-common = %{version}-%{release}
 Obsoletes:      spl
 
 # zfs-fuse provides the same commands and man pages that OpenZFS does.
@@ -109,16 +110,15 @@ BuildRequires:  libblkid-devel
 BuildRequires:  libudev-devel
 BuildRequires:  libattr-devel
 BuildRequires:  openssl-devel
-# We don't directly use it, but if this isn't installed, rpmbuild as root can
-# crash+corrupt rpmdb
-# See issue #12071
-BuildRequires:  ncompress
 %if 0%{?fedora} || 0%{?rhel} >= 8 || 0%{?centos} >= 8
 BuildRequires:  libtirpc-devel
 %endif
 
-%if %{with pam}
-BuildRequires:  pam-devel
+%if (0%{?fedora}%{?suse_version}) || (0%{?rhel} && 0%{?rhel} < 9)
+# We don't directly use it, but if this isn't installed, rpmbuild as root can
+# crash+corrupt rpmdb
+# See issue #12071
+BuildRequires:  ncompress
 %endif
 
 Requires:       openssl
@@ -221,13 +221,13 @@ This package provides support for managing ZFS filesystems
 %package -n libzfs5-devel
 Summary:        Development headers
 Group:          System Environment/Kernel
-Requires:       libzfs5 = %{version}
-Requires:       libzpool5 = %{version}
-Requires:       libnvpair3 = %{version}
-Requires:       libuutil3 = %{version}
-Provides:       libzpool5-devel
-Provides:       libnvpair3-devel
-Provides:       libuutil3-devel
+Requires:       libzfs5%{?_isa} = %{version}-%{release}
+Requires:       libzpool5%{?_isa} = %{version}-%{release}
+Requires:       libnvpair3%{?_isa} = %{version}-%{release}
+Requires:       libuutil3%{?_isa} = %{version}-%{release}
+Provides:       libzpool5-devel = %{version}-%{release}
+Provides:       libnvpair3-devel = %{version}-%{release}
+Provides:       libuutil3-devel = %{version}-%{release}
 Obsoletes:      zfs-devel
 Obsoletes:      libzfs2-devel
 Obsoletes:      libzfs4-devel
@@ -283,8 +283,8 @@ Summary:        Python %{python_version} wrapper for libzfs_core
 Group:          Development/Languages/Python
 License:        Apache-2.0
 BuildArch:      noarch
-Requires:       libzfs5 = %{version}
-Requires:       libnvpair3 = %{version}
+Requires:       libzfs5 = %{version}-%{release}
+Requires:       libnvpair3 = %{version}-%{release}
 Requires:       libffi
 Requires:       python%{__python_pkg_version}
 
@@ -319,12 +319,24 @@ This package provides a python wrapper for the libzfs_core C library.
 Summary:        Initramfs module
 Group:          System Environment/Kernel
 Requires:       %{name}%{?_isa} = %{version}-%{release}
-Requires:       %{name} = %{version}-%{release}
 Requires:       initramfs-tools
 
 %description initramfs
 This package contains a initramfs module used to construct an initramfs
 image which is ZFS aware.
+%endif
+
+%if %{with pam}
+%package -n pam_zfs_key
+Summary:        PAM module for encrypted ZFS datasets
+
+%if 0%{?rhel}%{?centos}%{?fedora}%{?suse_version}
+BuildRequires:  pam-devel
+%endif
+
+%description -n pam_zfs_key
+This package contains the pam_zfs_key PAM module, which provides
+support for unlocking datasets on user login.
 %endif
 
 %prep
@@ -344,6 +356,12 @@ image which is ZFS aware.
     %define asan --enable-asan
 %else
     %define asan --disable-asan
+%endif
+
+%if %{with ubsan}
+    %define ubsan --enable-ubsan
+%else
+    %define ubsan --disable-ubsan
 %endif
 
 %if 0%{?_systemd}
@@ -381,6 +399,7 @@ image which is ZFS aware.
     %{debug} \
     %{debuginfo} \
     %{asan} \
+    %{ubsan} \
     %{systemd} \
     %{pam} \
     %{pyzfs}
@@ -502,10 +521,8 @@ systemctl --system daemon-reload >/dev/null || true
 %config(noreplace) %{_sysconfdir}/%{name}/zpool.d/*
 %config(noreplace) %{_sysconfdir}/%{name}/vdev_id.conf.*.example
 %attr(440, root, root) %config(noreplace) %{_sysconfdir}/sudoers.d/*
-%if %{with pam}
-%{_libdir}/security/*
-%{_datadir}/pam-configs/*
-%endif
+
+%config(noreplace) %{_sysconfdir}/bash_completion.d/zfs
 
 %files -n libzpool5
 %{_libdir}/libzpool.so.*
@@ -534,7 +551,7 @@ systemctl --system daemon-reload >/dev/null || true
 %{_datadir}/%{name}/*.sh
 
 %files dracut
-%doc contrib/dracut/README.dracut.markdown
+%doc contrib/dracut/README.md
 %{_dracutdir}/modules.d/*
 
 %if %{with pyzfs}
@@ -548,10 +565,16 @@ systemctl --system daemon-reload >/dev/null || true
 
 %if 0%{?_initramfs}
 %files initramfs
-%doc contrib/initramfs/README.initramfs.markdown
+%doc contrib/initramfs/README.md
 /usr/share/initramfs-tools/*
 %else
 # Since we're not building the initramfs package,
 # ignore those files.
 %exclude /usr/share/initramfs-tools
+%endif
+
+%if %{with pam}
+%files -n pam_zfs_key
+%{_libdir}/security/*
+%{_datadir}/pam-configs/*
 %endif

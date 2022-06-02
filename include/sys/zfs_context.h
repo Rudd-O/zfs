@@ -55,7 +55,7 @@ extern "C" {
 #include <sys/disp.h>
 #include <sys/debug.h>
 #include <sys/random.h>
-#include <sys/strings.h>
+#include <sys/string.h>
 #include <sys/byteorder.h>
 #include <sys/list.h>
 #include <sys/time.h>
@@ -91,7 +91,6 @@ extern "C" {
 #include <unistd.h>
 #include <errno.h>
 #include <string.h>
-#include <strings.h>
 #include <pthread.h>
 #include <setjmp.h>
 #include <assert.h>
@@ -153,8 +152,8 @@ extern void dprintf_setup(int *argc, char **argv);
 
 extern void cmn_err(int, const char *, ...);
 extern void vcmn_err(int, const char *, va_list);
-extern void panic(const char *, ...)  __NORETURN;
-extern void vpanic(const char *, va_list)  __NORETURN;
+extern __attribute__((noreturn)) void panic(const char *, ...);
+extern __attribute__((noreturn)) void vpanic(const char *, va_list);
 
 #define	fm_panic	panic
 
@@ -693,10 +692,6 @@ extern char *kmem_asprintf(const char *fmt, ...);
 /*
  * Hostname information
  */
-extern char hw_serial[];	/* for userland-emulated hostid access */
-extern int ddi_strtoul(const char *str, char **nptr, int base,
-    unsigned long *result);
-
 extern int ddi_strtoull(const char *str, char **nptr, int base,
     u_longlong_t *result);
 

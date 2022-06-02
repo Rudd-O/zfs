@@ -44,7 +44,7 @@
 #include <sys/types.h>
 #include <sys/uio_impl.h>
 #include <sys/sysmacros.h>
-#include <sys/strings.h>
+#include <sys/string.h>
 #include <linux/kmap_compat.h>
 #include <linux/uaccess.h>
 
@@ -103,9 +103,9 @@ zfs_uiomove_iov(void *p, size_t n, zfs_uio_rw_t rw, zfs_uio_t *uio)
 			break;
 		case UIO_SYSSPACE:
 			if (rw == UIO_READ)
-				bcopy(p, iov->iov_base + skip, cnt);
+				memcpy(iov->iov_base + skip, p, cnt);
 			else
-				bcopy(iov->iov_base + skip, p, cnt);
+				memcpy(p, iov->iov_base + skip, cnt);
 			break;
 		default:
 			ASSERT(0);
@@ -138,9 +138,9 @@ zfs_uiomove_bvec(void *p, size_t n, zfs_uio_rw_t rw, zfs_uio_t *uio)
 
 		paddr = zfs_kmap_atomic(bv->bv_page);
 		if (rw == UIO_READ)
-			bcopy(p, paddr + bv->bv_offset + skip, cnt);
+			memcpy(paddr + bv->bv_offset + skip, p, cnt);
 		else
-			bcopy(paddr + bv->bv_offset + skip, p, cnt);
+			memcpy(p, paddr + bv->bv_offset + skip, cnt);
 		zfs_kunmap_atomic(paddr);
 
 		skip += cnt;
@@ -248,7 +248,7 @@ zfs_uio_prefaultpages(ssize_t n, zfs_uio_t *uio)
 			/* touch each page in this segment. */
 			p = iov->iov_base + skip;
 			while (cnt) {
-				if (get_user(tmp, (uint8_t *)p))
+				if (copy_from_user(&tmp, p, 1))
 					return (EFAULT);
 				ulong_t incr = MIN(cnt, PAGESIZE);
 				p += incr;
@@ -256,7 +256,7 @@ zfs_uio_prefaultpages(ssize_t n, zfs_uio_t *uio)
 			}
 			/* touch the last byte in case it straddles a page. */
 			p--;
-			if (get_user(tmp, (uint8_t *)p))
+			if (copy_from_user(&tmp, p, 1))
 				return (EFAULT);
 		}
 	}
@@ -275,7 +275,7 @@ zfs_uiocopy(void *p, size_t n, zfs_uio_rw_t rw, zfs_uio_t *uio, size_t *cbytes)
 	zfs_uio_t uio_copy;
 	int ret;
 
-	bcopy(uio, &uio_copy, sizeof (zfs_uio_t));
+	memcpy(&uio_copy, uio, sizeof (zfs_uio_t));
 
 	if (uio->uio_segflg == UIO_BVEC)
 		ret = zfs_uiomove_bvec(p, n, rw, &uio_copy);
