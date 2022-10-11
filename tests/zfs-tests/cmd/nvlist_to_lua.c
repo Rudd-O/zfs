@@ -84,7 +84,7 @@ nvlist_equal(nvlist_t *nvla, nvlist_t *nvlb)
 static void
 test(const char *testname, boolean_t expect_success, boolean_t expect_match)
 {
-	char *progstr = "input = ...; return {output=input}";
+	const char *progstr = "input = ...; return {output=input}";
 
 	nvlist_t *outnvl;
 
@@ -129,6 +129,11 @@ run_tests(void)
 	/* Note: maximum nvlist key length is 32KB */
 	int len = 1024 * 31;
 	char *bigstring = malloc(len);
+	if (bigstring == NULL) {
+		perror("malloc");
+		exit(EXIT_FAILURE);
+	}
+
 	for (int i = 0; i < len; i++)
 		bigstring[i] = 'a' + i % 26;
 	bigstring[len - 1] = '\0';
@@ -230,8 +235,8 @@ run_tests(void)
 		test("uint64_array", B_FALSE, B_FALSE);
 	}
 	{
-		char *const val[2] = { "0", "1" };
-		fnvlist_add_string_array(nvl, key, (const char **)val, 2);
+		const char *val[2] = { "0", "1" };
+		fnvlist_add_string_array(nvl, key, val, 2);
 		test("string_array", B_TRUE, B_FALSE);
 	}
 	{

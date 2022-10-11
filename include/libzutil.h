@@ -6,7 +6,7 @@
  * You may not use this file except in compliance with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -56,8 +56,17 @@ typedef const struct pool_config_ops {
 /*
  * An instance of pool_config_ops_t is expected in the caller's binary.
  */
-_LIBZUTIL_H const pool_config_ops_t libzfs_config_ops;
-_LIBZUTIL_H const pool_config_ops_t libzpool_config_ops;
+_LIBZUTIL_H pool_config_ops_t libzfs_config_ops;
+_LIBZUTIL_H pool_config_ops_t libzpool_config_ops;
+
+typedef enum lpc_error {
+	LPC_SUCCESS = 0,	/* no error -- success */
+	LPC_BADCACHE = 2000,	/* out of memory */
+	LPC_BADPATH,	/* must be an absolute path */
+	LPC_NOMEM,	/* out of memory */
+	LPC_EACCESS,	/* some devices require root privileges */
+	LPC_UNKNOWN
+} lpc_error_t;
 
 typedef struct importargs {
 	char **path;		/* a list of paths to search		*/
@@ -70,10 +79,20 @@ typedef struct importargs {
 	nvlist_t *policy;	/* load policy (max txg, rewind, etc.)	*/
 } importargs_t;
 
-_LIBZUTIL_H nvlist_t *zpool_search_import(void *, importargs_t *,
-    const pool_config_ops_t *);
-_LIBZUTIL_H int zpool_find_config(void *, const char *, nvlist_t **,
-    importargs_t *, const pool_config_ops_t *);
+typedef struct libpc_handle {
+	int lpc_error;
+	boolean_t lpc_printerr;
+	boolean_t lpc_open_access_error;
+	boolean_t lpc_desc_active;
+	char lpc_desc[1024];
+	pool_config_ops_t *lpc_ops;
+	void *lpc_lib_handle;
+} libpc_handle_t;
+
+_LIBZUTIL_H const char *libpc_error_description(libpc_handle_t *);
+_LIBZUTIL_H nvlist_t *zpool_search_import(libpc_handle_t *, importargs_t *);
+_LIBZUTIL_H int zpool_find_config(libpc_handle_t *, const char *, nvlist_t **,
+    importargs_t *);
 
 _LIBZUTIL_H const char * const * zpool_default_search_paths(size_t *count);
 _LIBZUTIL_H int zpool_read_label(int, nvlist_t **, int *);
@@ -155,9 +174,9 @@ struct zfs_cmd;
 #define	ANSI_RESET	"\033[0m"
 #define	ANSI_BOLD	"\033[1m"
 
-_LIBZUTIL_H void color_start(char *color);
+_LIBZUTIL_H void color_start(const char *color);
 _LIBZUTIL_H void color_end(void);
-_LIBZUTIL_H int printf_color(char *color, char *format, ...);
+_LIBZUTIL_H int printf_color(const char *color, const char *format, ...);
 
 _LIBZUTIL_H const char *zfs_basename(const char *path);
 _LIBZUTIL_H ssize_t zfs_dirnamelen(const char *path);

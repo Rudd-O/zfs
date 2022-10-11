@@ -6,7 +6,7 @@
  * You may not use this file except in compliance with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -18,25 +18,12 @@
  *
  * CDDL HEADER END
  */
-/*
- * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
- * Use is subject to license terms.
- */
 
-#ifndef _SYS_SPA_BOOT_H
-#define	_SYS_SPA_BOOT_H
+#ifndef _OS_LINUX_SPL_MISC_H
+#define	_OS_LINUX_SPL_MISC_H
 
-#include <sys/nvpair.h>
+#include <linux/kobject.h>
 
-#ifdef	__cplusplus
-extern "C" {
+extern void spl_signal_kobj_evt(struct block_device *bdev);
+
 #endif
-
-extern char *spa_get_bootprop(char *prop);
-extern void spa_free_bootprop(char *prop);
-
-#ifdef	__cplusplus
-}
-#endif
-
-#endif	/* _SYS_SPA_BOOT_H */

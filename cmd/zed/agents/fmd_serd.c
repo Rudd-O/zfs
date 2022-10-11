@@ -7,7 +7,7 @@
  * with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -74,9 +74,18 @@ fmd_serd_eng_alloc(const char *name, uint64_t n, hrtime_t t)
 	fmd_serd_eng_t *sgp;
 
 	sgp = malloc(sizeof (fmd_serd_eng_t));
+	if (sgp == NULL) {
+		perror("malloc");
+		exit(EXIT_FAILURE);
+	}
 	memset(sgp, 0, sizeof (fmd_serd_eng_t));
 
 	sgp->sg_name = strdup(name);
+	if (sgp->sg_name == NULL) {
+		perror("strdup");
+		exit(EXIT_FAILURE);
+	}
+
 	sgp->sg_flags = FMD_SERD_DIRTY;
 	sgp->sg_n = n;
 	sgp->sg_t = t;
@@ -123,6 +132,12 @@ fmd_serd_hash_create(fmd_serd_hash_t *shp)
 	shp->sh_hashlen = FMD_STR_BUCKETS;
 	shp->sh_hash = calloc(shp->sh_hashlen, sizeof (void *));
 	shp->sh_count = 0;
+
+	if (shp->sh_hash == NULL) {
+		perror("calloc");
+		exit(EXIT_FAILURE);
+	}
+
 }
 
 void
@@ -241,6 +256,10 @@ fmd_serd_eng_record(fmd_serd_eng_t *sgp, hrtime_t hrt)
 		fmd_serd_eng_discard(sgp, list_tail(&sgp->sg_list));
 
 	sep = malloc(sizeof (fmd_serd_elem_t));
+	if (sep == NULL) {
+		perror("malloc");
+		exit(EXIT_FAILURE);
+	}
 	sep->se_hrt = hrt;
 
 	list_insert_head(&sgp->sg_list, sep);

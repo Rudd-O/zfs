@@ -6,7 +6,7 @@
  * You may not use this file except in compliance with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -49,13 +49,13 @@
 int
 main(int argc, char **argv)
 {
-	char *filename = "badfile";
+	const char *filename = "badfile";
 	size_t size = 4395;
 	size_t idx = 0;
 	char *buf = NULL;
 	char *map = NULL;
 	int fd = -1, bytes, retval = 0;
-	unsigned seed;
+	uint_t seed;
 
 	if (argc < 2 || optind == argc) {
 		(void) fprintf(stderr,
@@ -92,7 +92,7 @@ main(int argc, char **argv)
 		retval = 1;
 		goto end;
 	}
-	seed = time(NULL);
+	seed = (uint_t)time(NULL);
 	srandom(seed);
 
 	idx = random() % size;

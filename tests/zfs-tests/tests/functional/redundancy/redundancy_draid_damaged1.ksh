@@ -7,7 +7,7 @@
 # You may not use this file except in compliance with the License.
 #
 # You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
+# or https://opensource.org/licenses/CDDL-1.0.
 # See the License for the specific language governing permissions
 # and limitations under the License.
 #
@@ -85,28 +85,13 @@ function test_sequential_resilver # <pool> <parity> <dir>
 
 	for (( i=0; i<$nparity; i=i+1 )); do
 		spare=draid${nparity}-0-$i
-		zpool status $pool
-		zpool replace -fsw $pool $dir/dev-$i $spare
-		zpool status $pool
+		log_must zpool replace -fsw $pool $dir/dev-$i $spare
 	done
 
 	log_must zpool scrub -w $pool
+	log_must zpool status $pool
 
-	# When only a single child was overwritten the sequential resilver
-	# can fully repair the damange from parity and the scrub will have
-	# nothing to repair. When multiple children are silently damaged
-	# the sequential resilver will calculate the wrong data since only
-	# the parity information is used and it cannot be verified with
-	# the checksum. However, since only the resilvering devices are
-	# written to with the bad data a subsequent scrub will be able to
-	# fully repair the pool.
-	#
-	if [[ $nparity == 1 ]]; then
-		log_must check_pool_status $pool "scan" "repaired 0B"
-	else
-		log_mustnot check_pool_status $pool "scan" "repaired 0B"
-	fi
-
+	log_mustnot check_pool_status $pool "scan" "repaired 0B"
 	log_must check_pool_status $pool "errors" "No known data errors"
 	log_must check_pool_status $pool "scan" "with 0 errors"
 }

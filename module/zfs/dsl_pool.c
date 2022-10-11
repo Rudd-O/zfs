@@ -6,7 +6,7 @@
  * You may not use this file except in compliance with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -101,8 +101,8 @@
  */
 unsigned long zfs_dirty_data_max = 0;
 unsigned long zfs_dirty_data_max_max = 0;
-int zfs_dirty_data_max_percent = 10;
-int zfs_dirty_data_max_max_percent = 25;
+uint_t zfs_dirty_data_max_percent = 10;
+uint_t zfs_dirty_data_max_max_percent = 25;
 
 /*
  * The upper limit of TX_WRITE log data.  Write operations are throttled
@@ -116,14 +116,14 @@ unsigned long zfs_wrlog_data_max = 0;
  * zfs_dirty_data_max), push out a txg.  This should be less than
  * zfs_vdev_async_write_active_min_dirty_percent.
  */
-static int zfs_dirty_data_sync_percent = 20;
+static uint_t zfs_dirty_data_sync_percent = 20;
 
 /*
  * Once there is this amount of dirty data, the dmu_tx_delay() will kick in
  * and delay each transaction.
  * This value should be >= zfs_vdev_async_write_active_max_dirty_percent.
  */
-int zfs_delay_min_dirty_percent = 60;
+uint_t zfs_delay_min_dirty_percent = 60;
 
 /*
  * This controls how quickly the delay approaches infinity.
@@ -438,10 +438,8 @@ dsl_pool_close(dsl_pool_t *dp)
 
 	taskq_destroy(dp->dp_unlinked_drain_taskq);
 	taskq_destroy(dp->dp_zrele_taskq);
-	if (dp->dp_blkstats != NULL) {
-		mutex_destroy(&dp->dp_blkstats->zab_lock);
+	if (dp->dp_blkstats != NULL)
 		vmem_free(dp->dp_blkstats, sizeof (zfs_all_blkstats_t));
-	}
 	kmem_free(dp, sizeof (dsl_pool_t));
 }
 
@@ -1389,7 +1387,7 @@ dsl_pool_user_release(dsl_pool_t *dp, uint64_t dsobj, const char *tag,
  */
 
 int
-dsl_pool_hold(const char *name, void *tag, dsl_pool_t **dp)
+dsl_pool_hold(const char *name, const void *tag, dsl_pool_t **dp)
 {
 	spa_t *spa;
 	int error;
@@ -1403,14 +1401,14 @@ dsl_pool_hold(const char *name, void *tag, dsl_pool_t **dp)
 }
 
 void
-dsl_pool_rele(dsl_pool_t *dp, void *tag)
+dsl_pool_rele(dsl_pool_t *dp, const void *tag)
 {
 	dsl_pool_config_exit(dp, tag);
 	spa_close(dp->dp_spa, tag);
 }
 
 void
-dsl_pool_config_enter(dsl_pool_t *dp, void *tag)
+dsl_pool_config_enter(dsl_pool_t *dp, const void *tag)
 {
 	/*
 	 * We use a "reentrant" reader-writer lock, but not reentrantly.
@@ -1429,14 +1427,14 @@ dsl_pool_config_enter(dsl_pool_t *dp, void *tag)
 }
 
 void
-dsl_pool_config_enter_prio(dsl_pool_t *dp, void *tag)
+dsl_pool_config_enter_prio(dsl_pool_t *dp, const void *tag)
 {
 	ASSERT(!rrw_held(&dp->dp_config_rwlock, RW_READER));
 	rrw_enter_read_prio(&dp->dp_config_rwlock, tag);
 }
 
 void
-dsl_pool_config_exit(dsl_pool_t *dp, void *tag)
+dsl_pool_config_exit(dsl_pool_t *dp, const void *tag)
 {
 	rrw_exit(&dp->dp_config_rwlock, tag);
 }
@@ -1457,14 +1455,14 @@ EXPORT_SYMBOL(dsl_pool_config_enter);
 EXPORT_SYMBOL(dsl_pool_config_exit);
 
 /* zfs_dirty_data_max_percent only applied at module load in arc_init(). */
-ZFS_MODULE_PARAM(zfs, zfs_, dirty_data_max_percent, INT, ZMOD_RD,
+ZFS_MODULE_PARAM(zfs, zfs_, dirty_data_max_percent, UINT, ZMOD_RD,
 	"Max percent of RAM allowed to be dirty");
 
 /* zfs_dirty_data_max_max_percent only applied at module load in arc_init(). */
-ZFS_MODULE_PARAM(zfs, zfs_, dirty_data_max_max_percent, INT, ZMOD_RD,
+ZFS_MODULE_PARAM(zfs, zfs_, dirty_data_max_max_percent, UINT, ZMOD_RD,
 	"zfs_dirty_data_max upper bound as % of RAM");
 
-ZFS_MODULE_PARAM(zfs, zfs_, delay_min_dirty_percent, INT, ZMOD_RW,
+ZFS_MODULE_PARAM(zfs, zfs_, delay_min_dirty_percent, UINT, ZMOD_RW,
 	"Transaction delay threshold");
 
 ZFS_MODULE_PARAM(zfs, zfs_, dirty_data_max, ULONG, ZMOD_RW,
@@ -1477,7 +1475,7 @@ ZFS_MODULE_PARAM(zfs, zfs_, wrlog_data_max, ULONG, ZMOD_RW,
 ZFS_MODULE_PARAM(zfs, zfs_, dirty_data_max_max, ULONG, ZMOD_RD,
 	"zfs_dirty_data_max upper bound in bytes");
 
-ZFS_MODULE_PARAM(zfs, zfs_, dirty_data_sync_percent, INT, ZMOD_RW,
+ZFS_MODULE_PARAM(zfs, zfs_, dirty_data_sync_percent, UINT, ZMOD_RW,
 	"Dirty data txg sync threshold as a percentage of zfs_dirty_data_max");
 
 ZFS_MODULE_PARAM(zfs, zfs_, delay_scale, ULONG, ZMOD_RW,

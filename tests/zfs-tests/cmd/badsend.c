@@ -6,7 +6,7 @@
  * You may not use this file except in compliance with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -76,6 +76,10 @@ main(int argc, char const * const argv[])
 	tosnap = p + 1;
 
 	fsname = strndup(tofull, p - tofull);
+	if (fsname == NULL) {
+		perror("strndup");
+		exit(EXIT_FAILURE);
+	}
 	if (strncmp(fsname, fromfull, p - tofull) != 0)
 		usage(argv[0]);
 

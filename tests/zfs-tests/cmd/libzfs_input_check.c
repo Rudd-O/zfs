@@ -528,7 +528,11 @@ test_recv_new(const char *dataset, int fd)
 	ssize_t count;
 
 	int cleanup_fd = open(ZFS_DEV, O_RDWR);
-
+	if (cleanup_fd == -1) {
+		(void) fprintf(stderr, "open(%s) failed: %s\n", ZFS_DEV,
+		    strerror(errno));
+		exit(EXIT_FAILURE);
+	}
 	(void) snprintf(snapshot, sizeof (snapshot), "%s@replicant", dataset);
 
 	count = pread(fd, &drr, sizeof (drr), 0);
@@ -545,6 +549,7 @@ test_recv_new(const char *dataset, int fd)
 	fnvlist_add_string(props, "org.openzfs:launch", "September 17th, 2013");
 	fnvlist_add_nvlist(optional, "localprops", props);
 	fnvlist_add_boolean(optional, "force");
+	fnvlist_add_boolean(optional, "heal");
 	fnvlist_add_int32(optional, "cleanup_fd", cleanup_fd);
 
 	/*
@@ -596,13 +601,13 @@ test_channel_program(const char *pool)
 	    "arg = ...\n"
 	    "argv = arg[\"argv\"]\n"
 	    "return argv[1]";
-	char *const argv[1] = { "Hello World!" };
+	const char *const argv[1] = { "Hello World!" };
 	nvlist_t *required = fnvlist_alloc();
 	nvlist_t *optional = fnvlist_alloc();
 	nvlist_t *args = fnvlist_alloc();
 
 	fnvlist_add_string(required, "program", program);
-	fnvlist_add_string_array(args, "argv", (const char * const *)argv, 1);
+	fnvlist_add_string_array(args, "argv", argv, 1);
 	fnvlist_add_nvlist(required, "arg", args);
 
 	fnvlist_add_boolean_value(optional, "sync", B_TRUE);

@@ -6,7 +6,7 @@
  * You may not use this file except in compliance with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * or https://opensource.org/licenses/CDDL-1.0.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -88,7 +88,7 @@ usage(void)
 
 
 static __attribute__((format(printf, 3, 4))) __attribute__((noreturn)) void
-fatal(spa_t *spa, void *tag, const char *fmt, ...)
+fatal(spa_t *spa, const void *tag, const char *fmt, ...)
 {
 	va_list ap;
 
@@ -140,8 +140,12 @@ zhack_import(char *target, boolean_t readonly)
 	g_importargs.can_be_active = readonly;
 	g_pool = strdup(target);
 
-	error = zpool_find_config(NULL, target, &config, &g_importargs,
-	    &libzpool_config_ops);
+	libpc_handle_t lpch = {
+		.lpc_lib_handle = NULL,
+		.lpc_ops = &libzpool_config_ops,
+		.lpc_printerr = B_TRUE
+	};
+	error = zpool_find_config(&lpch, target, &config, &g_importargs);
 	if (error)
 		fatal(NULL, FTAG, "cannot import '%s'", target);
 
@@ -166,7 +170,7 @@ zhack_import(char *target, boolean_t readonly)
 }
 
 static void
-zhack_spa_open(char *target, boolean_t readonly, void *tag, spa_t **spa)
+zhack_spa_open(char *target, boolean_t readonly, const void *tag, spa_t **spa)
 {
 	int err;
 
@@ -295,6 +299,8 @@ zhack_do_feature_enable(int argc, char **argv)
 			feature.fi_flags |= ZFEATURE_FLAG_READONLY_COMPAT;
 			break;
 		case 'd':
+			if (desc != NULL)
+				free(desc);
 			desc = strdup(optarg);
 			break;
 		default:

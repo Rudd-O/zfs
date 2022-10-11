@@ -14,7 +14,7 @@ AM_CPPFLAGS = \
 
 AM_LIBTOOLFLAGS = --silent
 
-AM_CFLAGS  = -std=gnu99 -Wall -Wextra -Wstrict-prototypes -Wmissing-prototypes -Wno-sign-compare -Wno-missing-field-initializers
+AM_CFLAGS  = -std=gnu99 -Wall -Wextra -Wstrict-prototypes -Wmissing-prototypes -Wwrite-strings -Wno-sign-compare -Wno-missing-field-initializers
 AM_CFLAGS += -fno-strict-aliasing
 AM_CFLAGS += $(NO_OMIT_FRAME_POINTER)
 AM_CFLAGS += $(IMPLICIT_FALLTHROUGH)
@@ -52,6 +52,8 @@ AM_CPPFLAGS_NOCHECK += -D"asctime(...)=__attribute__((deprecated(\"Use strftime(
 AM_CPPFLAGS_NOCHECK += -D"asctime_r(...)=__attribute__((deprecated(\"Use strftime(3) instead!\"))) asctime_r(__VA_ARGS__)"
 AM_CPPFLAGS_NOCHECK += -D"gmtime(...)=__attribute__((deprecated(\"gmtime(3) isn't thread-safe. Use gmtime_r(3) instead!\"))) gmtime(__VA_ARGS__)"
 AM_CPPFLAGS_NOCHECK += -D"localtime(...)=__attribute__((deprecated(\"localtime(3) isn't thread-safe. Use localtime_r(3) instead!\"))) localtime(__VA_ARGS__)"
+AM_CPPFLAGS_NOCHECK += -D"strncpy(...)=__attribute__((deprecated(\"strncpy(3) is deprecated. Use strlcpy(3) instead!\"))) strncpy(__VA_ARGS__)"
+
 AM_CPPFLAGS += $(AM_CPPFLAGS_NOCHECK)
 
 if ASAN_ENABLED
