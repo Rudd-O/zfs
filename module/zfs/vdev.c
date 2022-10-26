@@ -144,8 +144,8 @@ int zfs_nocacheflush = 0;
  * be forced by vdev logical ashift or by user via ashift property, but won't
  * be set automatically as a performance optimization.
  */
-uint64_t zfs_vdev_max_auto_ashift = 14;
-uint64_t zfs_vdev_min_auto_ashift = ASHIFT_MIN;
+uint_t zfs_vdev_max_auto_ashift = 14;
+uint_t zfs_vdev_min_auto_ashift = ASHIFT_MIN;
 
 void
 vdev_dbgmsg(vdev_t *vd, const char *fmt, ...)
@@ -5648,7 +5648,7 @@ vdev_prop_set(vdev_t *vd, nvlist_t *innvl, nvlist_t *outnvl)
 	nvpair_t *elem = NULL;
 	uint64_t vdev_guid;
 	nvlist_t *nvprops;
-	int error;
+	int error = 0;
 
 	ASSERT(vd != NULL);
 
@@ -6078,7 +6078,6 @@ vdev_prop_get(vdev_t *vd, nvlist_t *innvl, nvlist_t *outnvl)
 			strval = NULL;
 			zprop_source_t src = ZPROP_SRC_DEFAULT;
 			propname = za.za_name;
-			prop = vdev_name_to_prop(propname);
 
 			switch (za.za_integer_length) {
 			case 8:
@@ -6156,11 +6155,11 @@ ZFS_MODULE_PARAM(zfs, zfs_, embedded_slog_min_ms, UINT, ZMOD_RW,
 
 /* BEGIN CSTYLED */
 ZFS_MODULE_PARAM_CALL(zfs_vdev, zfs_vdev_, min_auto_ashift,
-	param_set_min_auto_ashift, param_get_ulong, ZMOD_RW,
+	param_set_min_auto_ashift, param_get_uint, ZMOD_RW,
 	"Minimum ashift used when creating new top-level vdevs");
 
 ZFS_MODULE_PARAM_CALL(zfs_vdev, zfs_vdev_, max_auto_ashift,
-	param_set_max_auto_ashift, param_get_ulong, ZMOD_RW,
+	param_set_max_auto_ashift, param_get_uint, ZMOD_RW,
 	"Maximum ashift used when optimizing for logical -> physical sector "
 	"size on new top-level vdevs");
 /* END CSTYLED */

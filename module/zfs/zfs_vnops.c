@@ -168,15 +168,15 @@ zfs_access(znode_t *zp, int mode, int flag, cred_t *cr)
 		return (error);
 
 	if (flag & V_ACE_MASK)
-		error = zfs_zaccess(zp, mode, flag, B_FALSE, cr);
+		error = zfs_zaccess(zp, mode, flag, B_FALSE, cr, NULL);
 	else
-		error = zfs_zaccess_rwx(zp, mode, flag, cr);
+		error = zfs_zaccess_rwx(zp, mode, flag, cr, NULL);
 
 	zfs_exit(zfsvfs, FTAG);
 	return (error);
 }
 
-static unsigned long zfs_vnops_read_chunk_size = 1024 * 1024; /* Tunable */
+static uint64_t zfs_vnops_read_chunk_size = 1024 * 1024; /* Tunable */
 
 /*
  * Read bytes from specified file into supplied buffer.
@@ -991,5 +991,5 @@ EXPORT_SYMBOL(zfs_write);
 EXPORT_SYMBOL(zfs_getsecattr);
 EXPORT_SYMBOL(zfs_setsecattr);
 
-ZFS_MODULE_PARAM(zfs_vnops, zfs_vnops_, read_chunk_size, ULONG, ZMOD_RW,
+ZFS_MODULE_PARAM(zfs_vnops, zfs_vnops_, read_chunk_size, U64, ZMOD_RW,
 	"Bytes to read per chunk");

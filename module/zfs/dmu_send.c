@@ -1586,9 +1586,8 @@ send_merge_thread(void *arg)
 		}
 		range_free(front_ranges[i]);
 	}
-	if (range == NULL)
-		range = kmem_zalloc(sizeof (*range), KM_SLEEP);
-	range->eos_marker = B_TRUE;
+	ASSERT3P(range, !=, NULL);
+	ASSERT3S(range->eos_marker, ==, B_TRUE);
 	bqueue_enqueue_flush(&smt_arg->q, range, 1);
 	spl_fstrans_unmark(cookie);
 	thread_exit();
@@ -2511,8 +2510,7 @@ dmu_send_impl(struct dmu_send_params *dspp)
 	}
 
 	if (featureflags & DMU_BACKUP_FEATURE_RAW) {
-		uint64_t ivset_guid = (ancestor_zb != NULL) ?
-		    ancestor_zb->zbm_ivset_guid : 0;
+		uint64_t ivset_guid = ancestor_zb->zbm_ivset_guid;
 		nvlist_t *keynvl = NULL;
 		ASSERT(os->os_encrypted);
 
@@ -2716,6 +2714,10 @@ dmu_send_obj(const char *pool, uint64_t tosnap, uint64_t fromsnap,
 		dspp.numfromredactsnaps = NUM_SNAPS_NOT_REDACTED;
 		err = dmu_send_impl(&dspp);
 	}
+	if (dspp.fromredactsnaps)
+		kmem_free(dspp.fromredactsnaps,
+		    dspp.numfromredactsnaps * sizeof (uint64_t));
+
 	dsl_dataset_rele(dspp.to_ds, FTAG);
 	return (err);
 }
@@ -2924,6 +2926,10 @@ dmu_send(const char *tosnap, const char *fromsnap, boolean_t embedok,
 			/* dmu_send_impl will call dsl_pool_rele for us. */
 			err = dmu_send_impl(&dspp);
 		} else {
+			if (dspp.fromredactsnaps)
+				kmem_free(dspp.fromredactsnaps,
+				    dspp.numfromredactsnaps *
+				    sizeof (uint64_t));
 			dsl_pool_rele(dspp.dp, FTAG);
 		}
 	} else {
