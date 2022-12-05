@@ -631,8 +631,8 @@ zfs_acl_next_ace(zfs_acl_t *aclp, void *start, uint64_t *who,
 	return (NULL);
 }
 
-static uint64_t
-zfs_ace_walk(void *datap, uint64_t cookie, int aclcnt,
+static uintptr_t
+zfs_ace_walk(void *datap, uintptr_t cookie, int aclcnt,
     uint16_t *flags, uint16_t *type, uint32_t *mask)
 {
 	(void) aclcnt;
@@ -642,7 +642,7 @@ zfs_ace_walk(void *datap, uint64_t cookie, int aclcnt,
 
 	acep = zfs_acl_next_ace(aclp, acep, &who, mask,
 	    flags, type);
-	return ((uint64_t)(uintptr_t)acep);
+	return ((uintptr_t)acep);
 }
 
 /*
@@ -2483,7 +2483,7 @@ zfs_zaccess_rwx(znode_t *zp, mode_t mode, int flags, cred_t *cr,
  * Access function for secpolicy_vnode_setattr
  */
 int
-zfs_zaccess_unix(znode_t *zp, mode_t mode, cred_t *cr)
+zfs_zaccess_unix(void *zp, int mode, cred_t *cr)
 {
 	int v4_mode = zfs_unix_to_v4(mode >> 6);
 

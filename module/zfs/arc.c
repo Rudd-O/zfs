@@ -4469,7 +4469,7 @@ restart:
 	 * meta buffers.  Requests to the upper layers will be made with
 	 * increasingly large scan sizes until the ARC is below the limit.
 	 */
-	if (meta_used > arc_meta_limit) {
+	if (meta_used > arc_meta_limit || arc_available_memory() < 0) {
 		if (type == ARC_BUFC_DATA) {
 			type = ARC_BUFC_METADATA;
 		} else {
@@ -5136,7 +5136,7 @@ arc_adapt(int bytes, arc_state_t *state)
 		if (!zfs_arc_p_dampener_disable)
 			mult = MIN(mult, 10); /* avoid wild arc_p adjustment */
 
-		arc_p = MIN(arc_c - arc_p_min, arc_p + bytes * mult);
+		arc_p = MIN(arc_c - arc_p_min, arc_p + (uint64_t)bytes * mult);
 	} else if (state == arc_mfu_ghost) {
 		uint64_t delta;
 
@@ -5173,7 +5173,7 @@ arc_adapt(int bytes, arc_state_t *state)
 		atomic_add_64(&arc_c, (int64_t)bytes);
 		if (arc_c > arc_c_max)
 			arc_c = arc_c_max;
-		else if (state == arc_anon)
+		else if (state == arc_anon && arc_p < arc_c >> 1)
 			atomic_add_64(&arc_p, (int64_t)bytes);
 		if (arc_p > arc_c)
 			arc_p = arc_c;
@@ -5386,7 +5386,8 @@ arc_get_data_impl(arc_buf_hdr_t *hdr, uint64_t size, const void *tag,
 		if (aggsum_upper_bound(&arc_sums.arcstat_size) < arc_c &&
 		    hdr->b_l1hdr.b_state == arc_anon &&
 		    (zfs_refcount_count(&arc_anon->arcs_size) +
-		    zfs_refcount_count(&arc_mru->arcs_size) > arc_p))
+		    zfs_refcount_count(&arc_mru->arcs_size) > arc_p &&
+		    arc_p < arc_c >> 1))
 			arc_p = MIN(arc_c, arc_p + size);
 	}
 }

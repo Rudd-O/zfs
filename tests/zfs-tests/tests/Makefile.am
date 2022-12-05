@@ -368,6 +368,7 @@ nobase_dist_datadir_zfs_tests_tests_DATA += \
 	functional/upgrade/upgrade_common.kshlib \
 	functional/user_namespace/user_namespace.cfg \
 	functional/user_namespace/user_namespace_common.kshlib \
+	functional/userquota/13709_reproducer.bz2 \
 	functional/userquota/userquota.cfg \
 	functional/userquota/userquota_common.kshlib \
 	functional/vdev_zaps/vdev_zaps.kshlib \
@@ -1366,6 +1367,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/events/events_001_pos.ksh \
 	functional/events/events_002_pos.ksh \
 	functional/events/setup.ksh \
+	functional/events/zed_cksum_reported.ksh \
 	functional/events/zed_fd_spill.ksh \
 	functional/events/zed_rc_filter.ksh \
 	functional/exec/cleanup.ksh \
@@ -1811,6 +1813,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/rsend/send_partial_dataset.ksh \
 	functional/rsend/send_raw_ashift.ksh \
 	functional/rsend/send_raw_spill_block.ksh \
+	functional/rsend/send_raw_large_blocks.ksh \
 	functional/rsend/send_realloc_dnode_size.ksh \
 	functional/rsend/send_realloc_encrypted_files.ksh \
 	functional/rsend/send_realloc_files.ksh \
@@ -1935,6 +1938,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/userquota/userspace_003_pos.ksh \
 	functional/userquota/userspace_encrypted.ksh \
 	functional/userquota/userspace_send_encrypted.ksh \
+	functional/userquota/userspace_encrypted_13709.ksh \
 	functional/vdev_zaps/cleanup.ksh \
 	functional/vdev_zaps/setup.ksh \
 	functional/vdev_zaps/vdev_zaps_001_pos.ksh \
@@ -2006,4 +2010,5 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/idmap_mount/idmap_mount_001.ksh \
 	functional/idmap_mount/idmap_mount_002.ksh \
 	functional/idmap_mount/idmap_mount_003.ksh \
-	functional/idmap_mount/idmap_mount_004.ksh
+	functional/idmap_mount/idmap_mount_004.ksh \
+	functional/idmap_mount/idmap_mount_005.ksh

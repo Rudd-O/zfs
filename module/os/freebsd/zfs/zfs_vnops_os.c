@@ -3373,11 +3373,6 @@ zfs_do_rename_impl(vnode_t *sdvp, vnode_t **svpp, struct componentname *scnp,
 			if (error == 0) {
 				zfs_log_rename(zilog, tx, TX_RENAME, sdzp,
 				    snm, tdzp, tnm, szp);
-
-				/*
-				 * Update path information for the target vnode
-				 */
-				vn_renamepath(tdvp, *svpp, tnm, strlen(tnm));
 			} else {
 				/*
 				 * At this point, we have successfully created
@@ -3420,13 +3415,16 @@ out:
 
 int
 zfs_rename(znode_t *sdzp, const char *sname, znode_t *tdzp, const char *tname,
-    cred_t *cr, int flags, zuserns_t *mnt_ns)
+    cred_t *cr, int flags, uint64_t rflags, vattr_t *wo_vap, zuserns_t *mnt_ns)
 {
 	struct componentname scn, tcn;
 	vnode_t *sdvp, *tdvp;
 	vnode_t *svp, *tvp;
 	int error;
 	svp = tvp = NULL;
+
+	if (rflags != 0 || wo_vap != NULL)
+		return (SET_ERROR(EINVAL));
 
 	sdvp = ZTOV(sdzp);
 	tdvp = ZTOV(tdzp);
@@ -4726,7 +4724,6 @@ static int
 zfs_freebsd_fsync(struct vop_fsync_args *ap)
 {
 
-	vop_stdfsync(ap);
 	return (zfs_fsync(VTOZ(ap->a_vp), 0, ap->a_td->td_ucred));
 }
 

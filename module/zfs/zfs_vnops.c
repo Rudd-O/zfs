@@ -64,7 +64,7 @@ zfs_fsync(znode_t *zp, int syncflag, cred_t *cr)
 	int error = 0;
 	zfsvfs_t *zfsvfs = ZTOZSB(zp);
 
-	(void) tsd_set(zfs_fsyncer_key, (void *)zfs_fsync_sync_cnt);
+	(void) tsd_set(zfs_fsyncer_key, (void *)(uintptr_t)zfs_fsync_sync_cnt);
 
 	if (zfsvfs->z_os->os_sync != ZFS_SYNC_DISABLED) {
 		if ((error = zfs_enter_verify_zp(zfsvfs, zp, FTAG)) != 0)
@@ -168,9 +168,19 @@ zfs_access(znode_t *zp, int mode, int flag, cred_t *cr)
 		return (error);
 
 	if (flag & V_ACE_MASK)
-		error = zfs_zaccess(zp, mode, flag, B_FALSE, cr, NULL);
+#if defined(__linux__)
+		error = zfs_zaccess(zp, mode, flag, B_FALSE, cr,
+		    kcred->user_ns);
+#else
+		error = zfs_zaccess(zp, mode, flag, B_FALSE, cr,
+		    NULL);
+#endif
 	else
+#if defined(__linux__)
+		error = zfs_zaccess_rwx(zp, mode, flag, cr, kcred->user_ns);
+#else
 		error = zfs_zaccess_rwx(zp, mode, flag, cr, NULL);
+#endif
 
 	zfs_exit(zfsvfs, FTAG);
 	return (error);
