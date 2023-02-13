@@ -46,6 +46,7 @@ extern "C" {
  *	ARC_mru_ghost	- recently used, no longer in cache
  *	ARC_mfu		- frequently used, currently cached
  *	ARC_mfu_ghost	- frequently used, no longer in cache
+ *	ARC_uncached	- uncacheable prefetch, to be evicted
  *	ARC_l2c_only	- exists in L2ARC but not other states
  * When there are no active references to the buffer, they are
  * are linked onto a list in one of these arc states.  These are
@@ -155,9 +156,6 @@ struct arc_write_callback {
  * these two allocation states.
  */
 typedef struct l1arc_buf_hdr {
-	kmutex_t		b_freeze_lock;
-	zio_cksum_t		*b_freeze_cksum;
-
 	/* for waiting on reads to complete */
 	kcondvar_t		b_cv;
 	uint8_t			b_byteswap;
@@ -180,6 +178,11 @@ typedef struct l1arc_buf_hdr {
 
 	arc_callback_t		*b_acb;
 	abd_t			*b_pabd;
+
+#ifdef ZFS_DEBUG
+	zio_cksum_t		*b_freeze_cksum;
+	kmutex_t		b_freeze_lock;
+#endif
 } l1arc_buf_hdr_t;
 
 typedef enum l2arc_dev_hdr_flags_t {
@@ -542,6 +545,7 @@ typedef struct arc_stats {
 	kstat_named_t arcstat_mru_ghost_hits;
 	kstat_named_t arcstat_mfu_hits;
 	kstat_named_t arcstat_mfu_ghost_hits;
+	kstat_named_t arcstat_uncached_hits;
 	kstat_named_t arcstat_deleted;
 	/*
 	 * Number of buffers that could not be evicted because the hash lock
@@ -744,6 +748,21 @@ typedef struct arc_stats {
 	 * ARC_BUFC_METADATA, and linked off the arc_mru_ghost state.
 	 */
 	kstat_named_t arcstat_mfu_ghost_evictable_metadata;
+	/*
+	 * Total number of bytes that are going to be evicted from ARC due to
+	 * ARC_FLAG_UNCACHED being set.
+	 */
+	kstat_named_t arcstat_uncached_size;
+	/*
+	 * Number of data bytes that are going to be evicted from ARC due to
+	 * ARC_FLAG_UNCACHED being set.
+	 */
+	kstat_named_t arcstat_uncached_evictable_data;
+	/*
+	 * Number of metadata bytes that that are going to be evicted from ARC
+	 * due to ARC_FLAG_UNCACHED being set.
+	 */
+	kstat_named_t arcstat_uncached_evictable_metadata;
 	kstat_named_t arcstat_l2_hits;
 	kstat_named_t arcstat_l2_misses;
 	/*
@@ -900,6 +919,7 @@ typedef struct arc_sums {
 	wmsum_t arcstat_mru_ghost_hits;
 	wmsum_t arcstat_mfu_hits;
 	wmsum_t arcstat_mfu_ghost_hits;
+	wmsum_t arcstat_uncached_hits;
 	wmsum_t arcstat_deleted;
 	wmsum_t arcstat_mutex_miss;
 	wmsum_t arcstat_access_skip;
@@ -1006,6 +1026,7 @@ typedef struct arc_evict_waiter {
 #define	arc_mfu		(&ARC_mfu)
 #define	arc_mfu_ghost	(&ARC_mfu_ghost)
 #define	arc_l2c_only	(&ARC_l2c_only)
+#define	arc_uncached	(&ARC_uncached)
 
 extern taskq_t *arc_prune_taskq;
 extern arc_stats_t arc_stats;

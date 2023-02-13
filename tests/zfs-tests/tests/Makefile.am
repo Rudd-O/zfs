@@ -1367,8 +1367,10 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/events/events_001_pos.ksh \
 	functional/events/events_002_pos.ksh \
 	functional/events/setup.ksh \
+	functional/events/zed_cksum_config.ksh \
 	functional/events/zed_cksum_reported.ksh \
 	functional/events/zed_fd_spill.ksh \
+	functional/events/zed_io_config.ksh \
 	functional/events/zed_rc_filter.ksh \
 	functional/exec/cleanup.ksh \
 	functional/exec/exec_001_pos.ksh \
@@ -1537,6 +1539,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/no_space/enospc_002_pos.ksh \
 	functional/no_space/enospc_003_pos.ksh \
 	functional/no_space/enospc_df.ksh \
+	functional/no_space/enospc_ganging.ksh \
 	functional/no_space/enospc_rm.ksh \
 	functional/no_space/setup.ksh \
 	functional/online_offline/cleanup.ksh \
@@ -1806,7 +1809,9 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/rsend/send-c_zstreamdump.ksh \
 	functional/rsend/send-cpL_varied_recsize.ksh \
 	functional/rsend/send_doall.ksh \
+	functional/rsend/send_encrypted_incremental.ksh \
 	functional/rsend/send_encrypted_files.ksh \
+	functional/rsend/send_encrypted_freeobjects.ksh \
 	functional/rsend/send_encrypted_hierarchy.ksh \
 	functional/rsend/send_encrypted_props.ksh \
 	functional/rsend/send_encrypted_truncated_files.ksh \
