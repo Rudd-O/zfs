@@ -188,7 +188,6 @@ typedef struct znode {
 	boolean_t	z_atime_dirty;	/* atime needs to be synced */
 	boolean_t	z_zn_prefetch;	/* Prefetch znodes? */
 	boolean_t	z_is_sa;	/* are we native sa? */
-	boolean_t	z_is_mapped;	/* are we mmap'ed */
 	boolean_t	z_is_ctldir;	/* are we .zfs entry */
 	boolean_t	z_suspended;	/* extra ref from a suspend? */
 	uint_t		z_blksz;	/* block size in bytes */
@@ -316,6 +315,9 @@ extern void zfs_log_setattr(zilog_t *zilog, dmu_tx_t *tx, int txtype,
     znode_t *zp, vattr_t *vap, uint_t mask_applied, zfs_fuid_info_t *fuidp);
 extern void zfs_log_acl(zilog_t *zilog, dmu_tx_t *tx, znode_t *zp,
     vsecattr_t *vsecp, zfs_fuid_info_t *fuidp);
+extern void zfs_log_clone_range(zilog_t *zilog, dmu_tx_t *tx, int txtype,
+    znode_t *zp, uint64_t offset, uint64_t length, uint64_t blksz,
+    const blkptr_t *bps, size_t nbps);
 extern void zfs_xvattr_set(znode_t *zp, xvattr_t *xvap, dmu_tx_t *tx);
 extern void zfs_upgrade(zfsvfs_t *zfsvfs, dmu_tx_t *tx);
 extern void zfs_log_setsaxattr(zilog_t *zilog, dmu_tx_t *tx, int txtype,

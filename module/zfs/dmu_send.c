@@ -493,6 +493,7 @@ dmu_dump_write(dmu_send_cookie_t *dscp, dmu_object_type_t type, uint64_t object,
 	    (bp != NULL ? BP_GET_COMPRESS(bp) != ZIO_COMPRESS_OFF &&
 	    io_compressed : lsize != psize);
 	if (raw || compressed) {
+		ASSERT(bp != NULL);
 		ASSERT(raw || dscp->dsc_featureflags &
 		    DMU_BACKUP_FEATURE_COMPRESSED);
 		ASSERT(!BP_IS_EMBEDDED(bp));
@@ -1122,7 +1123,7 @@ send_cb(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
 	 */
 	if (sta->os->os_encrypted &&
 	    !BP_IS_HOLE(bp) && !BP_USES_CRYPT(bp)) {
-		spa_log_error(spa, zb);
+		spa_log_error(spa, zb, &bp->blk_birth);
 		zfs_panic_recover("unencrypted block in encrypted "
 		    "object set %llu", dmu_objset_id(sta->os));
 		return (SET_ERROR(EIO));
@@ -3028,8 +3029,7 @@ dmu_send_estimate_fast(dsl_dataset_t *origds, dsl_dataset_t *fromds,
 
 		dsl_dataset_name(origds, dsname);
 		(void) strcat(dsname, "/");
-		(void) strlcat(dsname, recv_clone_name,
-		    sizeof (dsname) - strlen(dsname));
+		(void) strlcat(dsname, recv_clone_name, sizeof (dsname));
 
 		err = dsl_dataset_hold(origds->ds_dir->dd_pool,
 		    dsname, FTAG, &ds);

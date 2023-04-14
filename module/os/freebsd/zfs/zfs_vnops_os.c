@@ -29,13 +29,12 @@
 /* Portions Copyright 2007 Jeremy Teo */
 /* Portions Copyright 2010 Robert Milkowski */
 
-
-#include <sys/types.h>
 #include <sys/param.h>
 #include <sys/time.h>
 #include <sys/systm.h>
 #include <sys/sysmacros.h>
 #include <sys/resource.h>
+#include <security/mac/mac_framework.h>
 #include <sys/vfs.h>
 #include <sys/endian.h>
 #include <sys/vm.h>
@@ -84,6 +83,11 @@
 #include <vm/vm_param.h>
 #include <sys/zil.h>
 #include <sys/zfs_vnops.h>
+#include <sys/module.h>
+#include <sys/sysent.h>
+#include <sys/dmu_impl.h>
+#include <sys/brt.h>
+#include <sys/zfeature.h>
 
 #include <vm/vm_object.h>
 
@@ -1049,7 +1053,7 @@ zfs_lookup(vnode_t *dvp, const char *nm, vnode_t **vpp,
  */
 int
 zfs_create(znode_t *dzp, const char *name, vattr_t *vap, int excl, int mode,
-    znode_t **zpp, cred_t *cr, int flag, vsecattr_t *vsecp, zuserns_t *mnt_ns)
+    znode_t **zpp, cred_t *cr, int flag, vsecattr_t *vsecp, zidmap_t *mnt_ns)
 {
 	(void) excl, (void) mode, (void) flag;
 	znode_t		*zp;
@@ -1401,7 +1405,7 @@ zfs_remove(znode_t *dzp, const char *name, cred_t *cr, int flags)
  */
 int
 zfs_mkdir(znode_t *dzp, const char *dirname, vattr_t *vap, znode_t **zpp,
-    cred_t *cr, int flags, vsecattr_t *vsecp, zuserns_t *mnt_ns)
+    cred_t *cr, int flags, vsecattr_t *vsecp, zidmap_t *mnt_ns)
 {
 	(void) flags, (void) vsecp;
 	znode_t		*zp;
@@ -1624,7 +1628,8 @@ zfs_rmdir_(vnode_t *dvp, vnode_t *vp, const char *name, cred_t *cr)
 
 	dmu_tx_commit(tx);
 
-	cache_vop_rmdir(dvp, vp);
+	if (zfsvfs->z_use_namecache)
+		cache_vop_rmdir(dvp, vp);
 out:
 	if (zfsvfs->z_os->os_sync == ZFS_SYNC_ALWAYS)
 		zil_commit(zilog, 0);
@@ -2154,7 +2159,7 @@ zfs_getattr(vnode_t *vp, vattr_t *vap, int flags, cred_t *cr)
  *	vp - ctime updated, mtime updated if size changed.
  */
 int
-zfs_setattr(znode_t *zp, vattr_t *vap, int flags, cred_t *cr, zuserns_t *mnt_ns)
+zfs_setattr(znode_t *zp, vattr_t *vap, int flags, cred_t *cr, zidmap_t *mnt_ns)
 {
 	vnode_t		*vp = ZTOV(zp);
 	zfsvfs_t	*zfsvfs = zp->z_zfsvfs;
@@ -3415,7 +3420,7 @@ out:
 
 int
 zfs_rename(znode_t *sdzp, const char *sname, znode_t *tdzp, const char *tname,
-    cred_t *cr, int flags, uint64_t rflags, vattr_t *wo_vap, zuserns_t *mnt_ns)
+    cred_t *cr, int flags, uint64_t rflags, vattr_t *wo_vap, zidmap_t *mnt_ns)
 {
 	struct componentname scn, tcn;
 	vnode_t *sdvp, *tdvp;
@@ -3472,7 +3477,7 @@ fail:
  */
 int
 zfs_symlink(znode_t *dzp, const char *name, vattr_t *vap,
-    const char *link, znode_t **zpp, cred_t *cr, int flags, zuserns_t *mnt_ns)
+    const char *link, znode_t **zpp, cred_t *cr, int flags, zidmap_t *mnt_ns)
 {
 	(void) flags;
 	znode_t		*zp;
@@ -6208,6 +6213,95 @@ zfs_deallocate(struct vop_deallocate_args *ap)
 }
 #endif
 
+#ifndef _SYS_SYSPROTO_H_
+struct vop_copy_file_range_args {
+	struct vnode *a_invp;
+	off_t *a_inoffp;
+	struct vnode *a_outvp;
+	off_t *a_outoffp;
+	size_t *a_lenp;
+	unsigned int a_flags;
+	struct ucred *a_incred;
+	struct ucred *a_outcred;
+	struct thread *a_fsizetd;
+}
+#endif
+/*
+ * TODO: FreeBSD will only call file system-specific copy_file_range() if both
+ * files resides under the same mountpoint. In case of ZFS we want to be called
+ * even is files are in different datasets (but on the same pools, but we need
+ * to check that ourselves).
+ */
+static int
+zfs_freebsd_copy_file_range(struct vop_copy_file_range_args *ap)
+{
+	struct vnode *invp = ap->a_invp;
+	struct vnode *outvp = ap->a_outvp;
+	struct mount *mp;
+	struct uio io;
+	int error;
+	uint64_t len = *ap->a_lenp;
+
+	/*
+	 * TODO: If offset/length is not aligned to recordsize, use
+	 * vn_generic_copy_file_range() on this fragment.
+	 * It would be better to do this after we lock the vnodes, but then we
+	 * need something else than vn_generic_copy_file_range().
+	 */
+
+	/* Lock both vnodes, avoiding risk of deadlock. */
+	do {
+		mp = NULL;
+		error = vn_start_write(outvp, &mp, V_WAIT);
+		if (error == 0) {
+			error = vn_lock(outvp, LK_EXCLUSIVE);
+			if (error == 0) {
+				if (invp == outvp)
+					break;
+				error = vn_lock(invp, LK_SHARED | LK_NOWAIT);
+				if (error == 0)
+					break;
+				VOP_UNLOCK(outvp);
+				if (mp != NULL)
+					vn_finished_write(mp);
+				mp = NULL;
+				error = vn_lock(invp, LK_SHARED);
+				if (error == 0)
+					VOP_UNLOCK(invp);
+			}
+		}
+		if (mp != NULL)
+			vn_finished_write(mp);
+	} while (error == 0);
+	if (error != 0)
+		return (error);
+#ifdef MAC
+	error = mac_vnode_check_write(curthread->td_ucred, ap->a_outcred,
+	    outvp);
+	if (error != 0)
+		goto unlock;
+#endif
+
+	io.uio_offset = *ap->a_outoffp;
+	io.uio_resid = *ap->a_lenp;
+	error = vn_rlimit_fsize(outvp, &io, ap->a_fsizetd);
+	if (error != 0)
+		goto unlock;
+
+	error = zfs_clone_range(VTOZ(invp), ap->a_inoffp, VTOZ(outvp),
+	    ap->a_outoffp, &len, ap->a_fsizetd->td_ucred);
+	*ap->a_lenp = (size_t)len;
+
+unlock:
+	if (invp != outvp)
+		VOP_UNLOCK(invp);
+	VOP_UNLOCK(outvp);
+	if (mp != NULL)
+		vn_finished_write(mp);
+
+	return (error);
+}
+
 struct vop_vector zfs_vnodeops;
 struct vop_vector zfs_fifoops;
 struct vop_vector zfs_shareops;
@@ -6271,6 +6365,7 @@ struct vop_vector zfs_vnodeops = {
 #if __FreeBSD_version >= 1400043
 	.vop_add_writecount =	vop_stdadd_writecount_nomsync,
 #endif
+	.vop_copy_file_range =	zfs_freebsd_copy_file_range,
 };
 VFS_VOP_VECTOR_REGISTER(zfs_vnodeops);
 
