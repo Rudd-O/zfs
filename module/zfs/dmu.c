@@ -89,7 +89,11 @@ static int zfs_dmu_offset_next_sync = 1;
  * helps to limit the amount of memory that can be used by prefetching.
  * Larger objects should be prefetched a bit at a time.
  */
+#ifdef _ILP32
+uint_t dmu_prefetch_max = 8 * 1024 * 1024;
+#else
 uint_t dmu_prefetch_max = 8 * SPA_MAXBLOCKSIZE;
+#endif
 
 const dmu_object_type_info_t dmu_ot[DMU_OT_NUMTYPES] = {
 	{DMU_BSWAP_UINT8,  TRUE,  FALSE, FALSE, "unallocated"		},
@@ -552,8 +556,7 @@ dmu_buf_hold_array_by_dnode(dnode_t *dn, uint64_t offset, uint64_t length,
 		zio = zio_root(dn->dn_objset->os_spa, NULL, NULL,
 		    ZIO_FLAG_CANFAIL);
 	blkid = dbuf_whichblock(dn, 0, offset);
-	if ((flags & DMU_READ_NO_PREFETCH) == 0 &&
-	    length <= zfetch_array_rd_sz) {
+	if ((flags & DMU_READ_NO_PREFETCH) == 0) {
 		/*
 		 * Prepare the zfetch before initiating the demand reads, so
 		 * that if multiple threads block on same indirect block, we
@@ -1653,7 +1656,13 @@ dmu_sync_late_arrival(zio_t *pio, objset_t *os, dmu_sync_cb_t *done, zgd_t *zgd,
 
 	tx = dmu_tx_create(os);
 	dmu_tx_hold_space(tx, zgd->zgd_db->db_size);
-	if (dmu_tx_assign(tx, TXG_WAIT) != 0) {
+	/*
+	 * This transaction does not produce any dirty data or log blocks, so
+	 * it should not be throttled.  All other cases wait for TXG sync, by
+	 * which time the log block we are writing will be obsolete, so we can
+	 * skip waiting and just return error here instead.
+	 */
+	if (dmu_tx_assign(tx, TXG_NOWAIT | TXG_NOTHROTTLE) != 0) {
 		dmu_tx_abort(tx);
 		/* Make zl_get_data do txg_waited_synced() */
 		return (SET_ERROR(EIO));
@@ -1698,7 +1707,7 @@ dmu_sync_late_arrival(zio_t *pio, objset_t *os, dmu_sync_cb_t *done, zgd_t *zgd,
 	zio_nowait(zio_write(pio, os->os_spa, dmu_tx_get_txg(tx), zgd->zgd_bp,
 	    abd_get_from_buf(zgd->zgd_db->db_data, zgd->zgd_db->db_size),
 	    zgd->zgd_db->db_size, zgd->zgd_db->db_size, zp,
-	    dmu_sync_late_arrival_ready, NULL, NULL, dmu_sync_late_arrival_done,
+	    dmu_sync_late_arrival_ready, NULL, dmu_sync_late_arrival_done,
 	    dsa, ZIO_PRIORITY_SYNC_WRITE, ZIO_FLAG_CANFAIL, zb));
 
 	return (0);
@@ -1864,7 +1873,7 @@ dmu_sync(zio_t *pio, uint64_t txg, dmu_sync_cb_t *done, zgd_t *zgd)
 
 	zio_nowait(arc_write(pio, os->os_spa, txg, zgd->zgd_bp,
 	    dr->dt.dl.dr_data, !DBUF_IS_CACHEABLE(db), dbuf_is_l2cacheable(db),
-	    &zp, dmu_sync_ready, NULL, NULL, dmu_sync_done, dsa,
+	    &zp, dmu_sync_ready, NULL, dmu_sync_done, dsa,
 	    ZIO_PRIORITY_SYNC_WRITE, ZIO_FLAG_CANFAIL, &zb));
 
 	return (0);
@@ -2173,7 +2182,7 @@ restart:
 
 int
 dmu_read_l0_bps(objset_t *os, uint64_t object, uint64_t offset, uint64_t length,
-    dmu_tx_t *tx, blkptr_t *bps, size_t *nbpsp)
+    blkptr_t *bps, size_t *nbpsp)
 {
 	dmu_buf_t **dbp, *dbuf;
 	dmu_buf_impl_t *db;
@@ -2197,10 +2206,6 @@ dmu_read_l0_bps(objset_t *os, uint64_t object, uint64_t offset, uint64_t length,
 
 		mutex_enter(&db->db_mtx);
 
-		/*
-		 * If the block is not on the disk yet, it has no BP assigned.
-		 * There is not much we can do...
-		 */
 		if (!list_is_empty(&db->db_dirty_records)) {
 			dbuf_dirty_record_t *dr;
 
@@ -2235,10 +2240,6 @@ dmu_read_l0_bps(objset_t *os, uint64_t object, uint64_t offset, uint64_t length,
 			error = SET_ERROR(EAGAIN);
 			goto out;
 		}
-		if (dmu_buf_is_dirty(dbuf, tx)) {
-			error = SET_ERROR(EAGAIN);
-			goto out;
-		}
 		/*
 		 * Make sure we clone only data blocks.
 		 */
@@ -2257,7 +2258,7 @@ out:
 	return (error);
 }
 
-void
+int
 dmu_brt_clone(objset_t *os, uint64_t object, uint64_t offset, uint64_t length,
     dmu_tx_t *tx, const blkptr_t *bps, size_t nbps, boolean_t replay)
 {
@@ -2267,7 +2268,7 @@ dmu_brt_clone(objset_t *os, uint64_t object, uint64_t offset, uint64_t length,
 	struct dirty_leaf *dl;
 	dbuf_dirty_record_t *dr;
 	const blkptr_t *bp;
-	int numbufs;
+	int error = 0, i, numbufs;
 
 	spa = os->os_spa;
 
@@ -2275,27 +2276,37 @@ dmu_brt_clone(objset_t *os, uint64_t object, uint64_t offset, uint64_t length,
 	    &numbufs, &dbp));
 	ASSERT3U(nbps, ==, numbufs);
 
-	for (int i = 0; i < numbufs; i++) {
+	/*
+	 * Before we start cloning make sure that the dbufs sizes match new BPs
+	 * sizes. If they don't, that's a no-go, as we are not able to shrink
+	 * dbufs.
+	 */
+	for (i = 0; i < numbufs; i++) {
 		dbuf = dbp[i];
 		db = (dmu_buf_impl_t *)dbuf;
 		bp = &bps[i];
 
 		ASSERT0(db->db_level);
 		ASSERT(db->db_blkid != DMU_BONUS_BLKID);
+		ASSERT(db->db_blkid != DMU_SPILL_BLKID);
+
+		if (!BP_IS_HOLE(bp) && BP_GET_LSIZE(bp) != dbuf->db_size) {
+			error = SET_ERROR(EXDEV);
+			goto out;
+		}
+	}
+
+	for (i = 0; i < numbufs; i++) {
+		dbuf = dbp[i];
+		db = (dmu_buf_impl_t *)dbuf;
+		bp = &bps[i];
+
+		ASSERT0(db->db_level);
+		ASSERT(db->db_blkid != DMU_BONUS_BLKID);
+		ASSERT(db->db_blkid != DMU_SPILL_BLKID);
 		ASSERT(BP_IS_HOLE(bp) || dbuf->db_size == BP_GET_LSIZE(bp));
 
-		mutex_enter(&db->db_mtx);
-
-		VERIFY(!dbuf_undirty(db, tx));
-		ASSERT(list_head(&db->db_dirty_records) == NULL);
-		if (db->db_buf != NULL) {
-			arc_buf_destroy(db->db_buf, db);
-			db->db_buf = NULL;
-		}
-
-		mutex_exit(&db->db_mtx);
-
-		dmu_buf_will_not_fill(dbuf, tx);
+		dmu_buf_will_clone(dbuf, tx);
 
 		mutex_enter(&db->db_mtx);
 
@@ -2305,7 +2316,6 @@ dmu_brt_clone(objset_t *os, uint64_t object, uint64_t offset, uint64_t length,
 		dl = &dr->dt.dl;
 		dl->dr_overridden_by = *bp;
 		dl->dr_brtwrite = B_TRUE;
-
 		dl->dr_override_state = DR_OVERRIDDEN;
 		if (BP_IS_HOLE(bp)) {
 			dl->dr_overridden_by.blk_birth = 0;
@@ -2331,8 +2341,10 @@ dmu_brt_clone(objset_t *os, uint64_t object, uint64_t offset, uint64_t length,
 			brt_pending_add(spa, bp, tx);
 		}
 	}
-
+out:
 	dmu_buf_rele_array(dbp, numbufs, FTAG);
+
+	return (error);
 }
 
 void

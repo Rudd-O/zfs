@@ -6263,7 +6263,8 @@ zfs_freebsd_copy_file_range(struct vop_copy_file_range_args *ap)
 			goto bad_write_fallback;
 		}
 	} else {
-#if __FreeBSD_version >= 1400086
+#if (__FreeBSD_version >= 1302506 && __FreeBSD_version < 1400000) || \
+	__FreeBSD_version >= 1400086
 		vn_lock_pair(invp, false, LK_EXCLUSIVE, outvp, false,
 		    LK_EXCLUSIVE);
 #else
@@ -6289,7 +6290,7 @@ zfs_freebsd_copy_file_range(struct vop_copy_file_range_args *ap)
 
 	error = zfs_clone_range(VTOZ(invp), ap->a_inoffp, VTOZ(outvp),
 	    ap->a_outoffp, &len, ap->a_outcred);
-	if (error == EXDEV)
+	if (error == EXDEV || error == EOPNOTSUPP)
 		goto bad_locked_fallback;
 	*ap->a_lenp = (size_t)len;
 out_locked:

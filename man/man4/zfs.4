@@ -15,7 +15,7 @@
 .\" own identifying information:
 .\" Portions Copyright [yyyy] [name of copyright owner]
 .\"
-.Dd January 10, 2023
+.Dd July 21, 2023
 .Dt ZFS 4
 .Os
 .
@@ -238,6 +238,21 @@ relative to the pool.
 .It Sy metaslab_force_ganging Ns = Ns Sy 16777217 Ns B Po 16 MiB + 1 B Pc Pq u64
 Make some blocks above a certain size be gang blocks.
 This option is used by the test suite to facilitate testing.
+.
+.It Sy metaslab_force_ganging_pct Ns = Ns Sy 3 Ns % Pq uint
+For blocks that could be forced to be a gang block (due to
+.Sy metaslab_force_ganging ) ,
+force this many of them to be gang blocks.
+.
+.It Sy zfs_ddt_zap_default_bs Ns = Ns Sy 15 Po 32 KiB Pc Pq int
+Default DDT ZAP data block size as a power of 2. Note that changing this after
+creating a DDT on the pool will not affect existing DDTs, only newly created
+ones.
+.
+.It Sy zfs_ddt_zap_default_ibs Ns = Ns Sy 15 Po 32 KiB Pc Pq int
+Default DDT ZAP indirect block size as a power of 2. Note that changing this
+after creating a DDT on the pool will not affect existing DDTs, only newly
+created ones.
 .
 .It Sy zfs_default_bs Ns = Ns Sy 9 Po 512 B Pc Pq int
 Default dnode block size as a power of 2.
@@ -508,9 +523,6 @@ However, this is limited by
 .It Sy zap_micro_max_size Ns = Ns Sy 131072 Ns B Po 128 KiB Pc Pq int
 Maximum micro ZAP size.
 A micro ZAP is upgraded to a fat ZAP, once it grows beyond the specified size.
-.
-.It Sy zfetch_array_rd_sz Ns = Ns Sy 1048576 Ns B Po 1 MiB Pc Pq u64
-If prefetching is enabled, disable prefetching for reads larger than this size.
 .
 .It Sy zfetch_min_distance Ns = Ns Sy 4194304 Ns B Po 4 MiB Pc Pq uint
 Min bytes to prefetch per stream.
@@ -1764,6 +1776,9 @@ Scrubs are processed by the sync thread.
 While scrubbing, it will spend at least this much time
 working on a scrub between TXG flushes.
 .
+.It Sy zfs_scrub_error_blocks_per_txg Ns = Ns Sy 4096 Pq uint
+Error blocks to be scrubbed in one txg.
+.
 .It Sy zfs_scan_checkpoint_intval Ns = Ns Sy 7200 Ns s Po 2 hour Pc Pq uint
 To preserve progress across reboots, the sequential scan algorithm periodically
 needs to stop metadata scanning and issue all the verification I/O to disk.
@@ -2013,32 +2028,11 @@ Historical statistics for this many latest TXGs will be available in
 Flush dirty data to disk at least every this many seconds (maximum TXG
 duration).
 .
-.It Sy zfs_vdev_aggregate_trim Ns = Ns Sy 0 Ns | Ns 1 Pq uint
-Allow TRIM I/O operations to be aggregated.
-This is normally not helpful because the extents to be trimmed
-will have been already been aggregated by the metaslab.
-This option is provided for debugging and performance analysis.
-.
 .It Sy zfs_vdev_aggregation_limit Ns = Ns Sy 1048576 Ns B Po 1 MiB Pc Pq uint
 Max vdev I/O aggregation size.
 .
 .It Sy zfs_vdev_aggregation_limit_non_rotating Ns = Ns Sy 131072 Ns B Po 128 KiB Pc Pq uint
 Max vdev I/O aggregation size for non-rotating media.
-.
-.It Sy zfs_vdev_cache_bshift Ns = Ns Sy 16 Po 64 KiB Pc Pq uint
-Shift size to inflate reads to.
-.
-.It Sy zfs_vdev_cache_max Ns = Ns Sy 16384 Ns B Po 16 KiB Pc Pq uint
-Inflate reads smaller than this value to meet the
-.Sy zfs_vdev_cache_bshift
-size
-.Pq default Sy 64 KiB .
-.
-.It Sy zfs_vdev_cache_size Ns = Ns Sy 0 Pq uint
-Total size of the per-disk cache in bytes.
-.Pp
-Currently this feature is disabled, as it has been found to not be helpful
-for performance and in some cases harmful.
 .
 .It Sy zfs_vdev_mirror_rotating_inc Ns = Ns Sy 0 Pq int
 A number by which the balancing algorithm increments the load calculation for

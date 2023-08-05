@@ -723,16 +723,10 @@ typedef enum spa_mode {
  * Send TRIM commands in-line during normal pool operation while deleting.
  *	OFF: no
  *	ON: yes
- * NB: IN_FREEBSD_BASE is defined within the FreeBSD sources.
  */
 typedef enum {
 	SPA_AUTOTRIM_OFF = 0,	/* default */
 	SPA_AUTOTRIM_ON,
-#ifdef IN_FREEBSD_BASE
-	SPA_AUTOTRIM_DEFAULT = SPA_AUTOTRIM_ON,
-#else
-	SPA_AUTOTRIM_DEFAULT = SPA_AUTOTRIM_OFF,
-#endif
 } spa_autotrim_t;
 
 /*
@@ -1140,7 +1134,8 @@ extern const char *spa_state_to_name(spa_t *spa);
 struct zbookmark_phys;
 extern void spa_log_error(spa_t *spa, const zbookmark_phys_t *zb,
     const uint64_t *birth);
-extern void spa_remove_error(spa_t *spa, zbookmark_phys_t *zb);
+extern void spa_remove_error(spa_t *spa, zbookmark_phys_t *zb,
+    const uint64_t *birth);
 extern int zfs_ereport_post(const char *clazz, spa_t *spa, vdev_t *vd,
     const zbookmark_phys_t *zb, zio_t *zio, uint64_t state);
 extern boolean_t zfs_ereport_is_valid(const char *clazz, spa_t *spa, vdev_t *vd,
@@ -1154,6 +1149,7 @@ extern void zfs_post_state_change(spa_t *spa, vdev_t *vd, uint64_t laststate);
 extern void zfs_post_autoreplace(spa_t *spa, vdev_t *vd);
 extern uint64_t spa_approx_errlog_size(spa_t *spa);
 extern int spa_get_errlog(spa_t *spa, void *uaddr, uint64_t *count);
+extern uint64_t spa_get_last_errlog_size(spa_t *spa);
 extern void spa_errlog_rotate(spa_t *spa);
 extern void spa_errlog_drain(spa_t *spa);
 extern void spa_errlog_sync(spa_t *spa, uint64_t txg);
@@ -1164,10 +1160,13 @@ extern void spa_swap_errlog(spa_t *spa, uint64_t new_head_ds,
 extern void sync_error_list(spa_t *spa, avl_tree_t *t, uint64_t *obj,
     dmu_tx_t *tx);
 extern void spa_upgrade_errlog(spa_t *spa, dmu_tx_t *tx);
-
-/* vdev cache */
-extern void vdev_cache_stat_init(void);
-extern void vdev_cache_stat_fini(void);
+extern int find_top_affected_fs(spa_t *spa, uint64_t head_ds,
+    zbookmark_err_phys_t *zep, uint64_t *top_affected_fs);
+extern int find_birth_txg(struct dsl_dataset *ds, zbookmark_err_phys_t *zep,
+    uint64_t *birth_txg);
+extern void zep_to_zb(uint64_t dataset, zbookmark_err_phys_t *zep,
+    zbookmark_phys_t *zb);
+extern void name_to_errphys(char *buf, zbookmark_err_phys_t *zep);
 
 /* vdev mirror */
 extern void vdev_mirror_stat_init(void);

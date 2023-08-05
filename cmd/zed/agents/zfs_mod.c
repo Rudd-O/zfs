@@ -607,8 +607,6 @@ zfs_iter_vdev(zpool_handle_t *zhp, nvlist_t *nvl, void *data)
 		 */
 		if (nvlist_lookup_string(nvl, dp->dd_prop, &path) != 0 ||
 		    strcmp(dp->dd_compare, path) != 0) {
-			zed_log_msg(LOG_INFO, "  %s: no match (%s != vdev %s)",
-			    __func__, dp->dd_compare, path);
 			return;
 		}
 		if (dp->dd_new_vdev_guid != 0 && dp->dd_new_vdev_guid != guid) {
@@ -1288,17 +1286,14 @@ zfs_slm_fini(void)
 		tpool_destroy(g_tpool);
 	}
 
-	while ((pool = (list_head(&g_pool_list))) != NULL) {
-		list_remove(&g_pool_list, pool);
+	while ((pool = list_remove_head(&g_pool_list)) != NULL) {
 		zpool_close(pool->uap_zhp);
 		free(pool);
 	}
 	list_destroy(&g_pool_list);
 
-	while ((device = (list_head(&g_device_list))) != NULL) {
-		list_remove(&g_device_list, device);
+	while ((device = list_remove_head(&g_device_list)) != NULL)
 		free(device);
-	}
 	list_destroy(&g_device_list);
 
 	libzfs_fini(g_zfshdl);
