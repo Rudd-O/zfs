@@ -4134,6 +4134,11 @@ dump_uberblock(uberblock_t *ub, const char *header, const char *footer)
 	}
 	(void) printf("\tcheckpoint_txg = %llu\n",
 	    (u_longlong_t)ub->ub_checkpoint_txg);
+
+	(void) printf("\traidz_reflow state=%u off=%llu\n",
+	    (int)RRSS_GET_STATE(ub),
+	    (u_longlong_t)RRSS_GET_OFFSET(ub));
+
 	(void) printf("%s", footer ? footer : "");
 }
 
@@ -5179,7 +5184,7 @@ dump_label(const char *dev)
 			if (nvlist_size(config, &size, NV_ENCODE_XDR) != 0)
 				size = buflen;
 
-			/* If the device is a cache device clear the header. */
+			/* If the device is a cache device read the header. */
 			if (!read_l2arc_header) {
 				if (nvlist_lookup_uint64(config,
 				    ZPOOL_CONFIG_POOL_STATE, &l2cache) == 0 &&
@@ -5293,8 +5298,18 @@ dump_one_objset(const char *dsname, void *arg)
 	    avl_first(&dmu_objset_ds(os)->ds_bookmarks); dbn != NULL;
 	    dbn = AVL_NEXT(&dmu_objset_ds(os)->ds_bookmarks, dbn)) {
 		mos_obj_refd(dbn->dbn_phys.zbm_redaction_obj);
-		if (dbn->dbn_phys.zbm_redaction_obj != 0)
-			global_feature_count[SPA_FEATURE_REDACTION_BOOKMARKS]++;
+		if (dbn->dbn_phys.zbm_redaction_obj != 0) {
+			global_feature_count[
+			    SPA_FEATURE_REDACTION_BOOKMARKS]++;
+			objset_t *mos = os->os_spa->spa_meta_objset;
+			dnode_t *rl;
+			VERIFY0(dnode_hold(mos,
+			    dbn->dbn_phys.zbm_redaction_obj, FTAG, &rl));
+			if (rl->dn_have_spill) {
+				global_feature_count[
+				    SPA_FEATURE_REDACTION_LIST_SPILL]++;
+			}
+		}
 		if (dbn->dbn_phys.zbm_flags & ZBM_FLAG_HAS_FBN)
 			global_feature_count[SPA_FEATURE_BOOKMARK_WRITTEN]++;
 	}
@@ -8135,6 +8150,7 @@ dump_zpool(spa_t *spa)
 		for (spa_feature_t f = 0; f < SPA_FEATURES; f++)
 			global_feature_count[f] = UINT64_MAX;
 		global_feature_count[SPA_FEATURE_REDACTION_BOOKMARKS] = 0;
+		global_feature_count[SPA_FEATURE_REDACTION_LIST_SPILL] = 0;
 		global_feature_count[SPA_FEATURE_BOOKMARK_WRITTEN] = 0;
 		global_feature_count[SPA_FEATURE_LIVELIST] = 0;
 
@@ -8705,8 +8721,6 @@ zdb_read_block(char *thing, spa_t *spa)
 			BP_SET_CHECKSUM(bp, ck);
 			spa_config_enter(spa, SCL_STATE, FTAG, RW_READER);
 			czio = zio_root(spa, NULL, NULL, ZIO_FLAG_CANFAIL);
-			czio->io_bp = bp;
-
 			if (vd == vd->vdev_top) {
 				zio_nowait(zio_read(czio, spa, bp, pabd, psize,
 				    NULL, NULL,
@@ -8725,7 +8739,8 @@ zdb_read_block(char *thing, spa_t *spa)
 			}
 			error = zio_wait(czio);
 			if (error == 0 || error == ECKSUM) {
-				zio_t *ck_zio = zio_root(spa, NULL, NULL, 0);
+				zio_t *ck_zio = zio_null(NULL, spa, NULL,
+				    NULL, NULL, 0);
 				ck_zio->io_offset =
 				    DVA_GET_OFFSET(&bp->blk_dva[0]);
 				ck_zio->io_bp = bp;

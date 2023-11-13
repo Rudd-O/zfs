@@ -40,8 +40,6 @@
 #include <sys/zap.h>
 #include <sys/btree.h>
 
-#define	WITH_DF_BLOCK_ALLOCATOR
-
 #define	GANG_ALLOCATION(flags) \
 	((flags) & (METASLAB_GANG_CHILD | METASLAB_GANG_HEADER))
 
@@ -206,11 +204,6 @@ static const uint32_t metaslab_min_search_count = 100;
  * size (or larger).
  */
 static int metaslab_df_use_largest_segment = B_FALSE;
-
-/*
- * Percentage of all cpus that can be used by the metaslab taskq.
- */
-int metaslab_load_pct = 50;
 
 /*
  * These tunables control how long a metaslab will remain loaded after the
@@ -856,9 +849,6 @@ metaslab_group_create(metaslab_class_t *mc, vdev_t *vd, int allocators)
 		zfs_refcount_create_tracked(&mga->mga_alloc_queue_depth);
 	}
 
-	mg->mg_taskq = taskq_create("metaslab_group_taskq", metaslab_load_pct,
-	    maxclsyspri, 10, INT_MAX, TASKQ_THREADS_CPU_PCT | TASKQ_DYNAMIC);
-
 	return (mg);
 }
 
@@ -874,7 +864,6 @@ metaslab_group_destroy(metaslab_group_t *mg)
 	 */
 	ASSERT(mg->mg_activation_count <= 0);
 
-	taskq_destroy(mg->mg_taskq);
 	avl_destroy(&mg->mg_metaslab_tree);
 	mutex_destroy(&mg->mg_lock);
 	mutex_destroy(&mg->mg_ms_disabled_lock);
@@ -965,7 +954,7 @@ metaslab_group_passivate(metaslab_group_t *mg)
 	 * allocations from taking place and any changes to the vdev tree.
 	 */
 	spa_config_exit(spa, locks & ~(SCL_ZIO - 1), spa);
-	taskq_wait_outstanding(mg->mg_taskq, 0);
+	taskq_wait_outstanding(spa->spa_metaslab_taskq, 0);
 	spa_config_enter(spa, locks & ~(SCL_ZIO - 1), spa, RW_WRITER);
 	metaslab_group_alloc_update(mg);
 	for (int i = 0; i < mg->mg_allocators; i++) {
@@ -1292,7 +1281,7 @@ metaslab_group_allocatable(metaslab_group_t *mg, metaslab_group_t *rotor,
 
 		/*
 		 * If this metaslab group is below its qmax or it's
-		 * the only allocatable metasable group, then attempt
+		 * the only allocatable metaslab group, then attempt
 		 * to allocate from it.
 		 */
 		if (qdepth < qmax || mc->mc_alloc_groups == 1)
@@ -1622,9 +1611,6 @@ metaslab_block_find(zfs_btree_t *t, range_tree_t *rt, uint64_t start,
 	return (rs);
 }
 
-#if defined(WITH_DF_BLOCK_ALLOCATOR) || \
-    defined(WITH_CF_BLOCK_ALLOCATOR)
-
 /*
  * This is a helper function that can be used by the allocator to find a
  * suitable block to allocate. This will search the specified B-tree looking
@@ -1659,9 +1645,74 @@ metaslab_block_picker(range_tree_t *rt, uint64_t *cursor, uint64_t size,
 	*cursor = 0;
 	return (-1ULL);
 }
-#endif /* WITH_DF/CF_BLOCK_ALLOCATOR */
 
-#if defined(WITH_DF_BLOCK_ALLOCATOR)
+static uint64_t metaslab_df_alloc(metaslab_t *msp, uint64_t size);
+static uint64_t metaslab_cf_alloc(metaslab_t *msp, uint64_t size);
+static uint64_t metaslab_ndf_alloc(metaslab_t *msp, uint64_t size);
+metaslab_ops_t *metaslab_allocator(spa_t *spa);
+
+static metaslab_ops_t metaslab_allocators[] = {
+	{ "dynamic", metaslab_df_alloc },
+	{ "cursor", metaslab_cf_alloc },
+	{ "new-dynamic", metaslab_ndf_alloc },
+};
+
+static int
+spa_find_allocator_byname(const char *val)
+{
+	int a = ARRAY_SIZE(metaslab_allocators) - 1;
+	if (strcmp("new-dynamic", val) == 0)
+		return (-1); /* remove when ndf is working */
+	for (; a >= 0; a--) {
+		if (strcmp(val, metaslab_allocators[a].msop_name) == 0)
+			return (a);
+	}
+	return (-1);
+}
+
+void
+spa_set_allocator(spa_t *spa, const char *allocator)
+{
+	int a = spa_find_allocator_byname(allocator);
+	if (a < 0) a = 0;
+	spa->spa_active_allocator = a;
+	zfs_dbgmsg("spa allocator: %s\n", metaslab_allocators[a].msop_name);
+}
+
+int
+spa_get_allocator(spa_t *spa)
+{
+	return (spa->spa_active_allocator);
+}
+
+#if defined(_KERNEL)
+int
+param_set_active_allocator_common(const char *val)
+{
+	char *p;
+
+	if (val == NULL)
+		return (SET_ERROR(EINVAL));
+
+	if ((p = strchr(val, '\n')) != NULL)
+		*p = '\0';
+
+	int a = spa_find_allocator_byname(val);
+	if (a < 0)
+		return (SET_ERROR(EINVAL));
+
+	zfs_active_allocator = metaslab_allocators[a].msop_name;
+	return (0);
+}
+#endif
+
+metaslab_ops_t *
+metaslab_allocator(spa_t *spa)
+{
+	int allocator = spa_get_allocator(spa);
+	return (&metaslab_allocators[allocator]);
+}
+
 /*
  * ==========================================================================
  * Dynamic Fit (df) block allocator
@@ -1736,12 +1787,6 @@ metaslab_df_alloc(metaslab_t *msp, uint64_t size)
 	return (offset);
 }
 
-const metaslab_ops_t zfs_metaslab_ops = {
-	metaslab_df_alloc
-};
-#endif /* WITH_DF_BLOCK_ALLOCATOR */
-
-#if defined(WITH_CF_BLOCK_ALLOCATOR)
 /*
  * ==========================================================================
  * Cursor fit block allocator -
@@ -1784,12 +1829,6 @@ metaslab_cf_alloc(metaslab_t *msp, uint64_t size)
 	return (offset);
 }
 
-const metaslab_ops_t zfs_metaslab_ops = {
-	metaslab_cf_alloc
-};
-#endif /* WITH_CF_BLOCK_ALLOCATOR */
-
-#if defined(WITH_NDF_BLOCK_ALLOCATOR)
 /*
  * ==========================================================================
  * New dynamic fit allocator -
@@ -1845,12 +1884,6 @@ metaslab_ndf_alloc(metaslab_t *msp, uint64_t size)
 	}
 	return (-1ULL);
 }
-
-const metaslab_ops_t zfs_metaslab_ops = {
-	metaslab_ndf_alloc
-};
-#endif /* WITH_NDF_BLOCK_ALLOCATOR */
-
 
 /*
  * ==========================================================================
@@ -3209,6 +3242,15 @@ static boolean_t
 metaslab_should_allocate(metaslab_t *msp, uint64_t asize, boolean_t try_hard)
 {
 	/*
+	 * This case will usually but not always get caught by the checks below;
+	 * metaslabs can be loaded by various means, including the trim and
+	 * initialize code. Once that happens, without this check they are
+	 * allocatable even before they finish their first txg sync.
+	 */
+	if (unlikely(msp->ms_new))
+		return (B_FALSE);
+
+	/*
 	 * If the metaslab is loaded, ms_max_size is definitive and we can use
 	 * the fast check. If it's not, the ms_max_size is a lower bound (once
 	 * set), and we should use the fast check as long as we're not in
@@ -3520,10 +3562,8 @@ metaslab_group_preload(metaslab_group_t *mg)
 	avl_tree_t *t = &mg->mg_metaslab_tree;
 	int m = 0;
 
-	if (spa_shutting_down(spa) || !metaslab_preload_enabled) {
-		taskq_wait_outstanding(mg->mg_taskq, 0);
+	if (spa_shutting_down(spa) || !metaslab_preload_enabled)
 		return;
-	}
 
 	mutex_enter(&mg->mg_lock);
 
@@ -3543,8 +3583,9 @@ metaslab_group_preload(metaslab_group_t *mg)
 			continue;
 		}
 
-		VERIFY(taskq_dispatch(mg->mg_taskq, metaslab_preload,
-		    msp, TQ_SLEEP) != TASKQID_INVALID);
+		VERIFY(taskq_dispatch(spa->spa_metaslab_taskq, metaslab_preload,
+		    msp, TQ_SLEEP | (m <= mg->mg_allocators ? TQ_FRONT : 0))
+		    != TASKQID_INVALID);
 	}
 	mutex_exit(&mg->mg_lock);
 }
@@ -4301,7 +4342,8 @@ metaslab_sync_done(metaslab_t *msp, uint64_t txg)
 
 	uint64_t free_space = metaslab_class_get_space(spa_normal_class(spa)) -
 	    metaslab_class_get_alloc(spa_normal_class(spa));
-	if (free_space <= spa_get_slop_space(spa) || vd->vdev_removing) {
+	if (free_space <= spa_get_slop_space(spa) || vd->vdev_removing ||
+	    vd->vdev_rz_expanding) {
 		defer_allowed = B_FALSE;
 	}
 
@@ -4609,6 +4651,7 @@ metaslab_block_alloc(metaslab_t *msp, uint64_t size, uint64_t txg)
 	ASSERT(MUTEX_HELD(&msp->ms_lock));
 	VERIFY(!msp->ms_condensing);
 	VERIFY0(msp->ms_disabled);
+	VERIFY0(msp->ms_new);
 
 	start = mc->mc_ops->msop_alloc(msp, size);
 	if (start != -1ULL) {
@@ -4680,10 +4723,10 @@ find_valid_metaslab(metaslab_group_t *mg, uint64_t activation_weight,
 		}
 
 		/*
-		 * If the selected metaslab is condensing or disabled,
-		 * skip it.
+		 * If the selected metaslab is condensing or disabled, or
+		 * hasn't gone through a metaslab_sync_done(), then skip it.
 		 */
-		if (msp->ms_condensing || msp->ms_disabled > 0)
+		if (msp->ms_condensing || msp->ms_disabled > 0 || msp->ms_new)
 			continue;
 
 		*was_active = msp->ms_allocator != -1;
@@ -5229,7 +5272,7 @@ top:
 
 		ASSERT(mg->mg_class == mc);
 
-		uint64_t asize = vdev_psize_to_asize(vd, psize);
+		uint64_t asize = vdev_psize_to_asize_txg(vd, psize, txg);
 		ASSERT(P2PHASE(asize, 1ULL << vd->vdev_ashift) == 0);
 
 		/*
@@ -6173,6 +6216,9 @@ ZFS_MODULE_PARAM(zfs_metaslab, metaslab_, debug_unload, INT, ZMOD_RW,
 ZFS_MODULE_PARAM(zfs_metaslab, metaslab_, preload_enabled, INT, ZMOD_RW,
 	"Preload potential metaslabs during reassessment");
 
+ZFS_MODULE_PARAM(zfs_metaslab, metaslab_, preload_limit, UINT, ZMOD_RW,
+	"Max number of metaslabs per group to preload");
+
 ZFS_MODULE_PARAM(zfs_metaslab, metaslab_, unload_delay, UINT, ZMOD_RW,
 	"Delay in txgs after metaslab was last used before unloading");
 
@@ -6232,3 +6278,9 @@ ZFS_MODULE_PARAM(zfs_metaslab, zfs_metaslab_, try_hard_before_gang, INT,
 
 ZFS_MODULE_PARAM(zfs_metaslab, zfs_metaslab_, find_max_tries, UINT, ZMOD_RW,
 	"Normally only consider this many of the best metaslabs in each vdev");
+
+/* BEGIN CSTYLED */
+ZFS_MODULE_PARAM_CALL(zfs, zfs_, active_allocator,
+	param_set_active_allocator, param_get_charp, ZMOD_RW,
+	"SPA active allocator");
+/* END CSTYLED */
