@@ -276,6 +276,7 @@ BuildArch:	noarch
 Requires:       %{name} >= %{version}
 Requires:       dracut
 Requires:       /usr/bin/awk
+Requires:       util-linux
 Requires:       grep
 
 %description dracut

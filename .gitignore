@@ -61,6 +61,8 @@
 !RELEASES.md
 !TEST
 !zfs.release.in
+!Jenkinsfile
+!build.parameters
 
 #
 # Normal rules
