@@ -1154,6 +1154,11 @@ Selecting any option other than
 results in vector instructions
 from the respective CPU instruction set being used.
 .
+.It Sy zfs_bclone_enabled Ns = Ns Sy 1 Ns | Ns 0 Pq int
+Enable the experimental block cloning feature.
+If this setting is 0, then even if feature@block_cloning is enabled,
+attempts to clone blocks will act as though the feature is disabled.
+.
 .It Sy zfs_blake3_impl Ns = Ns Sy fastest Pq string
 Select a BLAKE3 implementation.
 .Pp
@@ -2291,6 +2296,16 @@ When 0 (the default), the value to use is computed internally
 as the number of actual CPUs in the system divided by the
 .Sy spa_num_allocators
 value.
+.
+.It Sy zio_taskq_read Ns = Ns Sy fixed,1,8 null scale null Pq charp
+Set the queue and thread configuration for the IO read queues.
+This is an advanced debugging parameter.
+Don't change this unless you understand what it does.
+.
+.It Sy zio_taskq_write Ns = Ns Sy sync fixed,1,5 scale fixed,1,5 Pq charp
+Set the queue and thread configuration for the IO write queues.
+This is an advanced debugging parameter.
+Don't change this unless you understand what it does.
 .
 .It Sy zvol_inhibit_dev Ns = Ns Sy 0 Ns | Ns 1 Pq uint
 Do not create zvol device nodes.
