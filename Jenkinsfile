@@ -4,7 +4,6 @@
 
 def srpm_step() {
     return {
-        dir('src') {
             script {
                 env.GIT_HASH = sh (
                     script: "git rev-parse --short HEAD",
@@ -21,7 +20,6 @@ def srpm_step() {
                 label: "configure for source RPM"
                 )
             }
-        }
     }
 }
 
