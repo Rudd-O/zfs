@@ -17,18 +17,20 @@
  * information: Portions Copyright [yyyy] [name of copyright owner]
  *
  * CDDL HEADER END
- *
- * $FreeBSD$
  */
+
 /*
- * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
- * Use is subject to license terms.
+ * Copyright (c) 2023, 2024, Klara Inc.
  */
 
-#ifndef _OPENSOLARIS_SYS_DKIO_H_
-#define	_OPENSOLARIS_SYS_DKIO_H_
+#ifndef _ZFS_MM_COMPAT_H
+#define	_ZFS_MM_COMPAT_H
 
-#define	DKIOC		(0x04 << 8)
-#define	DKIOCFLUSHWRITECACHE	(DKIOC|34)	/* flush cache to phys medium */
+#include <linux/mm.h>
 
-#endif /* _OPENSOLARIS_SYS_DKIO_H_ */
+/* 5.4 introduced page_size(). Older kernels can use a trivial macro instead */
+#ifndef HAVE_MM_PAGE_SIZE
+#define	page_size(p) ((unsigned long)(PAGE_SIZE << compound_order(p)))
+#endif
+
+#endif /* _ZFS_MM_COMPAT_H */

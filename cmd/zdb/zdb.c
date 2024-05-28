@@ -85,6 +85,7 @@
 #include <sys/brt_impl.h>
 #include <zfs_comutil.h>
 #include <sys/zstd/zstd.h>
+#include <sys/backtrace.h>
 
 #include <libnvpair.h>
 #include <libzutil.h>
@@ -120,6 +121,9 @@ static int flagbits[256];
 static uint64_t max_inflight_bytes = 256 * 1024 * 1024; /* 256MB */
 static int leaked_objects = 0;
 static range_tree_t *mos_refd_objs;
+static spa_t *spa;
+static objset_t *os;
+static boolean_t kernel_init_done;
 
 static void snprintf_blkptr_compact(char *, size_t, const blkptr_t *,
     boolean_t);
@@ -131,6 +135,7 @@ static int dump_bpobj_cb(void *arg, const blkptr_t *bp, boolean_t free,
 
 
 static void zdb_print_blkptr(const blkptr_t *bp, int flags);
+static void zdb_exit(int reason);
 
 typedef struct sublivelist_verify_block_refcnt {
 	/* block pointer entry in livelist being verified */
@@ -199,7 +204,8 @@ sublivelist_verify_blkptr(void *arg, const blkptr_t *bp, boolean_t free,
 					break;
 				sublivelist_verify_block_t svb = {
 				    .svb_dva = bp->blk_dva[i],
-				    .svb_allocated_txg = bp->blk_birth
+				    .svb_allocated_txg =
+				    BP_GET_LOGICAL_BIRTH(bp)
 				};
 
 				if (zfs_btree_find(&sv->sv_leftover, &svb,
@@ -817,17 +823,40 @@ usage(void)
 	(void) fprintf(stderr, "Specify an option more than once (e.g. -bb) "
 	    "to make only that option verbose\n");
 	(void) fprintf(stderr, "Default is to dump everything non-verbosely\n");
-	exit(1);
+	zdb_exit(1);
 }
 
 static void
 dump_debug_buffer(void)
 {
-	if (dump_opt['G']) {
-		(void) printf("\n");
-		(void) fflush(stdout);
-		zfs_dbgmsg_print("zdb");
-	}
+	ssize_t ret __attribute__((unused));
+
+	if (!dump_opt['G'])
+		return;
+	/*
+	 * We use write() instead of printf() so that this function
+	 * is safe to call from a signal handler.
+	 */
+	ret = write(STDERR_FILENO, "\n", 1);
+	zfs_dbgmsg_print(STDERR_FILENO, "zdb");
+}
+
+static void sig_handler(int signo)
+{
+	struct sigaction action;
+
+	libspl_backtrace(STDERR_FILENO);
+	dump_debug_buffer();
+
+	/*
+	 * Restore default action and re-raise signal so SIGSEGV and
+	 * SIGABRT can trigger a core dump.
+	 */
+	action.sa_handler = SIG_DFL;
+	sigemptyset(&action.sa_mask);
+	action.sa_flags = 0;
+	(void) sigaction(signo, &action, NULL);
+	raise(signo);
 }
 
 /*
@@ -848,7 +877,7 @@ fatal(const char *fmt, ...)
 
 	dump_debug_buffer();
 
-	exit(1);
+	zdb_exit(1);
 }
 
 static void
@@ -2275,7 +2304,7 @@ snprintf_zstd_header(spa_t *spa, char *blkbuf, size_t buflen,
 		buf = malloc(SPA_MAXBLOCKSIZE);
 		if (buf == NULL) {
 			(void) fprintf(stderr, "out of memory\n");
-			exit(1);
+			zdb_exit(1);
 		}
 		decode_embedded_bp_compressed(bp, buf);
 		memcpy(&zstd_hdr, buf, sizeof (zstd_hdr));
@@ -2340,7 +2369,7 @@ snprintf_blkptr_compact(char *blkbuf, size_t buflen, const blkptr_t *bp,
 		    (int)BPE_GET_ETYPE(bp),
 		    (u_longlong_t)BPE_GET_LSIZE(bp),
 		    (u_longlong_t)BPE_GET_PSIZE(bp),
-		    (u_longlong_t)bp->blk_birth);
+		    (u_longlong_t)BP_GET_LOGICAL_BIRTH(bp));
 		return;
 	}
 
@@ -2358,7 +2387,7 @@ snprintf_blkptr_compact(char *blkbuf, size_t buflen, const blkptr_t *bp,
 		    buflen - strlen(blkbuf),
 		    "%llxL B=%llu",
 		    (u_longlong_t)BP_GET_LSIZE(bp),
-		    (u_longlong_t)bp->blk_birth);
+		    (u_longlong_t)BP_GET_LOGICAL_BIRTH(bp));
 	} else {
 		(void) snprintf(blkbuf + strlen(blkbuf),
 		    buflen - strlen(blkbuf),
@@ -2366,8 +2395,8 @@ snprintf_blkptr_compact(char *blkbuf, size_t buflen, const blkptr_t *bp,
 		    (u_longlong_t)BP_GET_LSIZE(bp),
 		    (u_longlong_t)BP_GET_PSIZE(bp),
 		    (u_longlong_t)BP_GET_FILL(bp),
-		    (u_longlong_t)bp->blk_birth,
-		    (u_longlong_t)BP_PHYSICAL_BIRTH(bp));
+		    (u_longlong_t)BP_GET_LOGICAL_BIRTH(bp),
+		    (u_longlong_t)BP_GET_BIRTH(bp));
 		if (bp_freed)
 			(void) snprintf(blkbuf + strlen(blkbuf),
 			    buflen - strlen(blkbuf), " %s", "FREE");
@@ -2417,7 +2446,7 @@ visit_indirect(spa_t *spa, const dnode_phys_t *dnp,
 {
 	int err = 0;
 
-	if (bp->blk_birth == 0)
+	if (BP_GET_LOGICAL_BIRTH(bp) == 0)
 		return (0);
 
 	print_indirect(spa, bp, zb, dnp);
@@ -2605,7 +2634,7 @@ dump_bptree_cb(void *arg, const blkptr_t *bp, dmu_tx_t *tx)
 	(void) arg, (void) tx;
 	char blkbuf[BP_SPRINTF_LEN];
 
-	if (bp->blk_birth != 0) {
+	if (BP_GET_LOGICAL_BIRTH(bp) != 0) {
 		snprintf_blkptr(blkbuf, sizeof (blkbuf), bp);
 		(void) printf("\t%s\n", blkbuf);
 	}
@@ -2646,7 +2675,7 @@ dump_bpobj_cb(void *arg, const blkptr_t *bp, boolean_t bp_freed, dmu_tx_t *tx)
 	(void) arg, (void) tx;
 	char blkbuf[BP_SPRINTF_LEN];
 
-	ASSERT(bp->blk_birth != 0);
+	ASSERT(BP_GET_LOGICAL_BIRTH(bp) != 0);
 	snprintf_blkptr_compact(blkbuf, sizeof (blkbuf), bp, bp_freed);
 	(void) printf("\t%s\n", blkbuf);
 	return (0);
@@ -3228,6 +3257,23 @@ fuid_table_destroy(void)
 		zfs_fuid_table_destroy(&idx_tree, &domain_tree);
 		fuid_table_loaded = B_FALSE;
 	}
+}
+
+static void
+zdb_exit(int reason)
+{
+	if (os != NULL) {
+		close_objset(os, FTAG);
+	} else if (spa != NULL) {
+		spa_close(spa, FTAG);
+	}
+
+	fuid_table_destroy();
+
+	if (kernel_init_done)
+		kernel_fini();
+
+	exit(reason);
 }
 
 /*
@@ -4160,32 +4206,32 @@ dump_cachefile(const char *cachefile)
 	if ((fd = open64(cachefile, O_RDONLY)) < 0) {
 		(void) printf("cannot open '%s': %s\n", cachefile,
 		    strerror(errno));
-		exit(1);
+		zdb_exit(1);
 	}
 
 	if (fstat64(fd, &statbuf) != 0) {
 		(void) printf("failed to stat '%s': %s\n", cachefile,
 		    strerror(errno));
-		exit(1);
+		zdb_exit(1);
 	}
 
 	if ((buf = malloc(statbuf.st_size)) == NULL) {
 		(void) fprintf(stderr, "failed to allocate %llu bytes\n",
 		    (u_longlong_t)statbuf.st_size);
-		exit(1);
+		zdb_exit(1);
 	}
 
 	if (read(fd, buf, statbuf.st_size) != statbuf.st_size) {
 		(void) fprintf(stderr, "failed to read %llu bytes\n",
 		    (u_longlong_t)statbuf.st_size);
-		exit(1);
+		zdb_exit(1);
 	}
 
 	(void) close(fd);
 
 	if (nvlist_unpack(buf, statbuf.st_size, &config, 0) != 0) {
 		(void) fprintf(stderr, "failed to unpack nvlist\n");
-		exit(1);
+		zdb_exit(1);
 	}
 
 	free(buf);
@@ -5101,14 +5147,14 @@ dump_label(const char *dev)
 
 	if ((fd = open64(path, O_RDONLY)) < 0) {
 		(void) printf("cannot open '%s': %s\n", path, strerror(errno));
-		exit(1);
+		zdb_exit(1);
 	}
 
 	if (fstat64_blk(fd, &statbuf) != 0) {
 		(void) printf("failed to stat '%s': %s\n", path,
 		    strerror(errno));
 		(void) close(fd);
-		exit(1);
+		zdb_exit(1);
 	}
 
 	if (S_ISBLK(statbuf.st_mode) && zfs_dev_flush(fd) != 0)
@@ -5121,7 +5167,7 @@ dump_label(const char *dev)
 	    sizeof (cksum_record_t), offsetof(cksum_record_t, link));
 
 	psize = statbuf.st_size;
-	psize = P2ALIGN(psize, (uint64_t)sizeof (vdev_label_t));
+	psize = P2ALIGN_TYPED(psize, sizeof (vdev_label_t), uint64_t);
 	ashift = SPA_MINBLOCKSHIFT;
 
 	/*
@@ -5788,7 +5834,7 @@ zdb_blkptr_cb(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
 	if (zb->zb_level == ZB_DNODE_LEVEL)
 		return (0);
 
-	if (dump_opt['b'] >= 5 && bp->blk_birth > 0) {
+	if (dump_opt['b'] >= 5 && BP_GET_LOGICAL_BIRTH(bp) > 0) {
 		char blkbuf[BP_SPRINTF_LEN];
 		snprintf_blkptr(blkbuf, sizeof (blkbuf), bp);
 		(void) printf("objset %llu object %llu "
@@ -8220,7 +8266,7 @@ dump_zpool(spa_t *spa)
 
 	if (rc != 0) {
 		dump_debug_buffer();
-		exit(rc);
+		zdb_exit(rc);
 	}
 }
 
@@ -8824,18 +8870,18 @@ zdb_embedded_block(char *thing)
 	    words + 12, words + 13, words + 14, words + 15);
 	if (err != 16) {
 		(void) fprintf(stderr, "invalid input format\n");
-		exit(1);
+		zdb_exit(1);
 	}
 	ASSERT3U(BPE_GET_LSIZE(&bp), <=, SPA_MAXBLOCKSIZE);
 	buf = malloc(SPA_MAXBLOCKSIZE);
 	if (buf == NULL) {
 		(void) fprintf(stderr, "out of memory\n");
-		exit(1);
+		zdb_exit(1);
 	}
 	err = decode_embedded_bp(&bp, buf, BPE_GET_LSIZE(&bp));
 	if (err != 0) {
 		(void) fprintf(stderr, "decode failed: %u\n", err);
-		exit(1);
+		zdb_exit(1);
 	}
 	zdb_dump_block_raw(buf, BPE_GET_LSIZE(&bp), 0);
 	free(buf);
@@ -8862,8 +8908,6 @@ int
 main(int argc, char **argv)
 {
 	int c;
-	spa_t *spa = NULL;
-	objset_t *os = NULL;
 	int dump_all = 1;
 	int verbose = 0;
 	int error = 0;
@@ -8879,8 +8923,26 @@ main(int argc, char **argv)
 	char *spa_config_path_env, *objset_str;
 	boolean_t target_is_spa = B_TRUE, dataset_lookup = B_FALSE;
 	nvlist_t *cfg = NULL;
+	struct sigaction action;
 
 	dprintf_setup(&argc, argv);
+
+	/*
+	 * Set up signal handlers, so if we crash due to bad on-disk data we
+	 * can get more info. Unlike ztest, we don't bail out if we can't set
+	 * up signal handlers, because zdb is very useful without them.
+	 */
+	action.sa_handler = sig_handler;
+	sigemptyset(&action.sa_mask);
+	action.sa_flags = 0;
+	if (sigaction(SIGSEGV, &action, NULL) < 0) {
+		(void) fprintf(stderr, "zdb: cannot catch SIGSEGV: %s\n",
+		    strerror(errno));
+	}
+	if (sigaction(SIGABRT, &action, NULL) < 0) {
+		(void) fprintf(stderr, "zdb: cannot catch SIGABRT: %s\n",
+		    strerror(errno));
+	}
 
 	/*
 	 * If there is an environment variable SPA_CONFIG_PATH it overrides
@@ -9092,6 +9154,7 @@ main(int argc, char **argv)
 	spa_mode_readable_spacemaps = B_TRUE;
 
 	kernel_init(SPA_MODE_READ);
+	kernel_init_done = B_TRUE;
 
 	if (dump_all)
 		verbose = MAX(verbose, 1);
@@ -9115,19 +9178,23 @@ main(int argc, char **argv)
 		if (argc != 1)
 			usage();
 		zdb_embedded_block(argv[0]);
-		return (0);
+		error = 0;
+		goto fini;
 	}
 
 	if (argc < 1) {
 		if (!dump_opt['e'] && dump_opt['C']) {
 			dump_cachefile(spa_config_path);
-			return (0);
+			error = 0;
+			goto fini;
 		}
 		usage();
 	}
 
-	if (dump_opt['l'])
-		return (dump_label(argv[0]));
+	if (dump_opt['l']) {
+		error = dump_label(argv[0]);
+		goto fini;
+	}
 
 	if (dump_opt['X'] || dump_opt['F'])
 		rewind = ZPOOL_DO_REWIND |
@@ -9182,7 +9249,8 @@ main(int argc, char **argv)
 		} else if (objset_str && !zdb_numeric(objset_str + 1) &&
 		    dump_opt['N']) {
 			printf("Supply a numeric objset ID with -N\n");
-			exit(1);
+			error = 1;
+			goto fini;
 		}
 	} else {
 		target_pool = target;
@@ -9239,7 +9307,8 @@ main(int argc, char **argv)
 		if (argc != 2)
 			usage();
 		dump_opt['v'] = verbose + 3;
-		return (dump_path(argv[0], argv[1], NULL));
+		error = dump_path(argv[0], argv[1], NULL);
+		goto fini;
 	}
 
 	if (dump_opt['r']) {
@@ -9327,7 +9396,7 @@ main(int argc, char **argv)
 				fatal("can't dump '%s': %s", target,
 				    strerror(error));
 			}
-			return (error);
+			goto fini;
 		} else {
 			target_pool = strdup(target);
 			if (strpbrk(target, "/@") != NULL)
@@ -9457,9 +9526,10 @@ retry_lookup:
 			free(checkpoint_target);
 	}
 
+fini:
 	if (os != NULL) {
 		close_objset(os, FTAG);
-	} else {
+	} else if (spa != NULL) {
 		spa_close(spa, FTAG);
 	}
 
@@ -9467,7 +9537,8 @@ retry_lookup:
 
 	dump_debug_buffer();
 
-	kernel_fini();
+	if (kernel_init_done)
+		kernel_fini();
 
 	return (error);
 }
