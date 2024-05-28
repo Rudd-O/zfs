@@ -1,2 +1,2 @@
-["FEDORA_RELEASES": "37 39"]
+["FEDORA_RELEASES": "37 39 40"]
 // cannot use QUBES_RELEASES since zfs-fedora-installer will not test those
