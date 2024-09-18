@@ -2425,8 +2425,14 @@ get_receive_resume_token_impl(dsl_dataset_t *ds)
 	fnvlist_free(token_nv);
 	compressed = kmem_alloc(packed_size, KM_SLEEP);
 
-	compressed_size = gzip_compress(packed, compressed,
+	/* Call compress function directly to avoid hole detection. */
+	abd_t pabd, cabd;
+	abd_get_from_buf_struct(&pabd, packed, packed_size);
+	abd_get_from_buf_struct(&cabd, compressed, packed_size);
+	compressed_size = zfs_gzip_compress(&pabd, &cabd,
 	    packed_size, packed_size, 6);
+	abd_free(&cabd);
+	abd_free(&pabd);
 
 	zio_cksum_t cksum;
 	fletcher_4_native_varsize(compressed, compressed_size, &cksum);
@@ -3712,16 +3718,19 @@ dsl_dataset_promote_sync(void *arg, dmu_tx_t *tx)
 	spa_history_log_internal_ds(hds, "promote", tx, " ");
 
 	dsl_dir_rele(odd, FTAG);
-	promote_rele(ddpa, FTAG);
 
 	/*
-	 * Transfer common error blocks from old head to new head.
+	 * Transfer common error blocks from old head to new head, before
+	 * calling promote_rele() on ddpa since we need to dereference
+	 * origin_head and hds.
 	 */
 	if (spa_feature_is_enabled(dp->dp_spa, SPA_FEATURE_HEAD_ERRLOG)) {
 		uint64_t old_head = origin_head->ds_object;
 		uint64_t new_head = hds->ds_object;
 		spa_swap_errlog(dp->dp_spa, new_head, old_head, tx);
 	}
+
+	promote_rele(ddpa, FTAG);
 }
 
 /*

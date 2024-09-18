@@ -102,6 +102,10 @@ tags = ['functional', 'compression']
 tests = ['devices_001_pos', 'devices_002_neg', 'devices_003_pos']
 tags = ['functional', 'devices']
 
+[tests/functional/direct:Linux]
+tests = ['dio_write_verify']
+tags = ['functional', 'direct']
+
 [tests/functional/events:Linux]
 tests = ['events_001_pos', 'events_002_pos', 'zed_rc_filter', 'zed_fd_spill',
     'zed_cksum_reported', 'zed_cksum_config', 'zed_io_config',
@@ -121,7 +125,7 @@ tests = ['auto_offline_001_pos', 'auto_online_001_pos', 'auto_online_002_pos',
     'auto_replace_001_pos', 'auto_replace_002_pos', 'auto_spare_001_pos',
     'auto_spare_002_pos', 'auto_spare_multiple', 'auto_spare_ashift',
     'auto_spare_shared', 'decrypt_fault', 'decompress_fault',
-    'scrub_after_resilver', 'zpool_status_-s']
+    'scrub_after_resilver', 'suspend_resume_single', 'zpool_status_-s']
 tags = ['functional', 'fault']
 
 [tests/functional/features/large_dnode:Linux]
@@ -201,7 +205,7 @@ tests = ['tmpfile_001_pos', 'tmpfile_002_pos', 'tmpfile_003_pos',
 tags = ['functional', 'tmpfile']
 
 [tests/functional/upgrade:Linux]
-tests = ['upgrade_projectquota_001_pos']
+tests = ['upgrade_projectquota_001_pos', 'upgrade_projectquota_002_pos']
 tags = ['functional', 'upgrade']
 
 [tests/functional/user_namespace:Linux]

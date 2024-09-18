@@ -167,6 +167,9 @@ typedef enum zio_suspend_reason {
  * This was originally an enum type. However, those are 32-bit and there is no
  * way to make a 64-bit enum type. Since we ran out of bits for flags, we were
  * forced to upgrade it to a uint64_t.
+ *
+ * NOTE: PLEASE UPDATE THE BITFIELD STRINGS IN zfs_valstr.c IF YOU ADD ANOTHER
+ * FLAG.
  */
 typedef uint64_t zio_flag_t;
 	/*
@@ -222,6 +225,7 @@ typedef uint64_t zio_flag_t;
 #define	ZIO_FLAG_NOPWRITE	(1ULL << 28)
 #define	ZIO_FLAG_REEXECUTED	(1ULL << 29)
 #define	ZIO_FLAG_DELEGATED	(1ULL << 30)
+#define	ZIO_FLAG_DIO_CHKSUM_ERR	(1ULL << 31)
 
 #define	ZIO_ALLOCATOR_NONE	(-1)
 #define	ZIO_HAS_ALLOCATOR(zio)	((zio)->io_allocator != ZIO_ALLOCATOR_NONE)
@@ -352,10 +356,12 @@ typedef struct zio_prop {
 	boolean_t		zp_brtwrite;
 	boolean_t		zp_encrypt;
 	boolean_t		zp_byteorder;
+	boolean_t		zp_direct_write;
 	uint8_t			zp_salt[ZIO_DATA_SALT_LEN];
 	uint8_t			zp_iv[ZIO_DATA_IV_LEN];
 	uint8_t			zp_mac[ZIO_DATA_MAC_LEN];
 	uint32_t		zp_zpl_smallblk;
+	dmu_object_type_t	zp_storage_type;
 } zio_prop_t;
 
 typedef struct zio_cksum_report zio_cksum_report_t;

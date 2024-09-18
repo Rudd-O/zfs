@@ -35,11 +35,10 @@
 #ifndef _SYS_SPA_H
 #define	_SYS_SPA_H
 
-#include <sys/avl.h>
 #include <sys/zfs_context.h>
+#include <sys/avl.h>
 #include <sys/kstat.h>
 #include <sys/nvpair.h>
-#include <sys/sysmacros.h>
 #include <sys/types.h>
 #include <sys/fs/zfs.h>
 #include <sys/spa_checksum.h>
@@ -573,7 +572,7 @@ typedef struct blkptr {
 #define	BP_IS_RAIDZ(bp)		(DVA_GET_ASIZE(&(bp)->blk_dva[0]) > \
 				BP_GET_PSIZE(bp))
 
-#define	BP_ZERO(bp)				\
+#define	BP_ZERO_DVAS(bp)			\
 {						\
 	(bp)->blk_dva[0].dva_word[0] = 0;	\
 	(bp)->blk_dva[0].dva_word[1] = 0;	\
@@ -581,6 +580,11 @@ typedef struct blkptr {
 	(bp)->blk_dva[1].dva_word[1] = 0;	\
 	(bp)->blk_dva[2].dva_word[0] = 0;	\
 	(bp)->blk_dva[2].dva_word[1] = 0;	\
+}
+
+#define	BP_ZERO(bp)				\
+{						\
+	BP_ZERO_DVAS(bp);			\
 	(bp)->blk_prop = 0;			\
 	(bp)->blk_pad[0] = 0;			\
 	(bp)->blk_pad[1] = 0;			\
@@ -945,6 +949,14 @@ typedef struct spa_iostats {
 	kstat_named_t	simple_trim_bytes_skipped;
 	kstat_named_t	simple_trim_extents_failed;
 	kstat_named_t	simple_trim_bytes_failed;
+	kstat_named_t	arc_read_count;
+	kstat_named_t	arc_read_bytes;
+	kstat_named_t	arc_write_count;
+	kstat_named_t	arc_write_bytes;
+	kstat_named_t	direct_read_count;
+	kstat_named_t	direct_read_bytes;
+	kstat_named_t	direct_write_count;
+	kstat_named_t	direct_write_bytes;
 } spa_iostats_t;
 
 extern void spa_stats_init(spa_t *spa);
@@ -968,6 +980,10 @@ extern void spa_iostats_trim_add(spa_t *spa, trim_type_t type,
     uint64_t extents_written, uint64_t bytes_written,
     uint64_t extents_skipped, uint64_t bytes_skipped,
     uint64_t extents_failed, uint64_t bytes_failed);
+extern void spa_iostats_read_add(spa_t *spa, uint64_t size, uint64_t iops,
+    uint32_t flags);
+extern void spa_iostats_write_add(spa_t *spa, uint64_t size, uint64_t iops,
+    uint32_t flags);
 extern void spa_import_progress_add(spa_t *spa);
 extern void spa_import_progress_remove(uint64_t spa_guid);
 extern int spa_import_progress_set_mmp_check(uint64_t pool_guid,
@@ -1050,8 +1066,8 @@ extern metaslab_class_t *spa_log_class(spa_t *spa);
 extern metaslab_class_t *spa_embedded_log_class(spa_t *spa);
 extern metaslab_class_t *spa_special_class(spa_t *spa);
 extern metaslab_class_t *spa_dedup_class(spa_t *spa);
-extern metaslab_class_t *spa_preferred_class(spa_t *spa, uint64_t size,
-    dmu_object_type_t objtype, uint_t level, uint_t special_smallblk);
+extern metaslab_class_t *spa_preferred_class(spa_t *spa, const zio_t *zio);
+extern boolean_t spa_special_has_ddt(spa_t *spa);
 
 extern void spa_evicting_os_register(spa_t *, objset_t *os);
 extern void spa_evicting_os_deregister(spa_t *, objset_t *os);
@@ -1088,7 +1104,7 @@ extern void spa_strfree(char *);
 extern uint64_t spa_generate_guid(spa_t *spa);
 extern void snprintf_blkptr(char *buf, size_t buflen, const blkptr_t *bp);
 extern void spa_freeze(spa_t *spa);
-extern int spa_change_guid(spa_t *spa);
+extern int spa_change_guid(spa_t *spa, const uint64_t *guidp);
 extern void spa_upgrade(spa_t *spa, uint64_t version);
 extern void spa_evict_all(void);
 extern vdev_t *spa_lookup_by_guid(spa_t *spa, uint64_t guid,
@@ -1197,7 +1213,9 @@ extern void spa_boot_init(void);
 
 /* properties */
 extern int spa_prop_set(spa_t *spa, nvlist_t *nvp);
-extern int spa_prop_get(spa_t *spa, nvlist_t **nvp);
+extern int spa_prop_get(spa_t *spa, nvlist_t *nvp);
+extern int spa_prop_get_nvlist(spa_t *spa, char **props,
+    unsigned int n_props, nvlist_t *outnvl);
 extern void spa_prop_clear_bootfs(spa_t *spa, uint64_t obj, dmu_tx_t *tx);
 extern void spa_configfile_set(spa_t *, nvlist_t *, boolean_t);
 

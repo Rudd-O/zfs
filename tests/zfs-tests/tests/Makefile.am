@@ -265,6 +265,8 @@ nobase_dist_datadir_zfs_tests_tests_DATA += \
 	functional/delegate/delegate_common.kshlib \
 	functional/devices/devices.cfg \
 	functional/devices/devices_common.kshlib \
+	functional/direct/dio.cfg \
+	functional/direct/dio.kshlib \
 	functional/events/events.cfg \
 	functional/events/events_common.kshlib \
 	functional/fault/fault.cfg \
@@ -478,6 +480,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/block_cloning/block_cloning_replay.ksh \
 	functional/block_cloning/block_cloning_replay_encrypted.ksh \
 	functional/block_cloning/block_cloning_lwb_buffer_overflow.ksh \
+	functional/block_cloning/block_cloning_rlimit_fsize.ksh \
 	functional/bootfs/bootfs_001_pos.ksh \
 	functional/bootfs/bootfs_002_neg.ksh \
 	functional/bootfs/bootfs_003_pos.ksh \
@@ -606,6 +609,9 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/clean_mirror/clean_mirror_004_pos.ksh \
 	functional/clean_mirror/cleanup.ksh \
 	functional/clean_mirror/setup.ksh \
+	functional/cli_root/json/cleanup.ksh \
+	functional/cli_root/json/setup.ksh \
+	functional/cli_root/json/json_sanity.ksh \
 	functional/cli_root/zinject/zinject_args.ksh \
 	functional/cli_root/zdb/zdb_002_pos.ksh \
 	functional/cli_root/zdb/zdb_003_pos.ksh \
@@ -1176,6 +1182,9 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/cli_root/zpool_online/setup.ksh \
 	functional/cli_root/zpool_online/zpool_online_001_pos.ksh \
 	functional/cli_root/zpool_online/zpool_online_002_neg.ksh \
+	functional/cli_root/zpool_prefetch/cleanup.ksh \
+	functional/cli_root/zpool_prefetch/setup.ksh \
+	functional/cli_root/zpool_prefetch/zpool_prefetch_001_pos.ksh \
 	functional/cli_root/zpool_remove/cleanup.ksh \
 	functional/cli_root/zpool_remove/setup.ksh \
 	functional/cli_root/zpool_remove/zpool_remove_001_neg.ksh \
@@ -1415,6 +1424,15 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/deadman/deadman_ratelimit.ksh \
 	functional/deadman/deadman_sync.ksh \
 	functional/deadman/deadman_zio.ksh \
+	functional/dedup/cleanup.ksh \
+	functional/dedup/setup.ksh \
+	functional/dedup/dedup_fdt_create.ksh \
+	functional/dedup/dedup_fdt_import.ksh \
+	functional/dedup/dedup_legacy_create.ksh \
+	functional/dedup/dedup_legacy_import.ksh \
+	functional/dedup/dedup_legacy_fdt_upgrade.ksh \
+	functional/dedup/dedup_legacy_fdt_mixed.ksh \
+	functional/dedup/dedup_quota.ksh \
 	functional/delegate/cleanup.ksh \
 	functional/delegate/setup.ksh \
 	functional/delegate/zfs_allow_001_pos.ksh \
@@ -1442,6 +1460,26 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/devices/devices_002_neg.ksh \
 	functional/devices/devices_003_pos.ksh \
 	functional/devices/setup.ksh \
+	functional/direct/dio_aligned_block.ksh \
+	functional/direct/dio_async_always.ksh \
+	functional/direct/dio_async_fio_ioengines.ksh \
+	functional/direct/dio_compression.ksh \
+	functional/direct/dio_dedup.ksh \
+	functional/direct/dio_encryption.ksh \
+	functional/direct/dio_grow_block.ksh \
+	functional/direct/dio_max_recordsize.ksh \
+	functional/direct/dio_mixed.ksh \
+	functional/direct/dio_mmap.ksh \
+	functional/direct/dio_overwrites.ksh \
+	functional/direct/dio_property.ksh \
+	functional/direct/dio_random.ksh \
+	functional/direct/dio_recordsize.ksh \
+	functional/direct/dio_unaligned_block.ksh \
+	functional/direct/dio_unaligned_filesize.ksh \
+	functional/direct/dio_write_verify.ksh \
+	functional/direct/dio_write_stable_pages.ksh \
+	functional/direct/setup.ksh \
+	functional/direct/cleanup.ksh \
 	functional/dos_attributes/cleanup.ksh \
 	functional/dos_attributes/read_dos_attrs_001.ksh \
 	functional/dos_attributes/setup.ksh \
@@ -1483,6 +1521,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/fault/decompress_fault.ksh \
 	functional/fault/decrypt_fault.ksh \
 	functional/fault/scrub_after_resilver.ksh \
+	functional/fault/suspend_resume_single.ksh \
 	functional/fault/setup.ksh \
 	functional/fault/zpool_status_-s.ksh \
 	functional/features/async_destroy/async_destroy_001_pos.ksh \
@@ -2016,6 +2055,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/upgrade/cleanup.ksh \
 	functional/upgrade/setup.ksh \
 	functional/upgrade/upgrade_projectquota_001_pos.ksh \
+	functional/upgrade/upgrade_projectquota_002_pos.ksh \
 	functional/upgrade/upgrade_readonly_pool.ksh \
 	functional/upgrade/upgrade_userobj_001_pos.ksh \
 	functional/user_namespace/cleanup.ksh \

@@ -26,6 +26,7 @@
  * Copyright (c) 2014 Integros [integros.com]
  * Copyright 2017 Joyent, Inc.
  * Copyright (c) 2017, Intel Corporation.
+ * Copyright (c) 2023, Klara, Inc.
  */
 
 /*
@@ -275,6 +276,8 @@ extern unsigned long zio_decompress_fail_fraction;
 extern unsigned long zfs_reconstruct_indirect_damage_fraction;
 extern uint64_t raidz_expand_max_reflow_bytes;
 extern uint_t raidz_expand_pause_point;
+extern boolean_t ddt_prune_artificial_age;
+extern boolean_t ddt_dump_prune_histogram;
 
 
 static ztest_shared_opts_t *ztest_shared_opts;
@@ -444,6 +447,8 @@ ztest_func_t ztest_blake3;
 ztest_func_t ztest_fletcher;
 ztest_func_t ztest_fletcher_incr;
 ztest_func_t ztest_verify_dnode_bt;
+ztest_func_t ztest_pool_prefetch_ddt;
+ztest_func_t ztest_ddt_prune;
 
 static uint64_t zopt_always = 0ULL * NANOSEC;		/* all the time */
 static uint64_t zopt_incessant = 1ULL * NANOSEC / 10;	/* every 1/10 second */
@@ -499,6 +504,8 @@ static ztest_info_t ztest_info[] = {
 	ZTI_INIT(ztest_fletcher, 1, &zopt_rarely),
 	ZTI_INIT(ztest_fletcher_incr, 1, &zopt_rarely),
 	ZTI_INIT(ztest_verify_dnode_bt, 1, &zopt_sometimes),
+	ZTI_INIT(ztest_pool_prefetch_ddt, 1, &zopt_rarely),
+	ZTI_INIT(ztest_ddt_prune, 1, &zopt_rarely),
 };
 
 #define	ZTEST_FUNCS	(sizeof (ztest_info) / sizeof (ztest_info_t))
@@ -2255,6 +2262,13 @@ ztest_replay_write(void *arg1, void *arg2, boolean_t byteswap)
 		if (ztest_random(4) != 0) {
 			int prefetch = ztest_random(2) ?
 			    DMU_READ_PREFETCH : DMU_READ_NO_PREFETCH;
+
+			/*
+			 * We will randomly set when to do O_DIRECT on a read.
+			 */
+			if (ztest_random(4) == 0)
+				prefetch |= DMU_DIRECTIO;
+
 			ztest_block_tag_t rbt;
 
 			VERIFY(dmu_read(os, lr->lr_foid, offset,
@@ -2806,6 +2820,13 @@ ztest_io(ztest_ds_t *zd, uint64_t object, uint64_t offset)
 	enum ztest_io_type io_type;
 	uint64_t blocksize;
 	void *data;
+	uint32_t dmu_read_flags = DMU_READ_NO_PREFETCH;
+
+	/*
+	 * We will randomly set when to do O_DIRECT on a read.
+	 */
+	if (ztest_random(4) == 0)
+		dmu_read_flags |= DMU_DIRECTIO;
 
 	VERIFY0(dmu_object_info(zd->zd_os, object, &doi));
 	blocksize = doi.doi_data_block_size;
@@ -2871,7 +2892,7 @@ ztest_io(ztest_ds_t *zd, uint64_t object, uint64_t offset)
 		(void) pthread_rwlock_unlock(&ztest_name_lock);
 
 		VERIFY0(dmu_read(zd->zd_os, object, offset, blocksize, data,
-		    DMU_READ_NO_PREFETCH));
+		    dmu_read_flags));
 
 		(void) ztest_write(zd, object, offset, blocksize, data);
 		break;
@@ -5038,6 +5059,13 @@ ztest_dmu_read_write(ztest_ds_t *zd, uint64_t id)
 	uint64_t stride = 123456789ULL;
 	uint64_t width = 40;
 	int free_percent = 5;
+	uint32_t dmu_read_flags = DMU_READ_PREFETCH;
+
+	/*
+	 * We will randomly set when to do O_DIRECT on a read.
+	 */
+	if (ztest_random(4) == 0)
+		dmu_read_flags |= DMU_DIRECTIO;
 
 	/*
 	 * This test uses two objects, packobj and bigobj, that are always
@@ -5116,10 +5144,10 @@ ztest_dmu_read_write(ztest_ds_t *zd, uint64_t id)
 	 * Read the current contents of our objects.
 	 */
 	error = dmu_read(os, packobj, packoff, packsize, packbuf,
-	    DMU_READ_PREFETCH);
+	    dmu_read_flags);
 	ASSERT0(error);
 	error = dmu_read(os, bigobj, bigoff, bigsize, bigbuf,
-	    DMU_READ_PREFETCH);
+	    dmu_read_flags);
 	ASSERT0(error);
 
 	/*
@@ -5237,9 +5265,9 @@ ztest_dmu_read_write(ztest_ds_t *zd, uint64_t id)
 		void *bigcheck = umem_alloc(bigsize, UMEM_NOFAIL);
 
 		VERIFY0(dmu_read(os, packobj, packoff,
-		    packsize, packcheck, DMU_READ_PREFETCH));
+		    packsize, packcheck, dmu_read_flags));
 		VERIFY0(dmu_read(os, bigobj, bigoff,
-		    bigsize, bigcheck, DMU_READ_PREFETCH));
+		    bigsize, bigcheck, dmu_read_flags));
 
 		ASSERT0(memcmp(packbuf, packcheck, packsize));
 		ASSERT0(memcmp(bigbuf, bigcheck, bigsize));
@@ -5329,6 +5357,13 @@ ztest_dmu_read_write_zcopy(ztest_ds_t *zd, uint64_t id)
 	dmu_buf_t *bonus_db;
 	arc_buf_t **bigbuf_arcbufs;
 	dmu_object_info_t doi;
+	uint32_t dmu_read_flags = DMU_READ_PREFETCH;
+
+	/*
+	 * We will randomly set when to do O_DIRECT on a read.
+	 */
+	if (ztest_random(4) == 0)
+		dmu_read_flags |= DMU_DIRECTIO;
 
 	size = sizeof (ztest_od_t) * OD_ARRAY_SIZE;
 	od = umem_alloc(size, UMEM_NOFAIL);
@@ -5459,10 +5494,10 @@ ztest_dmu_read_write_zcopy(ztest_ds_t *zd, uint64_t id)
 		 */
 		if (i != 0 || ztest_random(2) != 0) {
 			error = dmu_read(os, packobj, packoff,
-			    packsize, packbuf, DMU_READ_PREFETCH);
+			    packsize, packbuf, dmu_read_flags);
 			ASSERT0(error);
 			error = dmu_read(os, bigobj, bigoff, bigsize,
-			    bigbuf, DMU_READ_PREFETCH);
+			    bigbuf, dmu_read_flags);
 			ASSERT0(error);
 		}
 		compare_and_update_pbbufs(s, packbuf, bigbuf, bigsize,
@@ -5522,9 +5557,9 @@ ztest_dmu_read_write_zcopy(ztest_ds_t *zd, uint64_t id)
 			void *bigcheck = umem_alloc(bigsize, UMEM_NOFAIL);
 
 			VERIFY0(dmu_read(os, packobj, packoff,
-			    packsize, packcheck, DMU_READ_PREFETCH));
+			    packsize, packcheck, dmu_read_flags));
 			VERIFY0(dmu_read(os, bigobj, bigoff,
-			    bigsize, bigcheck, DMU_READ_PREFETCH));
+			    bigsize, bigcheck, dmu_read_flags));
 
 			ASSERT0(memcmp(packbuf, packcheck, packsize));
 			ASSERT0(memcmp(bigbuf, bigcheck, bigsize));
@@ -6208,13 +6243,14 @@ void
 ztest_spa_prop_get_set(ztest_ds_t *zd, uint64_t id)
 {
 	(void) zd, (void) id;
-	nvlist_t *props = NULL;
 
 	(void) pthread_rwlock_rdlock(&ztest_name_lock);
 
 	(void) ztest_spa_prop_set_uint64(ZPOOL_PROP_AUTOTRIM, ztest_random(2));
 
-	VERIFY0(spa_prop_get(ztest_spa, &props));
+	nvlist_t *props = fnvlist_alloc();
+
+	VERIFY0(spa_prop_get(ztest_spa, props));
 
 	if (ztest_opts.zo_verbose >= 6)
 		dump_nvlist(props, 4);
@@ -6743,7 +6779,7 @@ ztest_reguid(ztest_ds_t *zd, uint64_t id)
 	load = spa_load_guid(spa);
 
 	(void) pthread_rwlock_wrlock(&ztest_name_lock);
-	error = spa_change_guid(spa);
+	error = spa_change_guid(spa, NULL);
 	zs->zs_guid = spa_guid(spa);
 	(void) pthread_rwlock_unlock(&ztest_name_lock);
 
@@ -6991,6 +7027,21 @@ ztest_fletcher_incr(ztest_ds_t *zd, uint64_t id)
 
 		umem_free(buf, size);
 	}
+}
+
+void
+ztest_pool_prefetch_ddt(ztest_ds_t *zd, uint64_t id)
+{
+	(void) zd, (void) id;
+	spa_t *spa;
+
+	(void) pthread_rwlock_rdlock(&ztest_name_lock);
+	VERIFY0(spa_open(ztest_opts.zo_pool, &spa, FTAG));
+
+	ddt_prefetch_all(spa);
+
+	spa_close(spa, FTAG);
+	(void) pthread_rwlock_unlock(&ztest_name_lock);
 }
 
 static int
@@ -7270,6 +7321,17 @@ ztest_trim(ztest_ds_t *zd, uint64_t id)
 	mutex_exit(&ztest_vdev_lock);
 }
 
+void
+ztest_ddt_prune(ztest_ds_t *zd, uint64_t id)
+{
+	(void) zd, (void) id;
+
+	spa_t *spa = ztest_spa;
+	uint64_t pct = ztest_random(15) + 1;
+
+	(void) ddt_prune_unique_entries(spa, ZPOOL_DDT_PRUNE_PERCENTAGE, pct);
+}
+
 /*
  * Verify pool integrity by running zdb.
  */
@@ -7450,6 +7512,13 @@ static __attribute__((noreturn)) void
 ztest_resume_thread(void *arg)
 {
 	spa_t *spa = arg;
+
+	/*
+	 * Synthesize aged DDT entries for ddt prune testing
+	 */
+	ddt_prune_artificial_age = B_TRUE;
+	if (ztest_opts.zo_verbose >= 3)
+		ddt_dump_prune_histogram = B_TRUE;
 
 	while (!ztest_exiting) {
 		if (spa_suspended(spa))
@@ -8495,17 +8564,24 @@ print_time(hrtime_t t, char *timebuf)
 }
 
 static nvlist_t *
-make_random_props(void)
+make_random_pool_props(void)
 {
 	nvlist_t *props;
 
 	props = fnvlist_alloc();
 
-	if (ztest_random(2) == 0)
-		return (props);
+	/* Twenty percent of the time enable ZPOOL_PROP_DEDUP_TABLE_QUOTA */
+	if (ztest_random(5) == 0) {
+		fnvlist_add_uint64(props,
+		    zpool_prop_to_name(ZPOOL_PROP_DEDUP_TABLE_QUOTA),
+		    2 * 1024 * 1024);
+	}
 
-	fnvlist_add_uint64(props,
-	    zpool_prop_to_name(ZPOOL_PROP_AUTOREPLACE), 1);
+	/* Fifty percent of the time enable ZPOOL_PROP_AUTOREPLACE */
+	if (ztest_random(2) == 0) {
+		fnvlist_add_uint64(props,
+		    zpool_prop_to_name(ZPOOL_PROP_AUTOREPLACE), 1);
+	}
 
 	return (props);
 }
@@ -8537,7 +8613,7 @@ ztest_init(ztest_shared_t *zs)
 	zs->zs_mirrors = ztest_opts.zo_mirrors;
 	nvroot = make_vdev_root(NULL, NULL, NULL, ztest_opts.zo_vdev_size, 0,
 	    NULL, ztest_opts.zo_raid_children, zs->zs_mirrors, 1);
-	props = make_random_props();
+	props = make_random_pool_props();
 
 	/*
 	 * We don't expect the pool to suspend unless maxfaults == 0,
@@ -8560,6 +8636,12 @@ ztest_init(ztest_shared_t *zs)
 		 * feature and the ones that don't.
 		 */
 		if (i == SPA_FEATURE_LOG_SPACEMAP && ztest_random(4) == 0)
+			continue;
+
+		/*
+		 * split 50/50 between legacy and fast dedup
+		 */
+		if (i == SPA_FEATURE_FAST_DEDUP && ztest_random(2) != 0)
 			continue;
 
 		VERIFY3S(-1, !=, asprintf(&buf, "feature@%s",
