@@ -30,6 +30,7 @@
  * Portions Copyright 2010 Robert Milkowski
  * Copyright (c) 2021, Colm Buckley <colm@tuatha.org>
  * Copyright (c) 2022 Hewlett Packard Enterprise Development LP.
+ * Copyright (c) 2024, Klara, Inc.
  */
 
 #ifndef	_SYS_FS_ZFS_H
@@ -81,6 +82,7 @@ typedef enum dmu_objset_type {
  * All of these include the terminating NUL byte.
  */
 #define	ZAP_MAXNAMELEN 256
+#define	ZAP_MAXNAMELEN_NEW 1024
 #define	ZAP_MAXVALUELEN (1024 * 8)
 #define	ZAP_OLDMAXVALUELEN 1024
 #define	ZFS_MAX_DATASET_NAME_LEN 256
@@ -194,6 +196,7 @@ typedef enum {
 	ZFS_PROP_PREFETCH,
 	ZFS_PROP_VOLTHREADING,
 	ZFS_PROP_DIRECT,
+	ZFS_PROP_LONGNAME,
 	ZFS_NUM_PROPS
 } zfs_prop_t;
 
@@ -1629,6 +1632,7 @@ typedef enum {
 	ZFS_ERR_CRYPTO_NOTSUP,
 	ZFS_ERR_RAIDZ_EXPAND_IN_PROGRESS,
 	ZFS_ERR_ASHIFT_MISMATCH,
+	ZFS_ERR_STREAM_LARGE_MICROZAP,
 } zfs_errno_t;
 
 /*

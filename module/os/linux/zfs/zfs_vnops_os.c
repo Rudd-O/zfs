@@ -260,6 +260,15 @@ update_pages(znode_t *zp, int64_t start, int len, objset_t *os)
 			} else {
 				ClearPageError(pp);
 				SetPageUptodate(pp);
+				if (!PagePrivate(pp)) {
+					/*
+					 * Set private bit so page migration
+					 * will wait for us to finish writeback
+					 * before calling migrate_folio().
+					 */
+					SetPagePrivate(pp);
+					get_page(pp);
+				}
 
 				if (mapping_writably_mapped(mp))
 					flush_dcache_page(pp);
@@ -528,6 +537,46 @@ zfs_lookup(znode_t *zdp, char *nm, znode_t **zpp, int flags, cred_t *cr,
 	error = zfs_dirlook(zdp, nm, zpp, flags, direntflags, realpnp);
 	if ((error == 0) && (*zpp))
 		zfs_znode_update_vfs(*zpp);
+
+	zfs_exit(zfsvfs, FTAG);
+	return (error);
+}
+
+/*
+ * Perform a linear search in directory for the name of specific inode.
+ * Note we don't pass in the buffer size of name because it's hardcoded to
+ * NAME_MAX+1(256) in Linux.
+ *
+ *	IN:	dzp	- znode of directory to search.
+ *		zp	- znode of the target
+ *
+ *	OUT:	name	- dentry name of the target
+ *
+ *	RETURN:	0 on success, error code on failure.
+ */
+int
+zfs_get_name(znode_t *dzp, char *name, znode_t *zp)
+{
+	zfsvfs_t *zfsvfs = ZTOZSB(dzp);
+	int error = 0;
+
+	if ((error = zfs_enter_verify_zp(zfsvfs, dzp, FTAG)) != 0)
+		return (error);
+
+	if ((error = zfs_verify_zp(zp)) != 0) {
+		zfs_exit(zfsvfs, FTAG);
+		return (error);
+	}
+
+	/* ctldir should have got their name in zfs_vget */
+	if (dzp->z_is_ctldir || zp->z_is_ctldir) {
+		zfs_exit(zfsvfs, FTAG);
+		return (ENOENT);
+	}
+
+	/* buffer len is hardcoded to 256 in Linux kernel */
+	error = zap_value_search(zfsvfs->z_os, dzp->z_id, zp->z_id,
+	    ZFS_DIRENT_OBJ(-1ULL), name, ZAP_MAXNAMELEN);
 
 	zfs_exit(zfsvfs, FTAG);
 	return (error);
@@ -1507,14 +1556,14 @@ out:
  * we use the offset 2 for the '.zfs' directory.
  */
 int
-zfs_readdir(struct inode *ip, zpl_dir_context_t *ctx, cred_t *cr)
+zfs_readdir(struct inode *ip, struct dir_context *ctx, cred_t *cr)
 {
 	(void) cr;
 	znode_t		*zp = ITOZ(ip);
 	zfsvfs_t	*zfsvfs = ITOZSB(ip);
 	objset_t	*os;
 	zap_cursor_t	zc;
-	zap_attribute_t	zap;
+	zap_attribute_t	*zap;
 	int		error;
 	uint8_t		prefetch;
 	uint8_t		type;
@@ -1539,6 +1588,7 @@ zfs_readdir(struct inode *ip, zpl_dir_context_t *ctx, cred_t *cr)
 	os = zfsvfs->z_os;
 	offset = ctx->pos;
 	prefetch = zp->z_zn_prefetch;
+	zap = zap_attribute_long_alloc();
 
 	/*
 	 * Initialize the iterator cursor.
@@ -1564,25 +1614,25 @@ zfs_readdir(struct inode *ip, zpl_dir_context_t *ctx, cred_t *cr)
 		 * Special case `.', `..', and `.zfs'.
 		 */
 		if (offset == 0) {
-			(void) strcpy(zap.za_name, ".");
-			zap.za_normalization_conflict = 0;
+			(void) strcpy(zap->za_name, ".");
+			zap->za_normalization_conflict = 0;
 			objnum = zp->z_id;
 			type = DT_DIR;
 		} else if (offset == 1) {
-			(void) strcpy(zap.za_name, "..");
-			zap.za_normalization_conflict = 0;
+			(void) strcpy(zap->za_name, "..");
+			zap->za_normalization_conflict = 0;
 			objnum = parent;
 			type = DT_DIR;
 		} else if (offset == 2 && zfs_show_ctldir(zp)) {
-			(void) strcpy(zap.za_name, ZFS_CTLDIR_NAME);
-			zap.za_normalization_conflict = 0;
+			(void) strcpy(zap->za_name, ZFS_CTLDIR_NAME);
+			zap->za_normalization_conflict = 0;
 			objnum = ZFSCTL_INO_ROOT;
 			type = DT_DIR;
 		} else {
 			/*
 			 * Grab next entry.
 			 */
-			if ((error = zap_cursor_retrieve(&zc, &zap))) {
+			if ((error = zap_cursor_retrieve(&zc, zap))) {
 				if (error == ENOENT)
 					break;
 				else
@@ -1596,24 +1646,24 @@ zfs_readdir(struct inode *ip, zpl_dir_context_t *ctx, cred_t *cr)
 			 *
 			 * XXX: This should be a feature flag for compatibility
 			 */
-			if (zap.za_integer_length != 8 ||
-			    zap.za_num_integers == 0) {
+			if (zap->za_integer_length != 8 ||
+			    zap->za_num_integers == 0) {
 				cmn_err(CE_WARN, "zap_readdir: bad directory "
 				    "entry, obj = %lld, offset = %lld, "
 				    "length = %d, num = %lld\n",
 				    (u_longlong_t)zp->z_id,
 				    (u_longlong_t)offset,
-				    zap.za_integer_length,
-				    (u_longlong_t)zap.za_num_integers);
+				    zap->za_integer_length,
+				    (u_longlong_t)zap->za_num_integers);
 				error = SET_ERROR(ENXIO);
 				goto update;
 			}
 
-			objnum = ZFS_DIRENT_OBJ(zap.za_first_integer);
-			type = ZFS_DIRENT_TYPE(zap.za_first_integer);
+			objnum = ZFS_DIRENT_OBJ(zap->za_first_integer);
+			type = ZFS_DIRENT_TYPE(zap->za_first_integer);
 		}
 
-		done = !zpl_dir_emit(ctx, zap.za_name, strlen(zap.za_name),
+		done = !dir_emit(ctx, zap->za_name, strlen(zap->za_name),
 		    objnum, type);
 		if (done)
 			break;
@@ -1636,6 +1686,7 @@ zfs_readdir(struct inode *ip, zpl_dir_context_t *ctx, cred_t *cr)
 
 update:
 	zap_cursor_fini(&zc);
+	zap_attribute_free(zap);
 	if (error == ENOENT)
 		error = 0;
 out:
@@ -1734,7 +1785,7 @@ zfs_setattr_dir(znode_t *dzp)
 	zfsvfs_t	*zfsvfs = ZTOZSB(dzp);
 	objset_t	*os = zfsvfs->z_os;
 	zap_cursor_t	zc;
-	zap_attribute_t	zap;
+	zap_attribute_t	*zap;
 	zfs_dirlock_t	*dl;
 	znode_t		*zp = NULL;
 	dmu_tx_t	*tx = NULL;
@@ -1743,15 +1794,16 @@ zfs_setattr_dir(znode_t *dzp)
 	int		count;
 	int		err;
 
+	zap = zap_attribute_alloc();
 	zap_cursor_init(&zc, os, dzp->z_id);
-	while ((err = zap_cursor_retrieve(&zc, &zap)) == 0) {
+	while ((err = zap_cursor_retrieve(&zc, zap)) == 0) {
 		count = 0;
-		if (zap.za_integer_length != 8 || zap.za_num_integers != 1) {
+		if (zap->za_integer_length != 8 || zap->za_num_integers != 1) {
 			err = ENXIO;
 			break;
 		}
 
-		err = zfs_dirent_lock(&dl, dzp, (char *)zap.za_name, &zp,
+		err = zfs_dirent_lock(&dl, dzp, (char *)zap->za_name, &zp,
 		    ZEXISTS, NULL, NULL);
 		if (err == ENOENT)
 			goto next;
@@ -1843,6 +1895,7 @@ next:
 		zfs_dirent_unlock(dl);
 	}
 	zap_cursor_fini(&zc);
+	zap_attribute_free(zap);
 
 	return (err == ENOENT ? 0 : err);
 }
@@ -3461,9 +3514,9 @@ zfs_link(znode_t *tdzp, znode_t *szp, char *name, cred_t *cr,
 	boolean_t	waited = B_FALSE;
 	boolean_t	is_tmpfile = 0;
 	uint64_t	txg;
-#ifdef HAVE_TMPFILE
+
 	is_tmpfile = (sip->i_nlink == 0 && (sip->i_state & I_LINKABLE));
-#endif
+
 	ASSERT(S_ISDIR(ZTOI(tdzp)->i_mode));
 
 	if (name == NULL)
@@ -3767,8 +3820,7 @@ zfs_putpage(struct inode *ip, struct page *pp, struct writeback_control *wbc,
 			/*
 			 * Speed up any non-sync page writebacks since
 			 * they may take several seconds to complete.
-			 * Refer to the comment in zpl_fsync() (when
-			 * HAVE_FSYNC_RANGE is defined) for details.
+			 * Refer to the comment in zpl_fsync() for details.
 			 */
 			if (atomic_load_32(&zp->z_async_writes_cnt) > 0) {
 				zil_commit(zfsvfs->z_log, zp->z_id);
@@ -4038,6 +4090,14 @@ zfs_fillpage(struct inode *ip, struct page *pp)
 	} else {
 		ClearPageError(pp);
 		SetPageUptodate(pp);
+		if (!PagePrivate(pp)) {
+			/*
+			 * Set private bit so page migration will wait for us to
+			 * finish writeback before calling migrate_folio().
+			 */
+			SetPagePrivate(pp);
+			get_page(pp);
+		}
 	}
 
 	return (error);

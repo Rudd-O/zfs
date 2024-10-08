@@ -168,7 +168,6 @@ zfs_uiomove_bvec_impl(void *p, size_t n, zfs_uio_rw_t rw, zfs_uio_t *uio)
 	return (0);
 }
 
-#ifdef HAVE_BLK_MQ
 static void
 zfs_copy_bvec(void *p, size_t skip, size_t cnt, zfs_uio_rw_t rw,
     struct bio_vec *bv)
@@ -260,17 +259,12 @@ zfs_uiomove_bvec_rq(void *p, size_t n, zfs_uio_rw_t rw, zfs_uio_t *uio)
 	}
 	return (0);
 }
-#endif
 
 static int
 zfs_uiomove_bvec(void *p, size_t n, zfs_uio_rw_t rw, zfs_uio_t *uio)
 {
-#ifdef HAVE_BLK_MQ
 	if (uio->rq != NULL)
 		return (zfs_uiomove_bvec_rq(p, n, rw, uio));
-#else
-	ASSERT3P(uio->rq, ==, NULL);
-#endif
 	return (zfs_uiomove_bvec_impl(p, n, rw, uio));
 }
 
@@ -595,9 +589,16 @@ zfs_uio_iov_step(struct iovec v, zfs_uio_rw_t rw, zfs_uio_t *uio,
 	size_t len = v.iov_len;
 	unsigned long n = DIV_ROUND_UP(len, PAGE_SIZE);
 
-	long res = zfs_get_user_pages(
-	    P2ALIGN_TYPED(addr, PAGE_SIZE, unsigned long), n, rw == UIO_READ,
-	    &uio->uio_dio.pages[uio->uio_dio.npages]);
+	/*
+	 * read returning FOLL_WRITE is due to the fact that we are stating
+	 * that the kernel will have write access to the user pages. So, when a
+	 * Direct I/O read request is issued, the kernel must write to the user
+	 * pages.
+	 */
+	long res = get_user_pages_unlocked(
+	    P2ALIGN_TYPED(addr, PAGE_SIZE, unsigned long), n,
+	    &uio->uio_dio.pages[uio->uio_dio.npages],
+	    rw == UIO_READ ? FOLL_WRITE : 0);
 	if (res < 0) {
 		return (SET_ERROR(-res));
 	} else if (len != (res * PAGE_SIZE)) {

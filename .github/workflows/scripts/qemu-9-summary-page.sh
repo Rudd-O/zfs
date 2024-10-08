@@ -34,14 +34,17 @@ function send2github() {
 if [ ! -f out-1.md ]; then
   logfile="1"
   for tarfile in Logs-functional-*/qemu-*.tar; do
+    rm -rf vm* *.txt
     if [ ! -s "$tarfile" ]; then
       output "\n## Functional Tests: unknown\n"
       output ":exclamation: Tarfile $tarfile is empty :exclamation:"
       continue
     fi
-    rm -rf vm* *.txt
     tar xf "$tarfile"
+    test -s env.txt || continue
     source env.txt
+    # when uname.txt is there, the other files are also ok
+    test -s uname.txt || continue
     output "\n## Functional Tests: $OSNAME\n"
     outfile_plain uname.txt
     outfile_plain summary.txt

@@ -16,7 +16,7 @@ function archlinux() {
   sudo pacman -Sy --noconfirm base-devel bc cpio dhclient dkms fakeroot \
     fio gdb inetutils jq less linux linux-headers lsscsi nfs-utils parted \
     pax perf python-packaging python-setuptools qemu-guest-agent ksh samba \
-    sysstat rng-tools rsync wget
+    sysstat rng-tools rsync wget xxhash
   echo "##[endgroup]"
 }
 
@@ -32,13 +32,13 @@ function debian() {
   sudo apt-get install -y \
     acl alien attr autoconf bc cpio curl dbench dh-python dkms fakeroot \
     fio gdb gdebi git ksh lcov isc-dhcp-client jq libacl1-dev libaio-dev \
-    libattr1-dev libblkid-dev libcurl4-openssl-dev libdevmapper-dev \
-    libelf-dev libffi-dev libmount-dev libpam0g-dev libselinux-dev \
-    libssl-dev libtool libtool-bin libudev-dev linux-headers-$(uname -r) \
+    libattr1-dev libblkid-dev libcurl4-openssl-dev libdevmapper-dev libelf-dev \
+    libffi-dev libmount-dev libpam0g-dev libselinux-dev libssl-dev libtool \
+    libtool-bin libudev-dev libunwind-dev linux-headers-$(uname -r) \
     lsscsi nfs-kernel-server pamtester parted python3 python3-all-dev \
     python3-cffi python3-dev python3-distlib python3-packaging \
     python3-setuptools python3-sphinx qemu-guest-agent rng-tools rpm2cpio \
-    rsync samba sysstat uuid-dev watchdog wget xfslibs-dev zlib1g-dev
+    rsync samba sysstat uuid-dev watchdog wget xfslibs-dev  xxhash zlib1g-dev
   echo "##[endgroup]"
 }
 
@@ -48,8 +48,7 @@ function freebsd() {
   echo "##[group]Install Development Tools"
   sudo pkg install -y autoconf automake autotools base64 checkbashisms fio \
     gdb gettext gettext-runtime git gmake gsed jq ksh93 lcov libtool lscpu \
-    pkgconf python python3 pamtester pamtester qemu-guest-agent rsync \
-    sysutils/coreutils
+    pkgconf python python3 pamtester pamtester qemu-guest-agent rsync xxhash
   sudo pkg install -xy \
     '^samba4[[:digit:]]+$' \
     '^py3[[:digit:]]+-cffi$' \
@@ -76,7 +75,7 @@ function rhel() {
     lsscsi mdadm nfs-utils openssl-devel pam-devel pamtester parted perf \
     python3 python3-cffi python3-devel python3-packaging kernel-devel \
     python3-setuptools qemu-guest-agent rng-tools rpcgen rpm-build rsync \
-    samba sysstat systemd watchdog wget xfsprogs-devel zlib-devel
+    samba sysstat systemd watchdog wget xfsprogs-devel xxhash zlib-devel
   echo "##[endgroup]"
 }
 
@@ -140,6 +139,10 @@ case "$1" in
     echo "##[endgroup]"
     ;;
 esac
+
+# This script is used for checkstyle + zloop deps also.
+# Install only the needed packages and exit - when used this way.
+test -z "${ONLY_DEPS:-}" || exit 0
 
 # Start services
 echo "##[group]Enable services"

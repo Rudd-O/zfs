@@ -16,7 +16,9 @@
 .\" own identifying information:
 .\" Portions Copyright [yyyy] [name of copyright owner]
 .\"
-.Dd June 27, 2024
+.\" Copyright (c) 2024, Klara, Inc.
+.\"
+.Dd October 2, 2024
 .Dt ZFS 4
 .Os
 .
@@ -614,7 +616,11 @@ However, this is limited by
 .
 .It Sy zap_micro_max_size Ns = Ns Sy 131072 Ns B Po 128 KiB Pc Pq int
 Maximum micro ZAP size.
-A micro ZAP is upgraded to a fat ZAP, once it grows beyond the specified size.
+A "micro" ZAP is upgraded to a "fat" ZAP once it grows beyond the specified
+size.
+Sizes higher than 128KiB will be clamped to 128KiB unless the
+.Sy large_microzap
+feature is enabled.
 .
 .It Sy zap_shrink_enabled Ns = Ns Sy 1 Ns | Ns 0 Pq int
 If set, adjacent empty ZAP blocks will be collapsed, reducing disk space.
@@ -1570,6 +1576,15 @@ which have the
 .Em no_root_squash
 option set.
 .
+.It Sy zfs_snapshot_no_setuid Ns = Ns Sy 0 Ns | Ns 1 Pq int
+Whether to disable
+.Em setuid/setgid
+support for snapshot mounts triggered by access to the
+.Sy .zfs/snapshot
+directory by setting the
+.Em nosuid
+mount option.
+.
 .It Sy zfs_flags Ns = Ns Sy 0 Pq int
 Set additional debugging flags.
 The following flags may be bitwise-ored together:
@@ -1749,6 +1764,11 @@ Therefore, we formerly forbade creating blocks larger than 1M.
 Larger blocks could be created by changing it,
 and pools with larger blocks can always be imported and used,
 regardless of this setting.
+.Pp
+Note that it is still limited by default to
+.Ar 1 MiB
+on x86_32, because Linux's
+3/1 memory split doesn't leave much room for 16M chunks.
 .
 .It Sy zfs_allow_redacted_dataset_mount Ns = Ns Sy 0 Ns | Ns 1 Pq int
 Allow datasets received with redacted send/receive to be mounted.
@@ -1991,6 +2011,13 @@ Ignore the
 .Sy resilver_defer
 feature, causing an operation that would start a resilver to
 immediately restart the one in progress.
+.
+.It Sy zfs_resilver_defer_percent Ns = Ns Sy 10 Ns % Pq uint
+If the ongoing resilver progress is below this threshold, a new resilver will
+restart from scratch instead of being deferred after the current one finishes,
+even if the
+.Sy resilver_defer
+feature is enabled.
 .
 .It Sy zfs_resilver_min_time_ms Ns = Ns Sy 3000 Ns ms Po 3 s Pc Pq uint
 Resilvers are processed by the sync thread.

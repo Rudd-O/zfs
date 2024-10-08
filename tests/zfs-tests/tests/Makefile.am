@@ -1185,6 +1185,10 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/cli_root/zpool_prefetch/cleanup.ksh \
 	functional/cli_root/zpool_prefetch/setup.ksh \
 	functional/cli_root/zpool_prefetch/zpool_prefetch_001_pos.ksh \
+	functional/cli_root/zpool_reguid/cleanup.ksh \
+	functional/cli_root/zpool_reguid/setup.ksh \
+	functional/cli_root/zpool_reguid/zpool_reguid_001_pos.ksh \
+	functional/cli_root/zpool_reguid/zpool_reguid_002_neg.ksh \
 	functional/cli_root/zpool_remove/cleanup.ksh \
 	functional/cli_root/zpool_remove/setup.ksh \
 	functional/cli_root/zpool_remove/zpool_remove_001_neg.ksh \
@@ -1490,6 +1494,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/events/setup.ksh \
 	functional/events/zed_cksum_config.ksh \
 	functional/events/zed_cksum_reported.ksh \
+	functional/events/zed_diagnose_multiple.ksh \
 	functional/events/zed_fd_spill.ksh \
 	functional/events/zed_io_config.ksh \
 	functional/events/zed_rc_filter.ksh \
@@ -1520,6 +1525,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/fault/cleanup.ksh \
 	functional/fault/decompress_fault.ksh \
 	functional/fault/decrypt_fault.ksh \
+	functional/fault/fault_limits.ksh \
 	functional/fault/scrub_after_resilver.ksh \
 	functional/fault/suspend_resume_single.ksh \
 	functional/fault/setup.ksh \
@@ -1599,6 +1605,11 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/link_count/link_count_001.ksh \
 	functional/link_count/link_count_root_inode.ksh \
 	functional/link_count/setup.ksh \
+	functional/longname/cleanup.ksh \
+	functional/longname/longname_001_pos.ksh \
+	functional/longname/longname_002_pos.ksh \
+	functional/longname/longname_003_pos.ksh \
+	functional/longname/setup.ksh \
 	functional/log_spacemap/log_spacemap_import_logs.ksh \
 	functional/migration/cleanup.ksh \
 	functional/migration/migration_001_pos.ksh \
@@ -1932,6 +1943,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/rsend/rsend_031_pos.ksh \
 	functional/rsend/send-c_embedded_blocks.ksh \
 	functional/rsend/send-c_incremental.ksh \
+	functional/rsend/send-c_longname.ksh \
 	functional/rsend/send-c_lz4_disabled.ksh \
 	functional/rsend/send-c_mixed_compression.ksh \
 	functional/rsend/send-c_props.ksh \
