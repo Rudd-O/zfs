@@ -471,13 +471,15 @@ int
 zpool_get_userprop(zpool_handle_t *zhp, const char *propname, char *buf,
     size_t len, zprop_source_t *srctype)
 {
-	nvlist_t *nv, *nvl;
+	nvlist_t *nv;
 	uint64_t ival;
 	const char *value;
 	zprop_source_t source = ZPROP_SRC_LOCAL;
 
-	nvl = zhp->zpool_props;
-	if (nvlist_lookup_nvlist(nvl, propname, &nv) == 0) {
+	if (zhp->zpool_props == NULL)
+		zpool_get_all_props(zhp);
+
+	if (nvlist_lookup_nvlist(zhp->zpool_props, propname, &nv) == 0) {
 		if (nvlist_lookup_uint64(nv, ZPROP_SOURCE, &ival) == 0)
 			source = ival;
 		verify(nvlist_lookup_string(nv, ZPROP_VALUE, &value) == 0);
@@ -2796,7 +2798,7 @@ zpool_scan(zpool_handle_t *zhp, pool_scan_func_t func, pool_scrub_cmd_t cmd)
 	}
 
 	/*
-	 * With EBUSY, five cases are possible:
+	 * With EBUSY, six cases are possible:
 	 *
 	 * Current state		Requested
 	 * 1. Normal Scrub Running	Normal Scrub or Error Scrub

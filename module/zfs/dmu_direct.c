@@ -180,6 +180,7 @@ dmu_write_direct(zio_t *pio, dmu_buf_impl_t *db, abd_t *data, dmu_tx_t *tx)
 	if (list_next(&db->db_dirty_records, dr_head) != NULL)
 		zp.zp_nopwrite = B_FALSE;
 
+	ASSERT0(dr_head->dt.dl.dr_has_raw_params);
 	ASSERT3S(dr_head->dt.dl.dr_override_state, ==, DR_NOT_OVERRIDDEN);
 	dr_head->dt.dl.dr_override_state = DR_IN_DMU_SYNC;
 
@@ -330,7 +331,7 @@ dmu_read_abd(dnode_t *dn, uint64_t offset, uint64_t size,
 		 */
 		zio_t *cio = zio_read(rio, spa, bp, mbuf, db->db.db_size,
 		    dmu_read_abd_done, NULL, ZIO_PRIORITY_SYNC_READ,
-		    ZIO_FLAG_CANFAIL, &zb);
+		    ZIO_FLAG_CANFAIL | ZIO_FLAG_DIO_READ, &zb);
 		mutex_exit(&db->db_mtx);
 
 		zfs_racct_read(spa, db->db.db_size, 1, flags);

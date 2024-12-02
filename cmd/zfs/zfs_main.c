@@ -2162,6 +2162,7 @@ zfs_do_get(int argc, char **argv)
 	cb.cb_type = ZFS_TYPE_DATASET;
 
 	struct option long_options[] = {
+		{"json", no_argument, NULL, 'j'},
 		{"json-int", no_argument, NULL, ZFS_OPTION_JSON_NUMS_AS_INT},
 		{0, 0, 0, 0}
 	};
@@ -3760,8 +3761,13 @@ collect_dataset(zfs_handle_t *zhp, list_cbdata_t *cb)
 		if (cb->cb_json) {
 			if (pl->pl_prop == ZFS_PROP_NAME)
 				continue;
+			const char *prop_name;
+			if (pl->pl_prop != ZPROP_USERPROP)
+				prop_name = zfs_prop_to_name(pl->pl_prop);
+			else
+				prop_name = pl->pl_user_prop;
 			if (zprop_nvlist_one_property(
-			    zfs_prop_to_name(pl->pl_prop), propstr,
+			    prop_name, propstr,
 			    sourcetype, source, NULL, props,
 			    cb->cb_json_as_int) != 0)
 				nomem();
@@ -3852,6 +3858,7 @@ zfs_do_list(int argc, char **argv)
 	nvlist_t *data = NULL;
 
 	struct option long_options[] = {
+		{"json", no_argument, NULL, 'j'},
 		{"json-int", no_argument, NULL, ZFS_OPTION_JSON_NUMS_AS_INT},
 		{0, 0, 0, 0}
 	};
@@ -7436,9 +7443,15 @@ share_mount(int op, int argc, char **argv)
 	uint_t nthr;
 	jsobj = data = item = NULL;
 
+	struct option long_options[] = {
+		{"json", no_argument, NULL, 'j'},
+		{0, 0, 0, 0}
+	};
+
 	/* check options */
-	while ((c = getopt(argc, argv, op == OP_MOUNT ? ":ajRlvo:Of" : "al"))
-	    != -1) {
+	while ((c = getopt_long(argc, argv,
+	    op == OP_MOUNT ? ":ajRlvo:Of" : "al",
+	    op == OP_MOUNT ? long_options : NULL, NULL)) != -1) {
 		switch (c) {
 		case 'a':
 			do_all = 1;
@@ -8374,8 +8387,14 @@ zfs_do_channel_program(int argc, char **argv)
 	boolean_t sync_flag = B_TRUE, json_output = B_FALSE;
 	zpool_handle_t *zhp;
 
+	struct option long_options[] = {
+		{"json", no_argument, NULL, 'j'},
+		{0, 0, 0, 0}
+	};
+
 	/* check options */
-	while ((c = getopt(argc, argv, "nt:m:j")) != -1) {
+	while ((c = getopt_long(argc, argv, "nt:m:j", long_options,
+	    NULL)) != -1) {
 		switch (c) {
 		case 't':
 		case 'm': {
@@ -9083,7 +9102,13 @@ zfs_do_version(int argc, char **argv)
 	int c;
 	nvlist_t *jsobj = NULL, *zfs_ver = NULL;
 	boolean_t json = B_FALSE;
-	while ((c = getopt(argc, argv, "j")) != -1) {
+
+	struct option long_options[] = {
+		{"json", no_argument, NULL, 'j'},
+		{0, 0, 0, 0}
+	};
+
+	while ((c = getopt_long(argc, argv, "j", long_options, NULL)) != -1) {
 		switch (c) {
 		case 'j':
 			json = B_TRUE;
