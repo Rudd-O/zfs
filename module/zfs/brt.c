@@ -859,6 +859,9 @@ brt_entry_lookup(brt_vdev_t *brtvd, brt_entry_t *bre)
 {
 	uint64_t off = BRE_OFFSET(bre);
 
+	if (brtvd->bv_mos_entries == 0)
+		return (SET_ERROR(ENOENT));
+
 	return (zap_lookup_uint64_by_dnode(brtvd->bv_mos_entries_dnode,
 	    &off, BRT_KEY_WORDS, 1, sizeof (bre->bre_count), &bre->bre_count));
 }
@@ -1473,11 +1476,9 @@ brt_unload(spa_t *spa)
 	spa->spa_brt_rangesize = 0;
 }
 
-/* BEGIN CSTYLED */
 ZFS_MODULE_PARAM(zfs_brt, , brt_zap_prefetch, INT, ZMOD_RW,
 	"Enable prefetching of BRT ZAP entries");
 ZFS_MODULE_PARAM(zfs_brt, , brt_zap_default_bs, UINT, ZMOD_RW,
 	"BRT ZAP leaf blockshift");
 ZFS_MODULE_PARAM(zfs_brt, , brt_zap_default_ibs, UINT, ZMOD_RW,
 	"BRT ZAP indirect blockshift");
-/* END CSTYLED */
