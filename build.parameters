@@ -1,3 +1,3 @@
-["FEDORA_RELEASES": "37 39 40 41"]
+["FEDORA_RELEASES": "37 40 41"]
 // fc39 needed for zfs-fedora-installer OS version.
 // cannot use QUBES_RELEASES since zfs-fedora-installer will not test those
