@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: CDDL-1.0
 #
 # This file and its contents are supplied under the terms of the
 # Common Development and Distribution License ("CDDL"), version 1.0.
@@ -25,7 +26,6 @@ post_user = root
 post = cleanup
 failsafe_user = root
 failsafe = callbacks/zfs_failsafe
-outputdir = /var/tmp/test_results
 tags = ['functional']
 
 [tests/functional/acl/off]
@@ -444,7 +444,8 @@ tags = ['functional', 'cli_root', 'zpool_export']
 
 [tests/functional/cli_root/zpool_get]
 tests = ['zpool_get_001_pos', 'zpool_get_002_pos', 'zpool_get_003_pos',
-    'zpool_get_004_neg', 'zpool_get_005_pos', 'vdev_get_001_pos']
+    'zpool_get_004_neg', 'zpool_get_005_pos', 'vdev_get_001_pos',
+    'vdev_get_all']
 tags = ['functional', 'cli_root', 'zpool_get']
 
 [tests/functional/cli_root/zpool_history]
@@ -665,6 +666,12 @@ tags = ['functional', 'zap_shrink']
 tests = ['crtime_001_pos' ]
 tags = ['functional', 'crtime']
 
+[tests/functional/crypto]
+tests = ['icp_aes_ccm', 'icp_aes_gcm']
+pre =
+post =
+tags = ['functional', 'crypto']
+
 [tests/functional/ctime]
 tests = ['ctime_001_pos' ]
 tags = ['functional', 'ctime']
@@ -676,9 +683,9 @@ post =
 tags = ['functional', 'deadman']
 
 [tests/functional/dedup]
-tests = ['dedup_fdt_create', 'dedup_fdt_import', 'dedup_legacy_create',
-    'dedup_legacy_import', 'dedup_legacy_fdt_upgrade',
-    'dedup_legacy_fdt_mixed', 'dedup_quota']
+tests = ['dedup_fdt_create', 'dedup_fdt_import', 'dedup_fdt_pacing',
+    'dedup_legacy_create', 'dedup_legacy_import', 'dedup_legacy_fdt_upgrade',
+    'dedup_legacy_fdt_mixed', 'dedup_quota', 'dedup_prune', 'dedup_zap_shrink']
 pre =
 post =
 tags = ['functional', 'dedup']
@@ -717,6 +724,10 @@ tags = ['functional', 'features', 'async_destroy']
 tests = ['large_dnode_001_pos', 'large_dnode_003_pos', 'large_dnode_004_neg',
     'large_dnode_005_pos', 'large_dnode_007_neg', 'large_dnode_009_pos']
 tags = ['functional', 'features', 'large_dnode']
+
+[tests/functional/gang_blocks]
+tests = ['gang_blocks_redundant']
+tags = ['functional', 'gang_blocks']
 
 [tests/functional/grow]
 pre =
@@ -888,7 +899,8 @@ tests = ['removal_all_vdev', 'removal_cancel', 'removal_check_space',
     'removal_with_send_recv', 'removal_with_snapshot',
     'removal_with_write', 'removal_with_zdb', 'remove_expanded',
     'remove_mirror', 'remove_mirror_sanity', 'remove_raidz',
-    'remove_indirect', 'remove_attach_mirror', 'removal_reservation']
+    'remove_indirect', 'remove_attach_mirror', 'removal_reservation',
+    'removal_with_hole']
 tags = ['functional', 'removal']
 
 [tests/functional/rename_dirs]
@@ -975,7 +987,7 @@ tests = ['sparse_001_pos']
 tags = ['functional', 'sparse']
 
 [tests/functional/stat]
-tests = ['stat_001_pos']
+tests = ['stat_001_pos', 'statx_dioalign']
 tags = ['functional', 'stat']
 
 [tests/functional/suid]
@@ -998,12 +1010,20 @@ tags = ['functional', 'upgrade']
 
 [tests/functional/userquota]
 tests = [
+    'defaultuserquota_001_pos', 'defaultuserquota_002_pos',
+    'defaultuserquota_003_pos', 'defaultuserquota_004_neg',
+    'defaultuserquota_005_pos', 'defaultuserquota_006_pos',
+    'defaultuserquota_007_pos', 'defaultuserquota_008_pos',
+    'defaultuserquota_009_pos', 'defaultuserquota_010_neg',
+    'defaultuserquota_011_neg', 'defaultuserquota_012_neg',
+    'defaultuserquota_013_neg',
     'userquota_001_pos', 'userquota_002_pos', 'userquota_003_pos',
     'userquota_004_pos', 'userquota_005_neg', 'userquota_006_pos',
     'userquota_007_pos', 'userquota_008_pos', 'userquota_009_pos',
     'userquota_010_pos', 'userquota_011_pos', 'userquota_012_neg',
-    'userspace_001_pos', 'userspace_002_pos', 'userspace_encrypted',
-    'userspace_send_encrypted', 'userspace_encrypted_13709']
+    'userspace_001_pos', 'userspace_002_pos', 'userspace_004_pos',
+    'userspace_encrypted', 'userspace_send_encrypted',
+    'userspace_encrypted_13709']
 tags = ['functional', 'userquota']
 
 [tests/functional/vdev_disk:Linux]

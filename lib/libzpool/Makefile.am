@@ -46,7 +46,6 @@ nodist_libzpool_la_SOURCES = \
 	module/lua/lvm.c \
 	module/lua/lzio.c \
 	\
-	module/os/linux/zfs/vdev_file.c \
 	module/os/linux/zfs/zio_crypt.c \
 	\
 	module/zcommon/cityhash.c \
@@ -143,6 +142,7 @@ nodist_libzpool_la_SOURCES = \
 	module/zfs/vdev.c \
 	module/zfs/vdev_draid.c \
 	module/zfs/vdev_draid_rand.c \
+	module/zfs/vdev_file.c \
 	module/zfs/vdev_indirect.c \
 	module/zfs/vdev_indirect_births.c \
 	module/zfs/vdev_indirect_mapping.c \
@@ -178,6 +178,7 @@ nodist_libzpool_la_SOURCES = \
 	module/zfs/zfeature.c \
 	module/zfs/zfs_byteswap.c \
 	module/zfs/zfs_chksum.c \
+	module/zfs/zfs_debug_common.c \
 	module/zfs/zfs_fm.c \
 	module/zfs/zfs_fuid.c \
 	module/zfs/zfs_ratelimit.c \
