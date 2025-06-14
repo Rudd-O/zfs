@@ -25,6 +25,7 @@
  * Copyright (c) 2012, 2015 by Delphix. All rights reserved.
  * Copyright (c) 2014 Integros [integros.com]
  * Copyright 2017 Nexenta Systems, Inc.
+ * Copyright (c) 2025, Klara, Inc.
  */
 
 /* Portions Copyright 2007 Jeremy Teo */
@@ -305,6 +306,18 @@ zfs_ioctl(vnode_t *vp, ulong_t com, intptr_t data, int flag, cred_t *cred,
 		*(offset_t *)data = off;
 		return (0);
 	}
+	case ZFS_IOC_REWRITE: {
+		zfs_rewrite_args_t *args = (zfs_rewrite_args_t *)data;
+		if ((flag & FWRITE) == 0)
+			return (SET_ERROR(EBADF));
+		error = vn_lock(vp, LK_SHARED);
+		if (error)
+			return (error);
+		error = zfs_rewrite(VTOZ(vp), args->off, args->len,
+		    args->flags, args->arg);
+		VOP_UNLOCK(vp);
+		return (error);
+	}
 	}
 	return (SET_ERROR(ENOTTY));
 }
@@ -518,7 +531,7 @@ mappedread(znode_t *zp, int nbytes, zfs_uio_t *uio)
 			page_unhold(pp);
 		} else {
 			error = dmu_read_uio_dbuf(sa_get_db(zp->z_sa_hdl),
-			    uio, bytes);
+			    uio, bytes, DMU_READ_PREFETCH);
 		}
 		len -= bytes;
 		off = 0;
@@ -4072,6 +4085,33 @@ zfs_freebsd_getpages(struct vop_getpages_args *ap)
 	    ap->a_rahead));
 }
 
+typedef struct {
+	uint_t		pca_npages;
+	vm_page_t	pca_pages[];
+} putpage_commit_arg_t;
+
+static void
+zfs_putpage_commit_cb(void *arg)
+{
+	putpage_commit_arg_t *pca = arg;
+	vm_object_t object = pca->pca_pages[0]->object;
+
+	zfs_vmobject_wlock(object);
+
+	for (uint_t i = 0; i < pca->pca_npages; i++) {
+		vm_page_t pp = pca->pca_pages[i];
+		vm_page_undirty(pp);
+		vm_page_sunbusy(pp);
+	}
+
+	vm_object_pip_wakeupn(object, pca->pca_npages);
+
+	zfs_vmobject_wunlock(object);
+
+	kmem_free(pca,
+	    offsetof(putpage_commit_arg_t, pca_pages[pca->pca_npages]));
+}
+
 static int
 zfs_putpages(struct vnode *vp, vm_page_t *ma, size_t len, int flags,
     int *rtvals)
@@ -4173,10 +4213,12 @@ zfs_putpages(struct vnode *vp, vm_page_t *ma, size_t len, int flags,
 	}
 
 	if (zp->z_blksz < PAGE_SIZE) {
-		for (i = 0; len > 0; off += tocopy, len -= tocopy, i++) {
-			tocopy = len > PAGE_SIZE ? PAGE_SIZE : len;
+		vm_ooffset_t woff = off;
+		size_t wlen = len;
+		for (i = 0; wlen > 0; woff += tocopy, wlen -= tocopy, i++) {
+			tocopy = MIN(PAGE_SIZE, wlen);
 			va = zfs_map_page(ma[i], &sf);
-			dmu_write(zfsvfs->z_os, zp->z_id, off, tocopy, va, tx);
+			dmu_write(zfsvfs->z_os, zp->z_id, woff, tocopy, va, tx);
 			zfs_unmap_page(sf);
 		}
 	} else {
@@ -4197,19 +4239,19 @@ zfs_putpages(struct vnode *vp, vm_page_t *ma, size_t len, int flags,
 		zfs_tstamp_update_setup(zp, CONTENT_MODIFIED, mtime, ctime);
 		err = sa_bulk_update(zp->z_sa_hdl, bulk, count, tx);
 		ASSERT0(err);
-		/*
-		 * XXX we should be passing a callback to undirty
-		 * but that would make the locking messier
-		 */
-		zfs_log_write(zfsvfs->z_log, tx, TX_WRITE, zp, off,
-		    len, commit, B_FALSE, NULL, NULL);
 
-		zfs_vmobject_wlock(object);
-		for (i = 0; i < ncount; i++) {
-			rtvals[i] = zfs_vm_pagerret_ok;
-			vm_page_undirty(ma[i]);
-		}
-		zfs_vmobject_wunlock(object);
+		putpage_commit_arg_t *pca = kmem_alloc(
+		    offsetof(putpage_commit_arg_t, pca_pages[ncount]),
+		    KM_SLEEP);
+		pca->pca_npages = ncount;
+		memcpy(pca->pca_pages, ma, sizeof (vm_page_t) * ncount);
+
+		zfs_log_write(zfsvfs->z_log, tx, TX_WRITE, zp,
+		    off, len, commit, B_FALSE, zfs_putpage_commit_cb, pca);
+
+		for (i = 0; i < ncount; i++)
+			rtvals[i] = zfs_vm_pagerret_pend;
+
 		VM_CNT_INC(v_vnodeout);
 		VM_CNT_ADD(v_vnodepgsout, ncount);
 	}
@@ -6043,6 +6085,78 @@ zfs_freebsd_aclcheck(struct vop_aclcheck_args *ap)
 	return (EOPNOTSUPP);
 }
 
+#ifndef _SYS_SYSPROTO_H_
+struct vop_advise_args {
+	struct vnode *a_vp;
+	off_t a_start;
+	off_t a_end;
+	int a_advice;
+};
+#endif
+
+static int
+zfs_freebsd_advise(struct vop_advise_args *ap)
+{
+	vnode_t *vp = ap->a_vp;
+	off_t start = ap->a_start;
+	off_t end = ap->a_end;
+	int advice = ap->a_advice;
+	off_t len;
+	znode_t *zp;
+	zfsvfs_t *zfsvfs;
+	objset_t *os;
+	int error = 0;
+
+	if (end < start)
+		return (EINVAL);
+
+	error = vn_lock(vp, LK_SHARED);
+	if (error)
+		return (error);
+
+	zp = VTOZ(vp);
+	zfsvfs = zp->z_zfsvfs;
+	os = zp->z_zfsvfs->z_os;
+
+	if ((error = zfs_enter_verify_zp(zfsvfs, zp, FTAG)) != 0)
+		goto out_unlock;
+
+	/* kern_posix_fadvise points to the last byte, we want one past */
+	if (end != OFF_MAX)
+		end += 1;
+	len = end - start;
+
+	switch (advice) {
+	case POSIX_FADV_WILLNEED:
+		/*
+		 * Pass on the caller's size directly, but note that
+		 * dmu_prefetch_max will effectively cap it.  If there really
+		 * is a larger sequential access pattern, perhaps dmu_zfetch
+		 * will detect it.
+		 */
+		dmu_prefetch(os, zp->z_id, 0, start, len,
+		    ZIO_PRIORITY_ASYNC_READ);
+		break;
+	case POSIX_FADV_NORMAL:
+	case POSIX_FADV_RANDOM:
+	case POSIX_FADV_SEQUENTIAL:
+	case POSIX_FADV_DONTNEED:
+	case POSIX_FADV_NOREUSE:
+		/* ignored for now */
+		break;
+	default:
+		error = EINVAL;
+		break;
+	}
+
+	zfs_exit(zfsvfs, FTAG);
+
+out_unlock:
+	VOP_UNLOCK(vp);
+
+	return (error);
+}
+
 static int
 zfs_vptocnp(struct vop_vptocnp_args *ap)
 {
@@ -6281,6 +6395,7 @@ struct vop_vector zfs_vnodeops = {
 	.vop_link =		zfs_freebsd_link,
 	.vop_symlink =		zfs_freebsd_symlink,
 	.vop_readlink =		zfs_freebsd_readlink,
+	.vop_advise =		zfs_freebsd_advise,
 	.vop_read =		zfs_freebsd_read,
 	.vop_write =		zfs_freebsd_write,
 	.vop_remove =		zfs_freebsd_remove,

@@ -323,6 +323,19 @@ vdev_derive_alloc_bias(const char *bias)
 	return (alloc_bias);
 }
 
+uint64_t
+vdev_default_psize(vdev_t *vd, uint64_t asize, uint64_t txg)
+{
+	ASSERT0(asize % (1ULL << vd->vdev_top->vdev_ashift));
+	uint64_t csize, psize = asize;
+	for (int c = 0; c < vd->vdev_children; c++) {
+		csize = vdev_asize_to_psize_txg(vd->vdev_child[c], asize, txg);
+		psize = MIN(psize, csize);
+	}
+
+	return (psize);
+}
+
 /*
  * Default asize function: return the MAX of psize with the asize of
  * all children.  This is what's used by anything other than RAID-Z.
@@ -1759,8 +1772,11 @@ vdev_probe_done(zio_t *zio)
 			 * change the state in a spa_async_request. Probes that
 			 * were initiated from a vdev_open can change the state
 			 * as part of the open call.
+			 * Skip fault injection if this vdev is already removed
+			 * or a removal is pending.
 			 */
-			if (vps->vps_zio_done_probe) {
+			if (vps->vps_zio_done_probe &&
+			    !vd->vdev_remove_wanted && !vd->vdev_removed) {
 				vd->vdev_fault_wanted = B_TRUE;
 				spa_async_request(spa, SPA_ASYNC_FAULT_VDEV);
 			}
@@ -4135,17 +4151,22 @@ vdev_sync(vdev_t *vd, uint64_t txg)
 	(void) txg_list_add(&spa->spa_vdev_txg_list, vd, TXG_CLEAN(txg));
 	dmu_tx_commit(tx);
 }
+uint64_t
+vdev_asize_to_psize_txg(vdev_t *vd, uint64_t asize, uint64_t txg)
+{
+	return (vd->vdev_ops->vdev_op_asize_to_psize(vd, asize, txg));
+}
 
 /*
  * Return the amount of space that should be (or was) allocated for the given
  * psize (compressed block size) in the given TXG. Note that for expanded
  * RAIDZ vdevs, the size allocated for older BP's may be larger. See
- * vdev_raidz_asize().
+ * vdev_raidz_psize_to_asize().
  */
 uint64_t
 vdev_psize_to_asize_txg(vdev_t *vd, uint64_t psize, uint64_t txg)
 {
-	return (vd->vdev_ops->vdev_op_asize(vd, psize, txg));
+	return (vd->vdev_ops->vdev_op_psize_to_asize(vd, psize, txg));
 }
 
 uint64_t
