@@ -2257,10 +2257,18 @@ vdev_raidz_asize_to_psize(vdev_t *vd, uint64_t asize, uint64_t txg)
 	ASSERT0(asize % (1 << ashift));
 
 	psize = (asize >> ashift);
+	/*
+	 * If the roundup to nparity + 1 caused us to spill into a new row, we
+	 * need to ignore that row entirely (since it can't store data or
+	 * parity).
+	 */
+	uint64_t rows = psize / cols;
+	psize = psize - (rows * cols) <= nparity ? rows * cols : psize;
+	/*  Subtract out parity sectors for each row storing data. */
 	psize -= nparity * DIV_ROUND_UP(psize, cols);
 	psize <<= ashift;
 
-	return (asize);
+	return (psize);
 }
 
 /*
@@ -2683,7 +2691,7 @@ raidz_checksum_verify(zio_t *zio)
 	 */
 	if (zio->io_flags & ZIO_FLAG_DIO_READ && ret == ECKSUM) {
 		zio->io_error = ret;
-		zio->io_flags |= ZIO_FLAG_DIO_CHKSUM_ERR;
+		zio->io_post |= ZIO_POST_DIO_CHKSUM_ERR;
 		zio_dio_chksum_verify_error_report(zio);
 		zio_checksum_verified(zio);
 		return (0);
@@ -3040,7 +3048,7 @@ raidz_reconstruct(zio_t *zio, int *ltgts, int ntgts, int nparity)
 
 	/* Check for success */
 	if (raidz_checksum_verify(zio) == 0) {
-		if (zio->io_flags & ZIO_FLAG_DIO_CHKSUM_ERR)
+		if (zio->io_post & ZIO_POST_DIO_CHKSUM_ERR)
 			return (0);
 
 		/* Reconstruction succeeded - report errors */
@@ -3506,7 +3514,7 @@ vdev_raidz_io_done(zio_t *zio)
 		}
 
 		if (raidz_checksum_verify(zio) == 0) {
-			if (zio->io_flags & ZIO_FLAG_DIO_CHKSUM_ERR)
+			if (zio->io_post & ZIO_POST_DIO_CHKSUM_ERR)
 				goto done;
 
 			for (int i = 0; i < rm->rm_nrows; i++) {

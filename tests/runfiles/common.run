@@ -37,8 +37,7 @@ tests = ['alloc_class_001_pos', 'alloc_class_002_neg', 'alloc_class_003_pos',
     'alloc_class_004_pos', 'alloc_class_005_pos', 'alloc_class_006_pos',
     'alloc_class_007_pos', 'alloc_class_008_pos', 'alloc_class_009_pos',
     'alloc_class_010_pos', 'alloc_class_011_neg', 'alloc_class_012_pos',
-    'alloc_class_013_pos', 'alloc_class_014_neg', 'alloc_class_015_pos',
-    'alloc_class_016_pos']
+    'alloc_class_013_pos', 'alloc_class_016_pos']
 tags = ['functional', 'alloc_class']
 
 [tests/functional/append]
@@ -171,7 +170,8 @@ tests = ['zdb_002_pos', 'zdb_003_pos', 'zdb_004_pos', 'zdb_005_pos',
     'zdb_block_size_histogram', 'zdb_checksum', 'zdb_decompress',
     'zdb_display_block', 'zdb_encrypted', 'zdb_label_checksum',
     'zdb_object_range_neg', 'zdb_object_range_pos', 'zdb_objset_id',
-    'zdb_decompress_zstd', 'zdb_recover', 'zdb_recover_2', 'zdb_backup']
+    'zdb_decompress_zstd', 'zdb_recover', 'zdb_recover_2', 'zdb_backup',
+    'zdb_tunables']
 pre =
 post =
 tags = ['functional', 'cli_root', 'zdb']
@@ -740,7 +740,8 @@ tags = ['functional', 'features', 'large_dnode']
 
 [tests/functional/gang_blocks]
 tests = ['gang_blocks_001_pos', 'gang_blocks_redundant',
-    'gang_blocks_ddt_copies']
+    'gang_blocks_ddt_copies', 'gang_blocks_dyn_header_pos',
+    'gang_blocks_dyn_header_neg', 'gang_blocks_dyn_multi']
 tags = ['functional', 'gang_blocks']
 
 [tests/functional/grow]
@@ -845,6 +846,15 @@ tests = ['pool_names_001_pos', 'pool_names_002_neg']
 pre =
 post =
 tags = ['functional', 'pool_names']
+
+[tests/functional/projectquota]
+tests = ['defaultprojectquota_002_pos', 'defaultprojectquota_003_neg',
+    'defaultprojectquota_004_pos', 'defaultprojectquota_006_pos',
+    'defaultprojectquota_007_pos', 'projectquota_002_pos',
+    'projectquota_004_neg', 'projectquota_005_pos', 'projectquota_007_pos',
+    'projectquota_008_pos', 'projectquota_009_pos', 'projecttree_002_pos',
+    'projecttree_003_neg']
+tags = ['functional', 'projectquota']
 
 [tests/functional/poolversion]
 tests = ['poolversion_001_pos', 'poolversion_002_pos']

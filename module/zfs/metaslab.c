@@ -750,7 +750,8 @@ metaslab_class_histogram_verify(metaslab_class_t *mc)
 		}
 
 		IMPLY(mg == mg->mg_vd->vdev_log_mg,
-		    mc == spa_embedded_log_class(mg->mg_vd->vdev_spa));
+		    mc == spa_embedded_log_class(mg->mg_vd->vdev_spa) ||
+		    mc == spa_special_embedded_log_class(mg->mg_vd->vdev_spa));
 
 		for (i = 0; i < ZFS_RANGE_TREE_HISTOGRAM_SIZE; i++)
 			mc_hist[i] += mg->mg_histogram[i];
@@ -1288,7 +1289,8 @@ metaslab_group_histogram_add(metaslab_group_t *mg, metaslab_t *msp)
 	mutex_enter(&mc->mc_lock);
 	for (int i = 0; i < SPACE_MAP_HISTOGRAM_SIZE; i++) {
 		IMPLY(mg == mg->mg_vd->vdev_log_mg,
-		    mc == spa_embedded_log_class(mg->mg_vd->vdev_spa));
+		    mc == spa_embedded_log_class(mg->mg_vd->vdev_spa) ||
+		    mc == spa_special_embedded_log_class(mg->mg_vd->vdev_spa));
 		mg->mg_histogram[i + ashift] +=
 		    msp->ms_sm->sm_phys->smp_histogram[i];
 		mc->mc_histogram[i + ashift] +=
@@ -1316,7 +1318,8 @@ metaslab_group_histogram_remove(metaslab_group_t *mg, metaslab_t *msp)
 		ASSERT3U(mc->mc_histogram[i + ashift], >=,
 		    msp->ms_sm->sm_phys->smp_histogram[i]);
 		IMPLY(mg == mg->mg_vd->vdev_log_mg,
-		    mc == spa_embedded_log_class(mg->mg_vd->vdev_spa));
+		    mc == spa_embedded_log_class(mg->mg_vd->vdev_spa) ||
+		    mc == spa_special_embedded_log_class(mg->mg_vd->vdev_spa));
 
 		mg->mg_histogram[i + ashift] -=
 		    msp->ms_sm->sm_phys->smp_histogram[i];
@@ -5199,29 +5202,16 @@ next:
 
 		/*
 		 * We were unable to allocate from this metaslab so determine
-		 * a new weight for this metaslab. Now that we have loaded
-		 * the metaslab we can provide a better hint to the metaslab
-		 * selector.
-		 *
-		 * For space-based metaslabs, we use the maximum block size.
-		 * This information is only available when the metaslab
-		 * is loaded and is more accurate than the generic free
-		 * space weight that was calculated by metaslab_weight().
-		 * This information allows us to quickly compare the maximum
-		 * available allocation in the metaslab to the allocation
-		 * size being requested.
-		 *
-		 * For segment-based metaslabs, determine the new weight
-		 * based on the highest bucket in the range tree. We
-		 * explicitly use the loaded segment weight (i.e. the range
-		 * tree histogram) since it contains the space that is
-		 * currently available for allocation and is accurate
-		 * even within a sync pass.
+		 * a new weight for this metaslab. The weight was last
+		 * recalculated either when we loaded it (if this is the first
+		 * TXG it's been loaded in), or the last time a txg was synced
+		 * out.
 		 */
 		uint64_t weight;
 		if (WEIGHT_IS_SPACEBASED(msp->ms_weight)) {
-			weight = metaslab_largest_allocatable(msp);
-			WEIGHT_SET_SPACEBASED(weight);
+			metaslab_set_fragmentation(msp, B_TRUE);
+			weight = metaslab_space_weight(msp) &
+			    ~METASLAB_ACTIVE_MASK;
 		} else {
 			weight = metaslab_weight_from_range_tree(msp);
 		}
@@ -5233,13 +5223,6 @@ next:
 			 * For the case where we use the metaslab that is
 			 * active for another allocator we want to make
 			 * sure that we retain the activation mask.
-			 *
-			 * Note that we could attempt to use something like
-			 * metaslab_recalculate_weight_and_sort() that
-			 * retains the activation mask here. That function
-			 * uses metaslab_weight() to set the weight though
-			 * which is not as accurate as the calculations
-			 * above.
 			 */
 			weight |= msp->ms_weight & METASLAB_ACTIVE_MASK;
 			metaslab_group_sort(mg, msp, weight);
@@ -5757,21 +5740,21 @@ metaslab_free_dva(spa_t *spa, const dva_t *dva, boolean_t checkpoint)
 }
 
 /*
- * Reserve some allocation slots. The reservation system must be called
- * before we call into the allocator. If there aren't any available slots
- * then the I/O will be throttled until an I/O completes and its slots are
- * freed up. The function returns true if it was successful in placing
- * the reservation.
+ * Reserve some space for a future allocation. The reservation system must be
+ * called before we call into the allocator. If there aren't enough space
+ * available, the calling I/O will be throttled until another I/O completes and
+ * its reservation is released. The function returns true if it was successful
+ * in placing the reservation.
  */
 boolean_t
-metaslab_class_throttle_reserve(metaslab_class_t *mc, int slots, zio_t *zio,
-    boolean_t must, boolean_t *more)
+metaslab_class_throttle_reserve(metaslab_class_t *mc, int allocator,
+    int copies, uint64_t io_size, boolean_t must, boolean_t *more)
 {
-	metaslab_class_allocator_t *mca = &mc->mc_allocator[zio->io_allocator];
+	metaslab_class_allocator_t *mca = &mc->mc_allocator[allocator];
 
 	ASSERT(mc->mc_alloc_throttle_enabled);
-	if (mc->mc_alloc_io_size < zio->io_size) {
-		mc->mc_alloc_io_size = zio->io_size;
+	if (mc->mc_alloc_io_size < io_size) {
+		mc->mc_alloc_io_size = io_size;
 		metaslab_class_balance(mc, B_FALSE);
 	}
 	if (must || mca->mca_reserved <= mc->mc_alloc_max) {
@@ -5782,10 +5765,9 @@ metaslab_class_throttle_reserve(metaslab_class_t *mc, int slots, zio_t *zio,
 		 * worst that can happen is few more I/Os get to allocation
 		 * earlier, that is not a problem.
 		 */
-		int64_t delta = slots * zio->io_size;
+		int64_t delta = copies * io_size;
 		*more = (atomic_add_64_nv(&mca->mca_reserved, delta) <=
 		    mc->mc_alloc_max);
-		zio->io_flags |= ZIO_FLAG_IO_ALLOCATING;
 		return (B_TRUE);
 	}
 	*more = B_FALSE;
@@ -5793,13 +5775,13 @@ metaslab_class_throttle_reserve(metaslab_class_t *mc, int slots, zio_t *zio,
 }
 
 boolean_t
-metaslab_class_throttle_unreserve(metaslab_class_t *mc, int slots,
-    zio_t *zio)
+metaslab_class_throttle_unreserve(metaslab_class_t *mc, int allocator,
+    int copies, uint64_t io_size)
 {
-	metaslab_class_allocator_t *mca = &mc->mc_allocator[zio->io_allocator];
+	metaslab_class_allocator_t *mca = &mc->mc_allocator[allocator];
 
 	ASSERT(mc->mc_alloc_throttle_enabled);
-	int64_t delta = slots * zio->io_size;
+	int64_t delta = copies * io_size;
 	return (atomic_add_64_nv(&mca->mca_reserved, -delta) <=
 	    mc->mc_alloc_max);
 }
@@ -5975,12 +5957,12 @@ metaslab_alloc_range(spa_t *spa, metaslab_class_t *mc, uint64_t psize,
 	ASSERT(hintbp == NULL || ndvas <= BP_GET_NDVAS(hintbp));
 	ASSERT3P(zal, !=, NULL);
 
-	uint64_t cur_psize = 0;
-
+	uint64_t smallest_psize = UINT64_MAX;
 	for (int d = 0; d < ndvas; d++) {
-		error = metaslab_alloc_dva_range(spa, mc, psize, max_psize,
-		    dva, d, hintdva, txg, flags, zal, allocator,
-		    actual_psize ? &cur_psize : NULL);
+		uint64_t cur_psize = 0;
+		error = metaslab_alloc_dva_range(spa, mc, psize,
+		    MIN(smallest_psize, max_psize), dva, d, hintdva, txg,
+		    flags, zal, allocator, actual_psize ? &cur_psize : NULL);
 		if (error != 0) {
 			for (d--; d >= 0; d--) {
 				metaslab_unalloc_dva(spa, &dva[d], txg);
@@ -6000,13 +5982,13 @@ metaslab_alloc_range(spa_t *spa, metaslab_class_t *mc, uint64_t psize,
 			    DVA_GET_VDEV(&dva[d]), allocator, flags, psize,
 			    tag);
 			if (actual_psize)
-				max_psize = MIN(cur_psize, max_psize);
+				smallest_psize = MIN(cur_psize, smallest_psize);
 		}
 	}
 	ASSERT(error == 0);
 	ASSERT(BP_GET_NDVAS(bp) == ndvas);
 	if (actual_psize)
-		*actual_psize = max_psize;
+		*actual_psize = smallest_psize;
 
 	spa_config_exit(spa, SCL_ALLOC, FTAG);
 

@@ -797,8 +797,8 @@ usage(void)
 	    "[default is 200]\n");
 	(void) fprintf(stderr, "        -K --key=KEY                 "
 	    "decryption key for encrypted dataset\n");
-	(void) fprintf(stderr, "        -o --option=\"OPTION=INTEGER\" "
-	    "set global variable to an unsigned 32-bit integer\n");
+	(void) fprintf(stderr, "        -o --option=\"NAME=VALUE\" "
+	    "set the named tunable to the given value\n");
 	(void) fprintf(stderr, "        -p --path==PATH              "
 	    "use one or more with -e to specify path to vdev dir\n");
 	(void) fprintf(stderr, "        -P --parseable               "
@@ -6750,6 +6750,7 @@ zdb_leak_init(spa_t *spa, zdb_cb_t *zcb)
 	spa->spa_normal_class->mc_ops = &zdb_metaslab_ops;
 	spa->spa_log_class->mc_ops = &zdb_metaslab_ops;
 	spa->spa_embedded_log_class->mc_ops = &zdb_metaslab_ops;
+	spa->spa_special_embedded_log_class->mc_ops = &zdb_metaslab_ops;
 
 	zcb->zcb_vd_obsolete_counts =
 	    umem_zalloc(rvd->vdev_children * sizeof (uint32_t *),
@@ -6887,7 +6888,9 @@ zdb_leak_fini(spa_t *spa, zdb_cb_t *zcb)
 		for (uint64_t m = 0; m < vd->vdev_ms_count; m++) {
 			metaslab_t *msp = vd->vdev_ms[m];
 			ASSERT3P(msp->ms_group, ==, (msp->ms_group->mg_class ==
-			    spa_embedded_log_class(spa)) ?
+			    spa_embedded_log_class(spa) ||
+			    msp->ms_group->mg_class ==
+			    spa_special_embedded_log_class(spa)) ?
 			    vd->vdev_log_mg : vd->vdev_mg);
 
 			/*
@@ -7121,6 +7124,8 @@ dump_block_stats(spa_t *spa)
 	zcb->zcb_totalasize += metaslab_class_get_alloc(spa_dedup_class(spa));
 	zcb->zcb_totalasize +=
 	    metaslab_class_get_alloc(spa_embedded_log_class(spa));
+	zcb->zcb_totalasize +=
+	    metaslab_class_get_alloc(spa_special_embedded_log_class(spa));
 	zcb->zcb_start = zcb->zcb_lastprint = gethrtime();
 	err = traverse_pool(spa, 0, flags, zdb_blkptr_cb, zcb);
 
@@ -7169,6 +7174,7 @@ dump_block_stats(spa_t *spa)
 	total_alloc = norm_alloc +
 	    metaslab_class_get_alloc(spa_log_class(spa)) +
 	    metaslab_class_get_alloc(spa_embedded_log_class(spa)) +
+	    metaslab_class_get_alloc(spa_special_embedded_log_class(spa)) +
 	    metaslab_class_get_alloc(spa_special_class(spa)) +
 	    metaslab_class_get_alloc(spa_dedup_class(spa)) +
 	    get_unflushed_alloc_space(spa);
@@ -7249,6 +7255,18 @@ dump_block_stats(spa_t *spa)
 
 		(void) printf("\t%-16s %14llu     used: %5.2f%%\n",
 		    "Embedded log class", (u_longlong_t)alloc,
+		    100.0 * alloc / space);
+	}
+
+	if (spa_special_embedded_log_class(spa)->mc_allocator[0].mca_rotor
+	    != NULL) {
+		uint64_t alloc = metaslab_class_get_alloc(
+		    spa_special_embedded_log_class(spa));
+		uint64_t space = metaslab_class_get_space(
+		    spa_special_embedded_log_class(spa));
+
+		(void) printf("\t%-16s %14llu     used: %5.2f%%\n",
+		    "Special embedded log", (u_longlong_t)alloc,
 		    100.0 * alloc / space);
 	}
 
@@ -7706,7 +7724,8 @@ zdb_set_skip_mmp(char *target)
  * applies to the new_path parameter if allocated.
  */
 static char *
-import_checkpointed_state(char *target, nvlist_t *cfg, char **new_path)
+import_checkpointed_state(char *target, nvlist_t *cfg, boolean_t target_is_spa,
+    char **new_path)
 {
 	int error = 0;
 	char *poolname, *bogus_name = NULL;
@@ -7714,11 +7733,11 @@ import_checkpointed_state(char *target, nvlist_t *cfg, char **new_path)
 
 	/* If the target is not a pool, the extract the pool name */
 	char *path_start = strchr(target, '/');
-	if (path_start != NULL) {
+	if (target_is_spa || path_start == NULL) {
+		poolname = target;
+	} else {
 		size_t poolname_len = path_start - target;
 		poolname = strndup(target, poolname_len);
-	} else {
-		poolname = target;
 	}
 
 	if (cfg == NULL) {
@@ -7749,10 +7768,11 @@ import_checkpointed_state(char *target, nvlist_t *cfg, char **new_path)
 		    "with error %d\n", bogus_name, error);
 	}
 
-	if (new_path != NULL && path_start != NULL) {
-		if (asprintf(new_path, "%s%s", bogus_name, path_start) == -1) {
+	if (new_path != NULL && !target_is_spa) {
+		if (asprintf(new_path, "%s%s", bogus_name,
+		    path_start != NULL ? path_start : "") == -1) {
 			free(bogus_name);
-			if (path_start != NULL)
+			if (!target_is_spa && path_start != NULL)
 				free(poolname);
 			return (NULL);
 		}
@@ -7981,7 +8001,7 @@ verify_checkpoint_blocks(spa_t *spa)
 	 * name) so we can do verification on it against the current state
 	 * of the pool.
 	 */
-	checkpoint_pool = import_checkpointed_state(spa->spa_name, NULL,
+	checkpoint_pool = import_checkpointed_state(spa->spa_name, NULL, B_TRUE,
 	    NULL);
 	ASSERT(strcmp(spa->spa_name, checkpoint_pool) != 0);
 
@@ -8588,9 +8608,9 @@ zdb_dump_indirect(blkptr_t *bp, int nbps, int flags)
 }
 
 static void
-zdb_dump_gbh(void *buf, int flags)
+zdb_dump_gbh(void *buf, uint64_t size, int flags)
 {
-	zdb_dump_indirect((blkptr_t *)buf, SPA_GBH_NBLKPTRS, flags);
+	zdb_dump_indirect((blkptr_t *)buf, gbh_nblkptrs(size), flags);
 }
 
 static void
@@ -9073,7 +9093,7 @@ zdb_read_block(char *thing, spa_t *spa)
 		zdb_dump_indirect((blkptr_t *)buf,
 		    orig_lsize / sizeof (blkptr_t), flags);
 	else if (flags & ZDB_FLAG_GBH)
-		zdb_dump_gbh(buf, flags);
+		zdb_dump_gbh(buf, lsize, flags);
 	else
 		zdb_dump_block(thing, buf, lsize, flags);
 
@@ -9377,9 +9397,11 @@ main(int argc, char **argv)
 			while (*optarg != '\0') { *optarg++ = '*'; }
 			break;
 		case 'o':
-			error = set_global_var(optarg);
+			dump_opt[c]++;
+			dump_all = 0;
+			error = handle_tunable_option(optarg, B_FALSE);
 			if (error != 0)
-				usage();
+				zdb_exit(1);
 			break;
 		case 'p':
 			if (searchdirs == NULL) {
@@ -9545,6 +9567,12 @@ main(int argc, char **argv)
 			error = 0;
 			goto fini;
 		}
+		if (dump_opt['o'])
+			/*
+			 * Avoid blasting tunable options off the top of the
+			 * screen.
+			 */
+			zdb_exit(1);
 		usage();
 	}
 
@@ -9697,7 +9725,7 @@ main(int argc, char **argv)
 	char *checkpoint_target = NULL;
 	if (dump_opt['k']) {
 		checkpoint_pool = import_checkpointed_state(target, cfg,
-		    &checkpoint_target);
+		    target_is_spa, &checkpoint_target);
 
 		if (checkpoint_target != NULL)
 			target = checkpoint_target;

@@ -417,11 +417,15 @@ spa_prop_get_config(spa_t *spa, nvlist_t *nv)
 		alloc += metaslab_class_get_alloc(spa_special_class(spa));
 		alloc += metaslab_class_get_alloc(spa_dedup_class(spa));
 		alloc += metaslab_class_get_alloc(spa_embedded_log_class(spa));
+		alloc += metaslab_class_get_alloc(
+		    spa_special_embedded_log_class(spa));
 
 		size = metaslab_class_get_space(mc);
 		size += metaslab_class_get_space(spa_special_class(spa));
 		size += metaslab_class_get_space(spa_dedup_class(spa));
 		size += metaslab_class_get_space(spa_embedded_log_class(spa));
+		size += metaslab_class_get_space(
+		    spa_special_embedded_log_class(spa));
 
 		spa_prop_add_list(nv, ZPOOL_PROP_NAME, spa_name(spa), 0, src);
 		spa_prop_add_list(nv, ZPOOL_PROP_SIZE, NULL, size, src);
@@ -1231,29 +1235,14 @@ spa_taskqs_init(spa_t *spa, zio_type_t t, zio_taskq_type_t q)
 			    spa->spa_proc, zio_taskq_basedc, flags);
 		} else {
 #endif
-			pri_t pri = maxclsyspri;
 			/*
 			 * The write issue taskq can be extremely CPU
 			 * intensive.  Run it at slightly less important
 			 * priority than the other taskqs.
-			 *
-			 * Under Linux and FreeBSD this means incrementing
-			 * the priority value as opposed to platforms like
-			 * illumos where it should be decremented.
-			 *
-			 * On FreeBSD, if priorities divided by four (RQ_PPQ)
-			 * are equal then a difference between them is
-			 * insignificant.
 			 */
-			if (t == ZIO_TYPE_WRITE && q == ZIO_TASKQ_ISSUE) {
-#if defined(__linux__)
-				pri++;
-#elif defined(__FreeBSD__)
-				pri += 4;
-#else
-#error "unknown OS"
-#endif
-			}
+			const pri_t pri = (t == ZIO_TYPE_WRITE &&
+			    q == ZIO_TASKQ_ISSUE) ?
+			    wtqclsyspri : maxclsyspri;
 			tq = taskq_create_proc(name, value, pri, 50,
 			    INT_MAX, spa->spa_proc, flags);
 #ifdef HAVE_SYSDC
@@ -1694,6 +1683,8 @@ spa_activate(spa_t *spa, spa_mode_t mode)
 	    "embedded_log", msp, B_TRUE);
 	spa->spa_special_class = metaslab_class_create(spa, "special",
 	    msp, B_FALSE);
+	spa->spa_special_embedded_log_class = metaslab_class_create(spa,
+	    "special_embedded_log", msp, B_TRUE);
 	spa->spa_dedup_class = metaslab_class_create(spa, "dedup",
 	    msp, B_FALSE);
 
@@ -1867,6 +1858,9 @@ spa_deactivate(spa_t *spa)
 
 	metaslab_class_destroy(spa->spa_special_class);
 	spa->spa_special_class = NULL;
+
+	metaslab_class_destroy(spa->spa_special_embedded_log_class);
+	spa->spa_special_embedded_log_class = NULL;
 
 	metaslab_class_destroy(spa->spa_dedup_class);
 	spa->spa_dedup_class = NULL;
@@ -9107,6 +9101,8 @@ spa_async_thread(void *arg)
 		old_space += metaslab_class_get_space(spa_dedup_class(spa));
 		old_space += metaslab_class_get_space(
 		    spa_embedded_log_class(spa));
+		old_space += metaslab_class_get_space(
+		    spa_special_embedded_log_class(spa));
 
 		spa_config_update(spa, SPA_CONFIG_UPDATE_POOL);
 
@@ -9115,6 +9111,8 @@ spa_async_thread(void *arg)
 		new_space += metaslab_class_get_space(spa_dedup_class(spa));
 		new_space += metaslab_class_get_space(
 		    spa_embedded_log_class(spa));
+		new_space += metaslab_class_get_space(
+		    spa_special_embedded_log_class(spa));
 		mutex_exit(&spa_namespace_lock);
 
 		/*
@@ -10324,7 +10322,7 @@ spa_sync(spa_t *spa, uint64_t txg)
 
 	metaslab_class_evict_old(spa->spa_normal_class, txg);
 	metaslab_class_evict_old(spa->spa_log_class, txg);
-	/* spa_embedded_log_class has only one metaslab per vdev. */
+	/* Embedded log classes have only one metaslab per vdev. */
 	metaslab_class_evict_old(spa->spa_special_class, txg);
 	metaslab_class_evict_old(spa->spa_dedup_class, txg);
 

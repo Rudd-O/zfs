@@ -94,6 +94,7 @@ my $tagged_patterns = q(
 	etc/init.d/zfs-share.in
 	etc/init.d/zfs-zed.in
 	etc/zfs/zfs-functions.in
+	scripts/objtool-wrapper.in
 
 	# Misc items that have clear licensing info but aren't easily matched,
 	# or are the first of a class that we aren't ready to match yet.
@@ -252,7 +253,6 @@ my %override_file_license_tags = (
 	'GPL-2.0-or-later' => [qw(
 		include/os/freebsd/spl/sys/kstat.h
 		include/os/freebsd/spl/sys/sunddi.h
-		include/sys/mod.h
 	)],
 	'CDDL-1.0' => [qw(
 		include/os/linux/spl/sys/errno.h

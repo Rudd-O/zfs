@@ -429,8 +429,6 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/alloc_class/alloc_class_011_neg.ksh \
 	functional/alloc_class/alloc_class_012_pos.ksh \
 	functional/alloc_class/alloc_class_013_pos.ksh \
-	functional/alloc_class/alloc_class_014_neg.ksh \
-	functional/alloc_class/alloc_class_015_pos.ksh \
 	functional/alloc_class/alloc_class_016_pos.ksh \
 	functional/alloc_class/cleanup.ksh \
 	functional/alloc_class/setup.ksh \
@@ -647,6 +645,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/cli_root/zdb/zdb_objset_id.ksh \
 	functional/cli_root/zdb/zdb_recover_2.ksh \
 	functional/cli_root/zdb/zdb_recover.ksh \
+	functional/cli_root/zdb/zdb_tunables.ksh \
 	functional/cli_root/zfs_bookmark/cleanup.ksh \
 	functional/cli_root/zfs_bookmark/setup.ksh \
 	functional/cli_root/zfs_bookmark/zfs_bookmark_cliargs.ksh \
@@ -1444,6 +1443,9 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/crtime/setup.ksh \
 	functional/crypto/icp_aes_ccm.ksh \
 	functional/crypto/icp_aes_gcm.ksh \
+	functional/ctime/cleanup.ksh \
+	functional/ctime/ctime_001_pos.ksh \
+	functional/ctime/setup.ksh \
 	functional/deadman/deadman_ratelimit.ksh \
 	functional/deadman/deadman_sync.ksh \
 	functional/deadman/deadman_zio.ksh \
@@ -1578,6 +1580,9 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/gang_blocks/gang_blocks_001_pos.ksh \
 	functional/gang_blocks/gang_blocks_ddt_copies.ksh \
 	functional/gang_blocks/gang_blocks_redundant.ksh \
+	functional/gang_blocks/gang_blocks_dyn_header_neg.ksh \
+	functional/gang_blocks/gang_blocks_dyn_header_pos.ksh \
+	functional/gang_blocks/gang_blocks_dyn_multi.ksh \
 	functional/gang_blocks/setup.ksh \
 	functional/grow/grow_pool_001_pos.ksh \
 	functional/grow/grow_replicas_001_pos.ksh \
