@@ -83,8 +83,8 @@ my $tagged_patterns = q(
 	man/man?/*.?.in
 
 	# Unsuffixed programs (or generated of same)
-	cmd/arcstat.in
-	cmd/arc_summary
+	cmd/zarcstat.in
+	cmd/zarcsummary
 	cmd/dbufstat.in
 	cmd/zilstat.in
 	cmd/zpool/zpool.d/*
@@ -190,6 +190,7 @@ my @path_license_tags = (
 	    ['BSD-2-Clause OR GPL-2.0-only', 'CDDL-1.0'],
 
 	'module/icp' => ['Apache-2.0', 'CDDL-1.0'],
+	'contrib/icp' => ['Apache-2.0', 'CDDL-1.0'],
 
 	# Python bindings are always Apache-2.0
 	'contrib/pyzfs' => ['Apache-2.0'],

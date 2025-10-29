@@ -224,6 +224,11 @@ typedef pthread_t	kthread_t;
 #define	thread_join(t)	pthread_join((pthread_t)(t), NULL)
 
 #define	newproc(f, a, cid, pri, ctp, pid)	(ENOSYS)
+/*
+ * Check if the current thread is a memory reclaim thread.
+ * Always returns false in userspace (no memory reclaim thread).
+ */
+#define	current_is_reclaim_thread()	(0)
 
 /* in libzpool, p0 exists only to have its address taken */
 typedef struct proc {
@@ -766,7 +771,6 @@ typedef int fstrans_cookie_t;
 
 extern fstrans_cookie_t spl_fstrans_mark(void);
 extern void spl_fstrans_unmark(fstrans_cookie_t);
-extern int __spl_pf_fstrans_check(void);
 extern int kmem_cache_reap_active(void);
 
 

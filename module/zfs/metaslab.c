@@ -375,13 +375,23 @@ static metaslab_stats_t metaslab_stats = {
 #define	METASLABSTAT_BUMP(stat) \
 	atomic_inc_64(&metaslab_stats.stat.value.ui64);
 
+char *
+metaslab_rt_name(metaslab_group_t *mg, metaslab_t *ms, const char *name)
+{
+	return (kmem_asprintf("{spa=%s vdev_guid=%llu ms_id=%llu %s}",
+	    spa_name(mg->mg_vd->vdev_spa),
+	    (u_longlong_t)mg->mg_vd->vdev_guid,
+	    (u_longlong_t)ms->ms_id,
+	    name));
+}
+
 
 static kstat_t *metaslab_ksp;
 
 void
 metaslab_stat_init(void)
 {
-	ASSERT(metaslab_alloc_trace_cache == NULL);
+	ASSERT0P(metaslab_alloc_trace_cache);
 	metaslab_alloc_trace_cache = kmem_cache_create(
 	    "metaslab_alloc_trace_cache", sizeof (metaslab_alloc_trace_t),
 	    0, NULL, NULL, NULL, NULL, NULL, 0);
@@ -446,16 +456,16 @@ metaslab_class_destroy(metaslab_class_t *mc)
 {
 	spa_t *spa = mc->mc_spa;
 
-	ASSERT(mc->mc_alloc == 0);
-	ASSERT(mc->mc_deferred == 0);
-	ASSERT(mc->mc_space == 0);
-	ASSERT(mc->mc_dspace == 0);
+	ASSERT0(mc->mc_alloc);
+	ASSERT0(mc->mc_deferred);
+	ASSERT0(mc->mc_space);
+	ASSERT0(mc->mc_dspace);
 
 	for (int i = 0; i < spa->spa_alloc_count; i++) {
 		metaslab_class_allocator_t *mca = &mc->mc_allocator[i];
 		avl_destroy(&mca->mca_tree);
 		mutex_destroy(&mca->mca_lock);
-		ASSERT(mca->mca_rotor == NULL);
+		ASSERT0P(mca->mca_rotor);
 		ASSERT0(mca->mca_reserved);
 	}
 	mutex_destroy(&mc->mc_lock);
@@ -1077,8 +1087,8 @@ metaslab_group_destroy(metaslab_group_t *mg)
 {
 	spa_t *spa = mg->mg_class->mc_spa;
 
-	ASSERT(mg->mg_prev == NULL);
-	ASSERT(mg->mg_next == NULL);
+	ASSERT0P(mg->mg_prev);
+	ASSERT0P(mg->mg_next);
 	/*
 	 * We may have gone below zero with the activation count
 	 * either because we never activated in the first place or
@@ -1108,8 +1118,8 @@ metaslab_group_activate(metaslab_group_t *mg)
 
 	ASSERT3U(spa_config_held(spa, SCL_ALLOC, RW_WRITER), !=, 0);
 
-	ASSERT(mg->mg_prev == NULL);
-	ASSERT(mg->mg_next == NULL);
+	ASSERT0P(mg->mg_prev);
+	ASSERT0P(mg->mg_next);
 	ASSERT(mg->mg_activation_count <= 0);
 
 	if (++mg->mg_activation_count <= 0)
@@ -1154,8 +1164,8 @@ metaslab_group_passivate(metaslab_group_t *mg)
 	if (--mg->mg_activation_count != 0) {
 		for (int i = 0; i < spa->spa_alloc_count; i++)
 			ASSERT(mc->mc_allocator[i].mca_rotor != mg);
-		ASSERT(mg->mg_prev == NULL);
-		ASSERT(mg->mg_next == NULL);
+		ASSERT0P(mg->mg_prev);
+		ASSERT0P(mg->mg_next);
 		ASSERT(mg->mg_activation_count < 0);
 		return;
 	}
@@ -1184,14 +1194,16 @@ metaslab_group_passivate(metaslab_group_t *mg)
 		if (msp != NULL) {
 			mutex_enter(&msp->ms_lock);
 			metaslab_passivate(msp,
-			    metaslab_weight_from_range_tree(msp));
+			    metaslab_weight(msp, B_TRUE) &
+			    ~METASLAB_ACTIVE_MASK);
 			mutex_exit(&msp->ms_lock);
 		}
 		msp = mga->mga_secondary;
 		if (msp != NULL) {
 			mutex_enter(&msp->ms_lock);
 			metaslab_passivate(msp,
-			    metaslab_weight_from_range_tree(msp));
+			    metaslab_weight(msp, B_TRUE) &
+			    ~METASLAB_ACTIVE_MASK);
 			mutex_exit(&msp->ms_lock);
 		}
 	}
@@ -1333,7 +1345,7 @@ metaslab_group_histogram_remove(metaslab_group_t *mg, metaslab_t *msp)
 static void
 metaslab_group_add(metaslab_group_t *mg, metaslab_t *msp)
 {
-	ASSERT(msp->ms_group == NULL);
+	ASSERT0P(msp->ms_group);
 	mutex_enter(&mg->mg_lock);
 	msp->ms_group = mg;
 	msp->ms_weight = 0;
@@ -2898,30 +2910,43 @@ metaslab_init(metaslab_group_t *mg, uint64_t id, uint64_t object,
 	zfs_range_seg_type_t type =
 	    metaslab_calculate_range_tree_type(vd, ms, &start, &shift);
 
-	ms->ms_allocatable = zfs_range_tree_create(NULL, type, NULL, start,
-	    shift);
+	ms->ms_allocatable = zfs_range_tree_create_flags(
+	    NULL, type, NULL, start, shift,
+	    ZFS_RT_F_DYN_NAME, metaslab_rt_name(mg, ms, "ms_allocatable"));
 	for (int t = 0; t < TXG_SIZE; t++) {
-		ms->ms_allocating[t] = zfs_range_tree_create(NULL, type,
-		    NULL, start, shift);
+		ms->ms_allocating[t] = zfs_range_tree_create_flags(
+		    NULL, type, NULL, start, shift,
+		    ZFS_RT_F_DYN_NAME,
+		    metaslab_rt_name(mg, ms, "ms_allocating"));
 	}
-	ms->ms_freeing = zfs_range_tree_create(NULL, type, NULL, start, shift);
-	ms->ms_freed = zfs_range_tree_create(NULL, type, NULL, start, shift);
+	ms->ms_freeing = zfs_range_tree_create_flags(
+	    NULL, type, NULL, start, shift,
+	    ZFS_RT_F_DYN_NAME, metaslab_rt_name(mg, ms, "ms_freeing"));
+	ms->ms_freed = zfs_range_tree_create_flags(
+	    NULL, type, NULL, start, shift,
+	    ZFS_RT_F_DYN_NAME, metaslab_rt_name(mg, ms, "ms_freed"));
 	for (int t = 0; t < TXG_DEFER_SIZE; t++) {
-		ms->ms_defer[t] = zfs_range_tree_create(NULL, type, NULL,
-		    start, shift);
+		ms->ms_defer[t] = zfs_range_tree_create_flags(
+		    NULL, type, NULL, start, shift,
+		    ZFS_RT_F_DYN_NAME, metaslab_rt_name(mg, ms, "ms_defer"));
 	}
-	ms->ms_checkpointing =
-	    zfs_range_tree_create(NULL, type, NULL, start, shift);
-	ms->ms_unflushed_allocs =
-	    zfs_range_tree_create(NULL, type, NULL, start, shift);
+	ms->ms_checkpointing = zfs_range_tree_create_flags(
+	    NULL, type, NULL, start, shift,
+	    ZFS_RT_F_DYN_NAME, metaslab_rt_name(mg, ms, "ms_checkpointing"));
+	ms->ms_unflushed_allocs = zfs_range_tree_create_flags(
+	    NULL, type, NULL, start, shift,
+	    ZFS_RT_F_DYN_NAME, metaslab_rt_name(mg, ms, "ms_unflushed_allocs"));
 
 	metaslab_rt_arg_t *mrap = kmem_zalloc(sizeof (*mrap), KM_SLEEP);
 	mrap->mra_bt = &ms->ms_unflushed_frees_by_size;
 	mrap->mra_floor_shift = metaslab_by_size_min_shift;
-	ms->ms_unflushed_frees = zfs_range_tree_create(&metaslab_rt_ops,
-	    type, mrap, start, shift);
+	ms->ms_unflushed_frees = zfs_range_tree_create_flags(
+	    &metaslab_rt_ops, type, mrap, start, shift,
+	    ZFS_RT_F_DYN_NAME, metaslab_rt_name(mg, ms, "ms_unflushed_frees"));
 
-	ms->ms_trim = zfs_range_tree_create(NULL, type, NULL, start, shift);
+	ms->ms_trim = zfs_range_tree_create_flags(
+	    NULL, type, NULL, start, shift,
+	    ZFS_RT_F_DYN_NAME, metaslab_rt_name(mg, ms, "ms_trim"));
 
 	metaslab_group_add(mg, ms);
 	metaslab_set_fragmentation(ms, B_FALSE);
@@ -2992,7 +3017,7 @@ metaslab_fini(metaslab_t *msp)
 	metaslab_group_remove(mg, msp);
 
 	mutex_enter(&msp->ms_lock);
-	VERIFY(msp->ms_group == NULL);
+	VERIFY0P(msp->ms_group);
 
 	/*
 	 * If this metaslab hasn't been through metaslab_sync_done() yet its
@@ -3895,7 +3920,10 @@ metaslab_condense(metaslab_t *msp, dmu_tx_t *tx)
 	type = metaslab_calculate_range_tree_type(msp->ms_group->mg_vd, msp,
 	    &start, &shift);
 
-	condense_tree = zfs_range_tree_create(NULL, type, NULL, start, shift);
+	condense_tree = zfs_range_tree_create_flags(
+	    NULL, type, NULL, start, shift,
+	    ZFS_RT_F_DYN_NAME,
+	    metaslab_rt_name(msp->ms_group, msp, "condense_tree"));
 
 	for (int t = 0; t < TXG_DEFER_SIZE; t++) {
 		zfs_range_tree_walk(msp->ms_defer[t],
@@ -3952,8 +3980,10 @@ metaslab_condense(metaslab_t *msp, dmu_tx_t *tx)
 	 * followed by FREES (due to space_map_write() in metaslab_sync()) for
 	 * sync pass 1.
 	 */
-	zfs_range_tree_t *tmp_tree = zfs_range_tree_create(NULL, type, NULL,
-	    start, shift);
+	zfs_range_tree_t *tmp_tree = zfs_range_tree_create_flags(
+	    NULL, type, NULL, start, shift,
+	    ZFS_RT_F_DYN_NAME,
+	    metaslab_rt_name(msp->ms_group, msp, "tmp_tree"));
 	zfs_range_tree_add(tmp_tree, msp->ms_start, msp->ms_size);
 	space_map_write(sm, tmp_tree, SM_ALLOC, SM_NO_VDEVID, tx);
 	space_map_write(sm, msp->ms_allocatable, SM_FREE, SM_NO_VDEVID, tx);
@@ -5573,7 +5603,21 @@ remap_blkptr_cb(uint64_t inner_offset, vdev_t *vd, uint64_t offset,
 	vdev_indirect_births_t *vib = oldvd->vdev_indirect_births;
 	uint64_t physical_birth = vdev_indirect_births_physbirth(vib,
 	    DVA_GET_OFFSET(&bp->blk_dva[0]), DVA_GET_ASIZE(&bp->blk_dva[0]));
-	BP_SET_PHYSICAL_BIRTH(bp, physical_birth);
+
+	/*
+	 * For rewritten blocks, use the old physical birth as the new logical
+	 * birth (representing when the space was allocated) and the removal
+	 * time as the new physical birth (representing when it was actually
+	 * written).
+	 */
+	if (BP_GET_REWRITE(bp)) {
+		uint64_t old_physical_birth = BP_GET_PHYSICAL_BIRTH(bp);
+		ASSERT3U(old_physical_birth, <, physical_birth);
+		BP_SET_BIRTH(bp, old_physical_birth, physical_birth);
+		BP_SET_REWRITE(bp, 0);
+	} else {
+		BP_SET_PHYSICAL_BIRTH(bp, physical_birth);
+	}
 
 	DVA_SET_VDEV(&bp->blk_dva[0], vd->vdev_id);
 	DVA_SET_OFFSET(&bp->blk_dva[0], offset);
@@ -5695,7 +5739,7 @@ metaslab_unalloc_dva(spa_t *spa, const dva_t *dva, uint64_t txg)
 	ASSERT(!vd->vdev_removing);
 	ASSERT(vdev_is_concrete(vd));
 	ASSERT0(vd->vdev_indirect_config.vic_mapping_object);
-	ASSERT3P(vd->vdev_indirect_mapping, ==, NULL);
+	ASSERT0P(vd->vdev_indirect_mapping);
 
 	if (DVA_GET_GANG(dva))
 		size = vdev_gang_header_asize(vd);
@@ -5942,7 +5986,7 @@ metaslab_alloc_range(spa_t *spa, metaslab_class_t *mc, uint64_t psize,
 	int error = 0;
 
 	ASSERT0(BP_GET_LOGICAL_BIRTH(bp));
-	ASSERT0(BP_GET_PHYSICAL_BIRTH(bp));
+	ASSERT0(BP_GET_RAW_PHYSICAL_BIRTH(bp));
 
 	spa_config_enter(spa, SCL_ALLOC, FTAG, RW_READER);
 
@@ -5953,7 +5997,7 @@ metaslab_alloc_range(spa_t *spa, metaslab_class_t *mc, uint64_t psize,
 	}
 
 	ASSERT(ndvas > 0 && ndvas <= spa_max_replication(spa));
-	ASSERT(BP_GET_NDVAS(bp) == 0);
+	ASSERT0(BP_GET_NDVAS(bp));
 	ASSERT(hintbp == NULL || ndvas <= BP_GET_NDVAS(hintbp));
 	ASSERT3P(zal, !=, NULL);
 
@@ -5985,7 +6029,7 @@ metaslab_alloc_range(spa_t *spa, metaslab_class_t *mc, uint64_t psize,
 				smallest_psize = MIN(cur_psize, smallest_psize);
 		}
 	}
-	ASSERT(error == 0);
+	ASSERT0(error);
 	ASSERT(BP_GET_NDVAS(bp) == ndvas);
 	if (actual_psize)
 		*actual_psize = smallest_psize;
@@ -6004,7 +6048,7 @@ metaslab_free(spa_t *spa, const blkptr_t *bp, uint64_t txg, boolean_t now)
 	int ndvas = BP_GET_NDVAS(bp);
 
 	ASSERT(!BP_IS_HOLE(bp));
-	ASSERT(!now || BP_GET_LOGICAL_BIRTH(bp) >= spa_syncing_txg(spa));
+	ASSERT(!now || BP_GET_BIRTH(bp) >= spa_syncing_txg(spa));
 
 	/*
 	 * If we have a checkpoint for the pool we need to make sure that
@@ -6022,7 +6066,7 @@ metaslab_free(spa_t *spa, const blkptr_t *bp, uint64_t txg, boolean_t now)
 	 * normally as they will be referenced by the checkpointed uberblock.
 	 */
 	boolean_t checkpoint = B_FALSE;
-	if (BP_GET_LOGICAL_BIRTH(bp) <= spa->spa_checkpoint_txg &&
+	if (BP_GET_BIRTH(bp) <= spa->spa_checkpoint_txg &&
 	    spa_syncing_txg(spa) > spa->spa_checkpoint_txg) {
 		/*
 		 * At this point, if the block is part of the checkpoint
