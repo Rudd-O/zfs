@@ -161,7 +161,8 @@ dsl_dataset_block_born(dsl_dataset_t *ds, const blkptr_t *bp, dmu_tx_t *tx)
 
 	ASSERT3U(BP_GET_BIRTH(bp), >,
 	    dsl_dataset_phys(ds)->ds_prev_snap_txg);
-	dmu_buf_will_dirty(ds->ds_dbuf, tx);
+	/* ds_dbuf is pre-dirtied in dsl_dataset_sync(). */
+	ASSERT(dmu_buf_is_dirty(ds->ds_dbuf, tx));
 	mutex_enter(&ds->ds_lock);
 	delta = parent_delta(ds, used);
 	dsl_dataset_phys(ds)->ds_referenced_bytes += used;
@@ -274,7 +275,8 @@ dsl_dataset_block_kill(dsl_dataset_t *ds, const blkptr_t *bp, dmu_tx_t *tx,
 	ASSERT3P(tx->tx_pool, ==, ds->ds_dir->dd_pool);
 
 	ASSERT(!ds->ds_is_snapshot);
-	dmu_buf_will_dirty(ds->ds_dbuf, tx);
+	/* ds_dbuf is pre-dirtied in dsl_dataset_sync(). */
+	ASSERT(dmu_buf_is_dirty(ds->ds_dbuf, tx));
 
 	/*
 	 * Track block for livelist, but ignore embedded blocks because
@@ -2853,8 +2855,14 @@ dsl_dataset_stats(dsl_dataset_t *ds, nvlist_t *nv)
 	    dsl_get_userrefs(ds));
 	dsl_prop_nvlist_add_uint64(nv, ZFS_PROP_DEFER_DESTROY,
 	    dsl_get_defer_destroy(ds));
+	inode_timespec_t snap_cmtime = dsl_dir_snap_cmtime(ds->ds_dir);
 	dsl_prop_nvlist_add_uint64(nv, ZFS_PROP_SNAPSHOTS_CHANGED,
-	    dsl_dir_snap_cmtime(ds->ds_dir).tv_sec);
+	    snap_cmtime.tv_sec);
+	uint64_t snap_cmtime_ns =
+	    ((uint64_t)snap_cmtime.tv_sec * NANOSEC) +
+	    snap_cmtime.tv_nsec;
+	dsl_prop_nvlist_add_uint64(nv, ZFS_PROP_SNAPSHOTS_CHANGED_NSECS,
+	    snap_cmtime_ns);
 	dsl_dataset_crypt_stats(ds, nv);
 
 	if (dsl_dataset_phys(ds)->ds_prev_snap_obj != 0) {

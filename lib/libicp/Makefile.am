@@ -1,5 +1,9 @@
+# SPDX-License-Identifier: CDDL-1.0
 libicp_la_CCASFLAGS = $(AM_CCASFLAGS)
 libicp_la_CFLAGS    = $(AM_CFLAGS) $(KERNEL_CFLAGS) $(LIBRARY_CFLAGS)
+
+libicp_la_CPPFLAGS  = $(AM_CPPFLAGS) $(LIBZPOOL_CPPFLAGS)
+libicp_la_CPPFLAGS += -I$(top_srcdir)/module/icp/include
 
 noinst_LTLIBRARIES += libicp.la
 
@@ -35,8 +39,7 @@ nodist_libicp_la_SOURCES = \
 	module/icp/core/kcf_prov_lib.c \
 	module/icp/core/kcf_callprov.c \
 	module/icp/core/kcf_mech_tabs.c \
-	module/icp/core/kcf_prov_tabs.c \
-	module/zfs/zfs_impl.c
+	module/icp/core/kcf_prov_tabs.c
 
 if TARGET_CPU_AARCH64
 nodist_libicp_la_SOURCES += \

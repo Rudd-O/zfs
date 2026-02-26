@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: CDDL-1.0
 #
 # Shown below is a simplified dependency graph of the OpenZFS provided
 # libraries.  Administrative commands (`zfs`, `zpool`, etc) interface with
@@ -11,23 +12,23 @@
 #
 # CMDS:   zhack/ztest/                zfs/zpool/zed/
 #        raidz_{test,bench}          zinject/zstream
-#                |                          |
-# LIBS:          |                          |              libzfsbootenv*
-#                |--libzdb--zdb             |                    |
-#                |                          |                    |
-#             libzpool                   libzfs* ----------------+
-#             | | |  \                  / | | |
-#    libicp --/ | |   \                /  | | \------- libshare
-#               | |    \              /   | |
-#    libzstd ---/ |     \            /    | \--------- libuutil
-#                 |      \          /     \              | |
-#    libunicode --/       \        /       \             | |
-#                          \      /         \            | |
-#                          libzutil        libzfs_core*  | |
-#                          | | | | \          |     |    | |
-#                          | | | | |          |     |    | |
-#                          | | | | |          |     |    | |
-#    libtpool -------------/ | | | \---- libnvpair* |    | |
+#                |         \_____          / |
+# LIBS:          |               \        /  |            libzfsbootenv*
+#                |--libzdb--zdb   \      /   |                  |
+#                |           |    |     /    |                  |
+#             libzpool-\     |    |    //-libzfs* --------------+
+#             | |    \  \    |    |   // / | \ \
+#    libicp --/ |     \  \   |    |  // /  |  \ \
+#               |      \ librange_tree /   |   \ \
+#    libzstd ---/       \  libbtree   /    |    \ \--------
+#                        \           /      \    \         \
+#                         \         /        \    \------  |
+#                          \       /          \          \ |
+#                           libzutil       libzfs_core*  | |
+#                            | | | \          |     |    | |
+#                            | | | |          |     |    | |
+#                            | | | |          |     |    | |
+#                            | | | \---- libnvpair* |    | |
 #                            | | |                  |    | |
 #    libefi -----------------/ | \------ libavl* --------/ |
 #                              |                    |      |
@@ -41,8 +42,7 @@
 # when performing an ABI check the following options are applied:
 #
 # --no-unreferenced-symbols: Exclude symbols which are not referenced by
-# any debug information.  Without this _init() and _fini() are incorrectly
-# reported on CentOS7 for libuutil.so.
+# any debug information.
 #
 # --headers-dir1: Limit ABI checks to public OpenZFS headers, otherwise
 # changes in public system headers are also reported.
@@ -55,13 +55,11 @@ noinst_LTLIBRARIES =
 lib_LTLIBRARIES =
 pkgconfig_DATA =
 include $(srcdir)/%D%/libavl/Makefile.am
+include $(srcdir)/%D%/libbtree/Makefile.am
 include $(srcdir)/%D%/libicp/Makefile.am
 include $(srcdir)/%D%/libnvpair/Makefile.am
-include $(srcdir)/%D%/libshare/Makefile.am
+include $(srcdir)/%D%/librange_tree/Makefile.am
 include $(srcdir)/%D%/libspl/Makefile.am
-include $(srcdir)/%D%/libtpool/Makefile.am
-include $(srcdir)/%D%/libunicode/Makefile.am
-include $(srcdir)/%D%/libuutil/Makefile.am
 include $(srcdir)/%D%/libzdb/Makefile.am
 include $(srcdir)/%D%/libzfs_core/Makefile.am
 include $(srcdir)/%D%/libzfs/Makefile.am

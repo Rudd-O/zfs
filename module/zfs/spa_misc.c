@@ -28,7 +28,7 @@
  * Copyright (c) 2017 Datto Inc.
  * Copyright (c) 2017, Intel Corporation.
  * Copyright (c) 2019, loli10K <ezomori.nozomu@gmail.com>. All rights reserved.
- * Copyright (c) 2023, 2024, Klara Inc.
+ * Copyright (c) 2023, 2024, 2025, Klara, Inc.
  */
 
 #include <sys/zfs_context.h>
@@ -237,9 +237,10 @@
  * locking is, always, based on spa_namespace_lock and spa_config_lock[].
  */
 
-avl_tree_t spa_namespace_avl;
-kmutex_t spa_namespace_lock;
-kcondvar_t spa_namespace_cv;
+static avl_tree_t spa_namespace_avl;
+static kmutex_t spa_namespace_lock;
+static kcondvar_t spa_namespace_cv;
+
 static const int spa_max_replication_override = SPA_DVAS_PER_BP;
 
 static kmutex_t spa_spare_lock;
@@ -413,7 +414,7 @@ spa_load_failed(spa_t *spa, const char *fmt, ...)
 	(void) vsnprintf(buf, sizeof (buf), fmt, adx);
 	va_end(adx);
 
-	zfs_dbgmsg("spa_load(%s, config %s): FAILED: %s", spa->spa_name,
+	zfs_dbgmsg("spa_load(%s, config %s): FAILED: %s", spa_load_name(spa),
 	    spa->spa_trust_config ? "trusted" : "untrusted", buf);
 }
 
@@ -427,7 +428,7 @@ spa_load_note(spa_t *spa, const char *fmt, ...)
 	(void) vsnprintf(buf, sizeof (buf), fmt, adx);
 	va_end(adx);
 
-	zfs_dbgmsg("spa_load(%s, config %s): %s", spa->spa_name,
+	zfs_dbgmsg("spa_load(%s, config %s): %s", spa_load_name(spa),
 	    spa->spa_trust_config ? "trusted" : "untrusted", buf);
 
 	spa_import_progress_set_notes_nolog(spa, "%s", buf);
@@ -608,6 +609,58 @@ spa_config_held(spa_t *spa, int locks, krw_t rw)
  * ==========================================================================
  */
 
+void
+spa_namespace_enter(const void *tag)
+{
+	(void) tag;
+	ASSERT(!MUTEX_HELD(&spa_namespace_lock));
+	mutex_enter(&spa_namespace_lock);
+}
+
+boolean_t
+spa_namespace_tryenter(const void *tag)
+{
+	(void) tag;
+	ASSERT(!MUTEX_HELD(&spa_namespace_lock));
+	return (mutex_tryenter(&spa_namespace_lock));
+}
+
+int
+spa_namespace_enter_interruptible(const void *tag)
+{
+	(void) tag;
+	ASSERT(!MUTEX_HELD(&spa_namespace_lock));
+	return (mutex_enter_interruptible(&spa_namespace_lock));
+}
+
+void
+spa_namespace_exit(const void *tag)
+{
+	(void) tag;
+	ASSERT(MUTEX_HELD(&spa_namespace_lock));
+	mutex_exit(&spa_namespace_lock);
+}
+
+boolean_t
+spa_namespace_held(void)
+{
+	return (MUTEX_HELD(&spa_namespace_lock));
+}
+
+void
+spa_namespace_wait(void)
+{
+	ASSERT(MUTEX_HELD(&spa_namespace_lock));
+	cv_wait(&spa_namespace_cv, &spa_namespace_lock);
+}
+
+void
+spa_namespace_broadcast(void)
+{
+	ASSERT(MUTEX_HELD(&spa_namespace_lock));
+	cv_broadcast(&spa_namespace_cv);
+}
+
 /*
  * Lookup the named spa_t in the AVL tree.  The spa_namespace_lock must be held.
  * Returns NULL if no matching spa_t is found.
@@ -620,7 +673,7 @@ spa_lookup(const char *name)
 	avl_index_t where;
 	char *cp;
 
-	ASSERT(MUTEX_HELD(&spa_namespace_lock));
+	ASSERT(spa_namespace_held());
 
 retry:
 	(void) strlcpy(search.spa_name, name, sizeof (search.spa_name));
@@ -645,7 +698,7 @@ retry:
 	    spa->spa_load_thread != curthread) ||
 	    (spa->spa_export_thread != NULL &&
 	    spa->spa_export_thread != curthread)) {
-		cv_wait(&spa_namespace_cv, &spa_namespace_lock);
+		spa_namespace_wait();
 		goto retry;
 	}
 
@@ -667,7 +720,7 @@ spa_deadman(void *arg)
 		return;
 
 	zfs_dbgmsg("slow spa_sync: started %llu seconds ago, calls %llu",
-	    (gethrtime() - spa->spa_sync_starttime) / NANOSEC,
+	    (getlrtime() - spa->spa_sync_starttime) / NANOSEC,
 	    (u_longlong_t)++spa->spa_deadman_calls);
 	if (zfs_deadman_enabled)
 		vdev_deadman(spa->spa_root_vdev, FTAG);
@@ -697,7 +750,7 @@ spa_add(const char *name, nvlist_t *config, const char *altroot)
 	spa_t *spa;
 	spa_config_dirent_t *dp;
 
-	ASSERT(MUTEX_HELD(&spa_namespace_lock));
+	ASSERT(spa_namespace_held());
 
 	spa = kmem_zalloc(sizeof (spa_t), KM_SLEEP);
 
@@ -747,7 +800,7 @@ spa_add(const char *name, nvlist_t *config, const char *altroot)
 	spa_config_lock_init(spa);
 	spa_stats_init(spa);
 
-	ASSERT(MUTEX_HELD(&spa_namespace_lock));
+	ASSERT(spa_namespace_held());
 	avl_add(&spa_namespace_avl, spa);
 
 	/*
@@ -837,7 +890,7 @@ spa_remove(spa_t *spa)
 {
 	spa_config_dirent_t *dp;
 
-	ASSERT(MUTEX_HELD(&spa_namespace_lock));
+	ASSERT(spa_namespace_held());
 	ASSERT(spa_state(spa) == POOL_STATE_UNINITIALIZED);
 	ASSERT3U(zfs_refcount_count(&spa->spa_refcount), ==, 0);
 	ASSERT0(spa->spa_waiters);
@@ -848,6 +901,9 @@ spa_remove(spa_t *spa)
 
 	if (spa->spa_root)
 		spa_strfree(spa->spa_root);
+
+	if (spa->spa_load_name)
+		spa_strfree(spa->spa_load_name);
 
 	while ((dp = list_remove_head(&spa->spa_config_list)) != NULL) {
 		if (dp->scd_path != NULL)
@@ -916,7 +972,7 @@ spa_remove(spa_t *spa)
 spa_t *
 spa_next(spa_t *prev)
 {
-	ASSERT(MUTEX_HELD(&spa_namespace_lock));
+	ASSERT(spa_namespace_held());
 
 	if (prev)
 		return (AVL_NEXT(&spa_namespace_avl, prev));
@@ -938,7 +994,7 @@ void
 spa_open_ref(spa_t *spa, const void *tag)
 {
 	ASSERT(zfs_refcount_count(&spa->spa_refcount) >= spa->spa_minref ||
-	    MUTEX_HELD(&spa_namespace_lock) ||
+	    spa_namespace_held() ||
 	    spa->spa_load_thread == curthread);
 	(void) zfs_refcount_add(&spa->spa_refcount, tag);
 }
@@ -951,7 +1007,7 @@ void
 spa_close(spa_t *spa, const void *tag)
 {
 	ASSERT(zfs_refcount_count(&spa->spa_refcount) > spa->spa_minref ||
-	    MUTEX_HELD(&spa_namespace_lock) ||
+	    spa_namespace_held() ||
 	    spa->spa_load_thread == curthread ||
 	    spa->spa_export_thread == curthread);
 	(void) zfs_refcount_remove(&spa->spa_refcount, tag);
@@ -980,7 +1036,7 @@ spa_async_close(spa_t *spa, const void *tag)
 boolean_t
 spa_refcount_zero(spa_t *spa)
 {
-	ASSERT(MUTEX_HELD(&spa_namespace_lock) ||
+	ASSERT(spa_namespace_held() ||
 	    spa->spa_export_thread == curthread);
 
 	return (zfs_refcount_count(&spa->spa_refcount) == spa->spa_minref);
@@ -1227,9 +1283,9 @@ uint64_t
 spa_vdev_enter(spa_t *spa)
 {
 	mutex_enter(&spa->spa_vdev_top_lock);
-	mutex_enter(&spa_namespace_lock);
+	spa_namespace_enter(FTAG);
 
-	ASSERT0(spa->spa_export_thread);
+	ASSERT0P(spa->spa_export_thread);
 
 	vdev_autotrim_stop_all(spa);
 
@@ -1246,9 +1302,9 @@ uint64_t
 spa_vdev_detach_enter(spa_t *spa, uint64_t guid)
 {
 	mutex_enter(&spa->spa_vdev_top_lock);
-	mutex_enter(&spa_namespace_lock);
+	spa_namespace_enter(FTAG);
 
-	ASSERT0(spa->spa_export_thread);
+	ASSERT0P(spa->spa_export_thread);
 
 	vdev_autotrim_stop_all(spa);
 
@@ -1270,7 +1326,7 @@ spa_vdev_detach_enter(spa_t *spa, uint64_t guid)
 uint64_t
 spa_vdev_config_enter(spa_t *spa)
 {
-	ASSERT(MUTEX_HELD(&spa_namespace_lock));
+	ASSERT(spa_namespace_held());
 
 	spa_config_enter(spa, SCL_ALL, spa, RW_WRITER);
 
@@ -1285,7 +1341,7 @@ void
 spa_vdev_config_exit(spa_t *spa, vdev_t *vd, uint64_t txg, int error,
     const char *tag)
 {
-	ASSERT(MUTEX_HELD(&spa_namespace_lock));
+	ASSERT(spa_namespace_held());
 
 	int config_changed = B_FALSE;
 
@@ -1374,7 +1430,7 @@ spa_vdev_exit(spa_t *spa, vdev_t *vd, uint64_t txg, int error)
 	vdev_rebuild_restart(spa);
 
 	spa_vdev_config_exit(spa, vd, txg, error, FTAG);
-	mutex_exit(&spa_namespace_lock);
+	spa_namespace_exit(FTAG);
 	mutex_exit(&spa->spa_vdev_top_lock);
 
 	return (error);
@@ -1452,9 +1508,9 @@ spa_vdev_state_exit(spa_t *spa, vdev_t *vd, int error)
 	 * If the config changed, update the config cache.
 	 */
 	if (config_changed) {
-		mutex_enter(&spa_namespace_lock);
+		spa_namespace_enter(FTAG);
 		spa_write_cachefile(spa, B_FALSE, B_TRUE, B_FALSE);
-		mutex_exit(&spa_namespace_lock);
+		spa_namespace_exit(FTAG);
 	}
 
 	return (error);
@@ -1501,7 +1557,7 @@ spa_by_guid(uint64_t pool_guid, uint64_t device_guid)
 	spa_t *spa;
 	avl_tree_t *t = &spa_namespace_avl;
 
-	ASSERT(MUTEX_HELD(&spa_namespace_lock));
+	ASSERT(spa_namespace_held());
 
 	for (spa = avl_first(t); spa != NULL; spa = AVL_NEXT(t, spa)) {
 		if (spa->spa_state == POOL_STATE_UNINITIALIZED)
@@ -1583,7 +1639,7 @@ spa_load_guid_exists(uint64_t guid)
 {
 	avl_tree_t *t = &spa_namespace_avl;
 
-	ASSERT(MUTEX_HELD(&spa_namespace_lock));
+	ASSERT(spa_namespace_held());
 
 	for (spa_t *spa = avl_first(t); spa != NULL; spa = AVL_NEXT(t, spa)) {
 		if (spa_load_guid(spa) == guid)
@@ -1762,6 +1818,19 @@ spa_sync_pass(spa_t *spa)
 char *
 spa_name(spa_t *spa)
 {
+	return (spa->spa_name);
+}
+
+char *
+spa_load_name(spa_t *spa)
+{
+	/*
+	 * During spa_tryimport() the pool name includes a unique prefix.
+	 * Returns the original name which can be used for log messages.
+	 */
+	if (spa->spa_load_name)
+		return (spa->spa_load_name);
+
 	return (spa->spa_name);
 }
 
@@ -1962,7 +2031,10 @@ spa_update_dspace(spa_t *spa)
 		ASSERT3U(spa->spa_rdspace, >=, spa->spa_nonallocating_dspace);
 		spa->spa_rdspace -= spa->spa_nonallocating_dspace;
 	}
-	spa->spa_dspace = spa->spa_rdspace + ddt_get_dedup_dspace(spa) +
+	spa->spa_dspace = spa->spa_rdspace +
+	    metaslab_class_get_dalloc(spa_special_class(spa)) +
+	    metaslab_class_get_dalloc(spa_dedup_class(spa)) +
+	    ddt_get_dedup_dspace(spa) +
 	    brt_get_dspace(spa);
 }
 
@@ -2047,6 +2119,12 @@ spa_preferred_class(spa_t *spa, const zio_t *zio)
 	boolean_t tried_special = (mc == spa_special_class(spa));
 	const zio_prop_t *zp = &zio->io_prop;
 
+	/* Gang children should always use the class of their parents. */
+	if (zio->io_flags & ZIO_FLAG_GANG_CHILD) {
+		ASSERT(mc != NULL);
+		return (mc);
+	}
+
 	/*
 	 * Override object type for the purposes of selecting a storage class.
 	 * Primarily for DMU_OTN_ types where we can't explicitly control their
@@ -2071,39 +2149,23 @@ spa_preferred_class(spa_t *spa, const zio_t *zio)
 			return (spa_normal_class(spa));
 	}
 
-	/* Indirect blocks for user data can land in special if allowed */
-	if (zp->zp_level > 0 &&
-	    (DMU_OT_IS_FILE(objtype) || objtype == DMU_OT_ZVOL)) {
-		if (zfs_user_indirect_is_special && spa_has_special(spa) &&
-		    !tried_special)
-			return (spa_special_class(spa));
-		else
-			return (spa_normal_class(spa));
-	}
+	if (!spa_has_special(spa) || tried_special)
+		return (spa_normal_class(spa));
 
-	if (DMU_OT_IS_METADATA(objtype) || zp->zp_level > 0) {
-		if (spa_has_special(spa) && !tried_special)
-			return (spa_special_class(spa));
-		else
-			return (spa_normal_class(spa));
-	}
+	if (DMU_OT_IS_METADATA(objtype) ||
+	    (zfs_user_indirect_is_special && zp->zp_level > 0))
+		return (spa_special_class(spa));
 
 	/*
-	 * Allow small file or zvol blocks in special class if opted in by
-	 * the special_smallblk property. However, always leave a reserve of
+	 * Allow small blocks in special class.  However, leave a reserve of
 	 * zfs_special_class_metadata_reserve_pct exclusively for metadata.
 	 */
-	if ((DMU_OT_IS_FILE(objtype) || objtype == DMU_OT_ZVOL) &&
-	    spa_has_special(spa) && !tried_special &&
-	    zio->io_size <= zp->zp_zpl_smallblk) {
+	if (zio->io_size <= zp->zp_zpl_smallblk) {
 		metaslab_class_t *special = spa_special_class(spa);
-		uint64_t alloc = metaslab_class_get_alloc(special);
-		uint64_t space = metaslab_class_get_space(special);
-		uint64_t limit =
-		    (space * (100 - zfs_special_class_metadata_reserve_pct))
-		    / 100;
+		uint64_t limit = metaslab_class_get_space(special) *
+		    (100 - zfs_special_class_metadata_reserve_pct) / 100;
 
-		if (alloc < limit)
+		if (metaslab_class_get_alloc(special) < limit)
 			return (special);
 	}
 
@@ -2200,10 +2262,10 @@ spa_set_deadman_ziotime(hrtime_t ns)
 	spa_t *spa = NULL;
 
 	if (spa_mode_global != SPA_MODE_UNINIT) {
-		mutex_enter(&spa_namespace_lock);
+		spa_namespace_enter(FTAG);
 		while ((spa = spa_next(spa)) != NULL)
 			spa->spa_deadman_ziotime = ns;
-		mutex_exit(&spa_namespace_lock);
+		spa_namespace_exit(FTAG);
 	}
 }
 
@@ -2213,10 +2275,10 @@ spa_set_deadman_synctime(hrtime_t ns)
 	spa_t *spa = NULL;
 
 	if (spa_mode_global != SPA_MODE_UNINIT) {
-		mutex_enter(&spa_namespace_lock);
+		spa_namespace_enter(FTAG);
 		while ((spa = spa_next(spa)) != NULL)
 			spa->spa_deadman_synctime = ns;
-		mutex_exit(&spa_namespace_lock);
+		spa_namespace_exit(FTAG);
 	}
 }
 
@@ -2615,7 +2677,6 @@ spa_init(spa_mode_t mode)
 	zpool_prop_init();
 	zpool_feature_init();
 	vdev_prop_init();
-	l2arc_start();
 	scan_init();
 	qat_init();
 	spa_import_progress_init();
@@ -2625,8 +2686,6 @@ spa_init(spa_mode_t mode)
 void
 spa_fini(void)
 {
-	l2arc_stop();
-
 	spa_evict_all();
 
 	vdev_file_fini();
@@ -3048,10 +3107,10 @@ param_set_deadman_failmode_common(const char *val)
 		return (SET_ERROR(EINVAL));
 
 	if (spa_mode_global != SPA_MODE_UNINIT) {
-		mutex_enter(&spa_namespace_lock);
+		spa_namespace_enter(FTAG);
 		while ((spa = spa_next(spa)) != NULL)
 			spa_set_deadman_failmode(spa, val);
-		mutex_exit(&spa_namespace_lock);
+		spa_namespace_exit(FTAG);
 	}
 
 	return (0);
@@ -3091,6 +3150,7 @@ EXPORT_SYMBOL(spa_set_rootblkptr);
 EXPORT_SYMBOL(spa_altroot);
 EXPORT_SYMBOL(spa_sync_pass);
 EXPORT_SYMBOL(spa_name);
+EXPORT_SYMBOL(spa_load_name);
 EXPORT_SYMBOL(spa_guid);
 EXPORT_SYMBOL(spa_last_synced_txg);
 EXPORT_SYMBOL(spa_first_txg);
@@ -3135,7 +3195,6 @@ EXPORT_SYMBOL(spa_has_slogs);
 EXPORT_SYMBOL(spa_is_root);
 EXPORT_SYMBOL(spa_writeable);
 EXPORT_SYMBOL(spa_mode);
-EXPORT_SYMBOL(spa_namespace_lock);
 EXPORT_SYMBOL(spa_trust_config);
 EXPORT_SYMBOL(spa_missing_tvds_allowed);
 EXPORT_SYMBOL(spa_set_missing_tvds);

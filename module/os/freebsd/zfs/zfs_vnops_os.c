@@ -102,14 +102,6 @@
 
 VFS_SMR_DECLARE;
 
-#ifdef DEBUG_VFS_LOCKS
-#define	VNCHECKREF(vp)				  \
-	VNASSERT((vp)->v_holdcnt > 0 && (vp)->v_usecount > 0, vp,	\
-	    ("%s: wrong ref counts", __func__));
-#else
-#define	VNCHECKREF(vp)
-#endif
-
 #if __FreeBSD_version >= 1400045
 typedef uint64_t cookie_t;
 #else
@@ -242,8 +234,9 @@ zfs_open(vnode_t **vpp, int flag, cred_t *cr)
 	 * Keep a count of the synchronous opens in the znode.  On first
 	 * synchronous open we must convert all previous async transactions
 	 * into sync to keep correct ordering.
+	 * Skip it for snapshot, as it won't have any transactions.
 	 */
-	if (flag & O_SYNC) {
+	if (!zfsvfs->z_issnap && (flag & O_SYNC)) {
 		if (atomic_inc_32_nv(&zp->z_sync_cnt) == 1)
 			zil_async_to_sync(zfsvfs->z_log, zp->z_id);
 	}
@@ -264,7 +257,7 @@ zfs_close(vnode_t *vp, int flag, int count, offset_t offset, cred_t *cr)
 		return (error);
 
 	/* Decrement the synchronous opens in the znode */
-	if ((flag & O_SYNC) && (count == 1))
+	if (!zfsvfs->z_issnap && (flag & O_SYNC) && (count == 1))
 		atomic_dec_32(&zp->z_sync_cnt);
 
 	zfs_exit(zfsvfs, FTAG);
@@ -278,7 +271,7 @@ zfs_ioctl_getxattr(vnode_t *vp, zfsxattr_t *fsx)
 
 	memset(fsx, 0, sizeof (*fsx));
 	fsx->fsx_xflags = (zp->z_pflags & ZFS_PROJINHERIT) ?
-	    ZFS_PROJINHERIT_FL : 0;
+	    FS_PROJINHERIT_FL : 0;
 	fsx->fsx_projid = zp->z_projid;
 
 	return (0);
@@ -290,7 +283,7 @@ zfs_ioctl_setflags(vnode_t *vp, uint32_t ioctl_flags, xvattr_t *xva)
 	uint64_t zfs_flags = VTOZ(vp)->z_pflags;
 	xoptattr_t *xoap;
 
-	if (ioctl_flags & ~(ZFS_PROJINHERIT_FL))
+	if (ioctl_flags & ~(FS_PROJINHERIT_FL))
 		return (SET_ERROR(EOPNOTSUPP));
 
 	xva_init(xva);
@@ -304,7 +297,7 @@ zfs_ioctl_setflags(vnode_t *vp, uint32_t ioctl_flags, xvattr_t *xva)
 	}								\
 } while (0)
 
-	FLAG_CHANGE(ZFS_PROJINHERIT_FL, ZFS_PROJINHERIT, XAT_PROJINHERIT,
+	FLAG_CHANGE(FS_PROJINHERIT_FL, ZFS_PROJINHERIT, XAT_PROJINHERIT,
 	    xoap->xoa_projinherit);
 
 #undef	FLAG_CHANGE
@@ -1059,9 +1052,6 @@ zfs_create(znode_t *dzp, const char *name, vattr_t *vap, int excl, int mode,
 	zfs_acl_ids_t   acl_ids;
 	boolean_t	fuid_dirtied;
 	uint64_t	txtype;
-#ifdef DEBUG_VFS_LOCKS
-	vnode_t	*dvp = ZTOV(dzp);
-#endif
 
 	if (is_nametoolong(zfsvfs, name))
 		return (SET_ERROR(ENAMETOOLONG));
@@ -1191,7 +1181,8 @@ zfs_create(znode_t *dzp, const char *name, vattr_t *vap, int excl, int mode,
 	getnewvnode_drop_reserve();
 
 out:
-	VNCHECKREF(dvp);
+	VNASSERT(ZTOV(dzp)->v_holdcnt > 0 && ZTOV(dzp)->v_usecount > 0,
+	    ZTOV(dzp), ("%s: wrong ref counts", __func__));
 	if (error == 0) {
 		*zpp = zp;
 	}
@@ -2992,9 +2983,6 @@ out:
 		ASSERT0(err2);
 	}
 
-	if (attrzp)
-		vput(ZTOV(attrzp));
-
 	if (aclp)
 		zfs_acl_free(aclp);
 
@@ -3005,12 +2993,15 @@ out:
 
 	if (err) {
 		dmu_tx_abort(tx);
+		if (attrzp)
+			vput(ZTOV(attrzp));
 	} else {
 		err2 = sa_bulk_update(zp->z_sa_hdl, bulk, count, tx);
 		dmu_tx_commit(tx);
 		if (attrzp) {
 			if (err2 == 0 && handle_eadir)
 				err = zfs_setattr_dir(attrzp);
+			vput(ZTOV(attrzp));
 		}
 	}
 
@@ -4481,7 +4472,8 @@ zfs_putpages(struct vnode *vp, vm_page_t *ma, size_t len, int flags,
 		for (i = 0; wlen > 0; woff += tocopy, wlen -= tocopy, i++) {
 			tocopy = MIN(PAGE_SIZE, wlen);
 			va = zfs_map_page(ma[i], &sf);
-			dmu_write(zfsvfs->z_os, zp->z_id, woff, tocopy, va, tx);
+			dmu_write(zfsvfs->z_os, zp->z_id, woff, tocopy, va, tx,
+			    DMU_READ_PREFETCH);
 			zfs_unmap_page(sf);
 		}
 	} else {
@@ -5276,7 +5268,7 @@ zfs_freebsd_fsync(struct vop_fsync_args *ap)
 	 * Push any dirty mmap()'d data out to the DMU and ZIL, ready for
 	 * zil_commit() to be called in zfs_fsync().
 	 */
-	if (vm_object_mightbedirty(vp->v_object)) {
+	if (vp->v_object != NULL && vm_object_mightbedirty(vp->v_object)) {
 		zfs_vmobject_wlock(vp->v_object);
 		if (!vm_object_page_clean(vp->v_object, 0, 0, 0))
 			err = SET_ERROR(EIO);
@@ -5759,7 +5751,7 @@ zfs_freebsd_pathconf(struct vop_pathconf_args *ap)
 {
 	ulong_t val;
 	int error;
-#ifdef _PC_CLONE_BLKSIZE
+#if defined(_PC_CLONE_BLKSIZE) || defined(_PC_CASE_INSENSITIVE)
 	zfsvfs_t *zfsvfs;
 #endif
 
@@ -5819,6 +5811,15 @@ zfs_freebsd_pathconf(struct vop_pathconf_args *ap)
 			    SPA_FEATURE_LARGE_BLOCKS) ?
 			    SPA_MAXBLOCKSIZE :
 			    SPA_OLD_MAXBLOCKSIZE;
+		else
+			*ap->a_retval = 0;
+		return (0);
+#endif
+#ifdef _PC_CASE_INSENSITIVE
+	case _PC_CASE_INSENSITIVE:
+		zfsvfs = (zfsvfs_t *)ap->a_vp->v_mount->mnt_data;
+		if (zfsvfs->z_case == ZFS_CASE_INSENSITIVE)
+			*ap->a_retval = 1;
 		else
 			*ap->a_retval = 0;
 		return (0);

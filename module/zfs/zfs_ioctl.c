@@ -212,6 +212,8 @@
 #include <sys/vdev_impl.h>
 #include <sys/vdev_initialize.h>
 #include <sys/vdev_trim.h>
+#include <sys/brt.h>
+#include <sys/ddt.h>
 
 #include "zfs_namecheck.h"
 #include "zfs_prop.h"
@@ -683,7 +685,7 @@ zfs_secpolicy_send(zfs_cmd_t *zc, nvlist_t *innvl, cred_t *cr)
 	dsl_dataset_t *ds;
 	const char *cp;
 	int error;
-	boolean_t rawok = (zc->zc_flags & 0x8);
+	boolean_t rawok = !!(zc->zc_flags & 0x8);
 
 	/*
 	 * Generate the current snapshot name from the given objsetid, then
@@ -706,7 +708,7 @@ zfs_secpolicy_send(zfs_cmd_t *zc, nvlist_t *innvl, cred_t *cr)
 
 	error = zfs_secpolicy_write_perms_ds(zc->zc_name, ds,
 	    ZFS_DELEG_PERM_SEND, cr);
-	if (error != 0 && rawok == B_TRUE) {
+	if (error != 0 && rawok) {
 		error = zfs_secpolicy_write_perms_ds(zc->zc_name, ds,
 		    ZFS_DELEG_PERM_SEND_RAW, cr);
 	}
@@ -725,7 +727,7 @@ zfs_secpolicy_send_new(zfs_cmd_t *zc, nvlist_t *innvl, cred_t *cr)
 	(void) innvl;
 	error = zfs_secpolicy_write_perms(zc->zc_name,
 	    ZFS_DELEG_PERM_SEND, cr);
-	if (error != 0 && rawok == B_TRUE) {
+	if (error != 0 && rawok) {
 		error = zfs_secpolicy_write_perms(zc->zc_name,
 		    ZFS_DELEG_PERM_SEND_RAW, cr);
 	}
@@ -3122,12 +3124,12 @@ zfs_ioc_pool_set_props(zfs_cmd_t *zc)
 	if (pair != NULL && strcmp(nvpair_name(pair),
 	    zpool_prop_to_name(ZPOOL_PROP_CACHEFILE)) == 0 &&
 	    nvlist_next_nvpair(props, pair) == NULL) {
-		mutex_enter(&spa_namespace_lock);
+		spa_namespace_enter(FTAG);
 		if ((spa = spa_lookup(zc->zc_name)) != NULL) {
 			spa_configfile_set(spa, props, B_FALSE);
 			spa_write_cachefile(spa, B_FALSE, B_TRUE, B_FALSE);
 		}
-		mutex_exit(&spa_namespace_lock);
+		spa_namespace_exit(FTAG);
 		if (spa != NULL) {
 			nvlist_free(props);
 			return (0);
@@ -3176,14 +3178,14 @@ zfs_ioc_pool_get_props(const char *pool, nvlist_t *innvl, nvlist_t *outnvl)
 		 * get (such as altroot and cachefile), so attempt to get them
 		 * anyway.
 		 */
-		mutex_enter(&spa_namespace_lock);
+		spa_namespace_enter(FTAG);
 		if ((spa = spa_lookup(pool)) != NULL) {
 			error = spa_prop_get(spa, outnvl);
 			if (error == 0 && props != NULL)
 				error = spa_prop_get_nvlist(spa, props, n_props,
 				    outnvl);
 		}
-		mutex_exit(&spa_namespace_lock);
+		spa_namespace_exit(FTAG);
 	} else {
 		error = spa_prop_get(spa, outnvl);
 		if (error == 0 && props != NULL)
@@ -4276,13 +4278,11 @@ zfs_ioc_pool_prefetch(const char *poolname, nvlist_t *innvl, nvlist_t *outnvl)
 	spa_t *spa;
 	int32_t type;
 
-	/*
-	 * Currently, only ZPOOL_PREFETCH_DDT is supported
-	 */
-	if (nvlist_lookup_int32(innvl, ZPOOL_PREFETCH_TYPE, &type) != 0 ||
-	    type != ZPOOL_PREFETCH_DDT) {
+	if (nvlist_lookup_int32(innvl, ZPOOL_PREFETCH_TYPE, &type) != 0)
 		return (EINVAL);
-	}
+
+	if (type != ZPOOL_PREFETCH_DDT && type != ZPOOL_PREFETCH_BRT)
+		return (EINVAL);
 
 	error = spa_open(poolname, &spa, FTAG);
 	if (error != 0)
@@ -4290,10 +4290,17 @@ zfs_ioc_pool_prefetch(const char *poolname, nvlist_t *innvl, nvlist_t *outnvl)
 
 	hrtime_t start_time = gethrtime();
 
-	ddt_prefetch_all(spa);
-
-	zfs_dbgmsg("pool '%s': loaded ddt into ARC in %llu ms", spa->spa_name,
-	    (u_longlong_t)NSEC2MSEC(gethrtime() - start_time));
+	if (type == ZPOOL_PREFETCH_DDT) {
+		ddt_prefetch_all(spa);
+		zfs_dbgmsg("pool '%s': loaded ddt into ARC in %llu ms",
+		    spa->spa_name,
+		    (u_longlong_t)NSEC2MSEC(gethrtime() - start_time));
+	} else {
+		brt_prefetch_all(spa);
+		zfs_dbgmsg("pool '%s': loaded brt into ARC in %llu ms",
+		    spa->spa_name,
+		    (u_longlong_t)NSEC2MSEC(gethrtime() - start_time));
+	}
 
 	spa_close(spa, FTAG);
 
@@ -6121,10 +6128,10 @@ zfs_ioc_clear(zfs_cmd_t *zc)
 	/*
 	 * On zpool clear we also fix up missing slogs
 	 */
-	mutex_enter(&spa_namespace_lock);
+	spa_namespace_enter(FTAG);
 	spa = spa_lookup(zc->zc_name);
 	if (spa == NULL) {
-		mutex_exit(&spa_namespace_lock);
+		spa_namespace_exit(FTAG);
 		return (SET_ERROR(EIO));
 	}
 	if (spa_get_log_state(spa) == SPA_LOG_MISSING) {
@@ -6132,7 +6139,7 @@ zfs_ioc_clear(zfs_cmd_t *zc)
 		spa_set_log_state(spa, SPA_LOG_CLEAR);
 	}
 	spa->spa_last_open_failed = 0;
-	mutex_exit(&spa_namespace_lock);
+	spa_namespace_exit(FTAG);
 
 	if (zc->zc_cookie & ZPOOL_NO_REWIND) {
 		error = spa_open(zc->zc_name, &spa, FTAG);
@@ -8144,10 +8151,16 @@ zfsdev_ioctl_common(uint_t vecnum, zfs_cmd_t *zc, int flag)
 	 * Can't use kmem_strdup() as we might truncate the string and
 	 * kmem_strfree() would then free with incorrect size.
 	 */
-	saved_poolname_len = strlen(zc->zc_name) + 1;
+	const char *spa_name = zc->zc_name;
+	const char *tname;
+	if (nvlist_lookup_string(innvl,
+	    zpool_prop_to_name(ZPOOL_PROP_TNAME), &tname) == 0) {
+		spa_name = tname;
+	}
+	saved_poolname_len = strlen(spa_name) + 1;
 	saved_poolname = kmem_alloc(saved_poolname_len, KM_SLEEP);
 
-	strlcpy(saved_poolname, zc->zc_name, saved_poolname_len);
+	strlcpy(saved_poolname, spa_name, saved_poolname_len);
 	saved_poolname[strcspn(saved_poolname, "/@#")] = '\0';
 
 	if (vec->zvec_func != NULL) {

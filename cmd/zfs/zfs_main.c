@@ -42,7 +42,6 @@
 #include <getopt.h>
 #include <libgen.h>
 #include <libintl.h>
-#include <libuutil.h>
 #include <libnvpair.h>
 #include <locale.h>
 #include <stddef.h>
@@ -293,7 +292,7 @@ get_usage(zfs_help_t idx)
 {
 	switch (idx) {
 	case HELP_CLONE:
-		return (gettext("\tclone [-p] [-o property=value] ... "
+		return (gettext("\tclone [-pu] [-o property=value] ... "
 		    "<snapshot> <filesystem|volume>\n"));
 	case HELP_CREATE:
 		return (gettext("\tcreate [-Pnpuv] [-o property=value] ... "
@@ -440,8 +439,8 @@ get_usage(zfs_help_t idx)
 		return (gettext("\tredact <snapshot> <bookmark> "
 		    "<redaction_snapshot> ...\n"));
 	case HELP_REWRITE:
-		return (gettext("\trewrite [-Prvx] [-o <offset>] [-l <length>] "
-		    "<directory|file ...>\n"));
+		return (gettext("\trewrite [-CPSrvx] [-o <offset>] "
+		    "[-l <length>] <directory|file ...>\n"));
 	case HELP_JAIL:
 		return (gettext("\tjail <jailid|jailname> <filesystem>\n"));
 	case HELP_UNJAIL:
@@ -819,7 +818,7 @@ zfs_mount_and_share(libzfs_handle_t *hdl, const char *dataset, zfs_type_t type)
 }
 
 /*
- * zfs clone [-p] [-o prop=value] ... <snap> <fs | vol>
+ * zfs clone [-pu] [-o prop=value] ... <snap> <fs | vol>
  *
  * Given an existing dataset, create a writable copy whose initial contents
  * are the same as the source.  The newly created dataset maintains a
@@ -827,21 +826,24 @@ zfs_mount_and_share(libzfs_handle_t *hdl, const char *dataset, zfs_type_t type)
  * the clone exists.
  *
  * The '-p' flag creates all the non-existing ancestors of the target first.
+ *
+ * The '-u' flag prevents the newly created file system from being mounted.
  */
 static int
 zfs_do_clone(int argc, char **argv)
 {
 	zfs_handle_t *zhp = NULL;
 	boolean_t parents = B_FALSE;
+	boolean_t nomount = B_FALSE;
 	nvlist_t *props;
-	int ret = 0;
+	int ret = 1;
 	int c;
 
 	if (nvlist_alloc(&props, NV_UNIQUE_NAME, 0) != 0)
 		nomem();
 
 	/* check options */
-	while ((c = getopt(argc, argv, "o:p")) != -1) {
+	while ((c = getopt(argc, argv, "o:pu")) != -1) {
 		switch (c) {
 		case 'o':
 			if (!parseprop(props, optarg)) {
@@ -851,6 +853,9 @@ zfs_do_clone(int argc, char **argv)
 			break;
 		case 'p':
 			parents = B_TRUE;
+			break;
+		case 'u':
+			nomount = B_TRUE;
 			break;
 		case '?':
 			(void) fprintf(stderr, gettext("invalid option '%c'\n"),
@@ -880,8 +885,7 @@ zfs_do_clone(int argc, char **argv)
 
 	/* open the source dataset */
 	if ((zhp = zfs_open(g_zfs, argv[0], ZFS_TYPE_SNAPSHOT)) == NULL) {
-		nvlist_free(props);
-		return (1);
+		goto error_open;
 	}
 
 	if (parents && zfs_name_valid(argv[1], ZFS_TYPE_FILESYSTEM |
@@ -893,37 +897,39 @@ zfs_do_clone(int argc, char **argv)
 		 */
 		if (zfs_dataset_exists(g_zfs, argv[1], ZFS_TYPE_FILESYSTEM |
 		    ZFS_TYPE_VOLUME)) {
-			zfs_close(zhp);
-			nvlist_free(props);
-			return (0);
+			ret = 0;
+			goto error;
 		}
 		if (zfs_create_ancestors(g_zfs, argv[1]) != 0) {
-			zfs_close(zhp);
-			nvlist_free(props);
-			return (1);
+			goto error;
 		}
 	}
 
 	/* pass to libzfs */
 	ret = zfs_clone(zhp, argv[1], props);
 
-	/* create the mountpoint if necessary */
-	if (ret == 0) {
-		if (log_history) {
-			(void) zpool_log_history(g_zfs, history_str);
-			log_history = B_FALSE;
-		}
+	if (ret != 0)
+		goto error;
 
-		/*
-		 * Dataset cloned successfully, mount/share failures are
-		 * non-fatal.
-		 */
-		(void) zfs_mount_and_share(g_zfs, argv[1], ZFS_TYPE_DATASET);
+	/* create the mountpoint if necessary */
+	if (log_history) {
+		(void) zpool_log_history(g_zfs, history_str);
+		log_history = B_FALSE;
 	}
 
-	zfs_close(zhp);
-	nvlist_free(props);
+	if (nomount)
+		goto error;
 
+	/*
+	 * Dataset cloned successfully, mount/share failures are
+	 * non-fatal.
+	 */
+	(void) zfs_mount_and_share(g_zfs, argv[1], ZFS_TYPE_DATASET);
+
+error:
+	zfs_close(zhp);
+error_open:
+	nvlist_free(props);
 	return (!!ret);
 
 usage:
@@ -1049,7 +1055,7 @@ default_volblocksize(zpool_handle_t *zhp, nvlist_t *props)
 }
 
 /*
- * zfs create [-Pnpv] [-o prop=value] ... fs
+ * zfs create [-Pnpuv] [-o prop=value] ... fs
  * zfs create [-Pnpsv] [-b blocksize] [-o prop=value] ... -V vol size
  *
  * Create a new dataset.  This command can be used to create filesystems
@@ -2846,30 +2852,26 @@ static int us_type_bits[] = {
 static const char *const us_type_names[] = { "posixgroup", "posixuser",
 	"smbgroup", "smbuser", "all" };
 
+typedef struct us_cbdata us_cbdata_t;
 typedef struct us_node {
 	nvlist_t	*usn_nvl;
-	uu_avl_node_t	usn_avlnode;
-	uu_list_node_t	usn_listnode;
+	us_cbdata_t	*usn_cbdata;
+	avl_node_t	usn_avlnode;
+	list_node_t	usn_listnode;
 } us_node_t;
 
-typedef struct us_cbdata {
+struct us_cbdata {
 	nvlist_t	**cb_nvlp;
-	uu_avl_pool_t	*cb_avl_pool;
-	uu_avl_t	*cb_avl;
+	avl_tree_t	cb_avl;
 	boolean_t	cb_numname;
 	boolean_t	cb_nicenum;
 	boolean_t	cb_sid2posix;
 	zfs_userquota_prop_t cb_prop;
 	zfs_sort_column_t *cb_sortcol;
 	size_t		cb_width[USFIELD_LAST];
-} us_cbdata_t;
+};
 
 static boolean_t us_populated = B_FALSE;
-
-typedef struct {
-	zfs_sort_column_t *si_sortcol;
-	boolean_t	si_numname;
-} us_sort_info_t;
 
 static int
 us_field_index(const char *field)
@@ -2883,13 +2885,12 @@ us_field_index(const char *field)
 }
 
 static int
-us_compare(const void *larg, const void *rarg, void *unused)
+us_compare(const void *larg, const void *rarg)
 {
 	const us_node_t *l = larg;
 	const us_node_t *r = rarg;
-	us_sort_info_t *si = (us_sort_info_t *)unused;
-	zfs_sort_column_t *sortcol = si->si_sortcol;
-	boolean_t numname = si->si_numname;
+	zfs_sort_column_t *sortcol = l->usn_cbdata->cb_sortcol;
+	boolean_t numname = l->usn_cbdata->cb_numname;
 	nvlist_t *lnvl = l->usn_nvl;
 	nvlist_t *rnvl = r->usn_nvl;
 	int rc = 0;
@@ -3023,25 +3024,22 @@ userspace_cb(void *arg, const char *domain, uid_t rid, uint64_t space,
 	const char *propname;
 	char sizebuf[32];
 	us_node_t *node;
-	uu_avl_pool_t *avl_pool = cb->cb_avl_pool;
-	uu_avl_t *avl = cb->cb_avl;
-	uu_avl_index_t idx;
+	avl_tree_t *avl = &cb->cb_avl;
+	avl_index_t idx;
 	nvlist_t *props;
 	us_node_t *n;
-	zfs_sort_column_t *sortcol = cb->cb_sortcol;
 	unsigned type = 0;
 	const char *typestr;
 	size_t namelen;
 	size_t typelen;
 	size_t sizelen;
 	int typeidx, nameidx, sizeidx;
-	us_sort_info_t sortinfo = { sortcol, cb->cb_numname };
 	boolean_t smbentity = B_FALSE;
 
 	if (nvlist_alloc(&props, NV_UNIQUE_NAME, 0) != 0)
 		nomem();
 	node = safe_malloc(sizeof (us_node_t));
-	uu_avl_node_init(node, &node->usn_avlnode, avl_pool);
+	node->usn_cbdata = cb;
 	node->usn_nvl = props;
 
 	if (domain != NULL && domain[0] != '\0') {
@@ -3143,8 +3141,8 @@ userspace_cb(void *arg, const char *domain, uid_t rid, uint64_t space,
 	 * Check if this type/name combination is in the list and update it;
 	 * otherwise add new node to the list.
 	 */
-	if ((n = uu_avl_find(avl, node, &sortinfo, &idx)) == NULL) {
-		uu_avl_insert(avl, node, idx);
+	if ((n = avl_find(avl, node, &idx)) == NULL) {
+		avl_insert(avl, node, idx);
 	} else {
 		nvlist_free(props);
 		free(node);
@@ -3318,7 +3316,7 @@ print_us_node(boolean_t scripted, boolean_t parsable, int *fields, int types,
 
 static void
 print_us(boolean_t scripted, boolean_t parsable, int *fields, int types,
-    size_t *width, boolean_t rmnode, uu_avl_t *avl)
+    size_t *width, boolean_t rmnode, avl_tree_t *avl)
 {
 	us_node_t *node;
 	const char *col;
@@ -3343,7 +3341,7 @@ print_us(boolean_t scripted, boolean_t parsable, int *fields, int types,
 		(void) printf("\n");
 	}
 
-	for (node = uu_avl_first(avl); node; node = uu_avl_next(avl, node)) {
+	for (node = avl_first(avl); node; node = AVL_NEXT(avl, node)) {
 		print_us_node(scripted, parsable, fields, types, width, node);
 		if (rmnode)
 			nvlist_free(node->usn_nvl);
@@ -3355,9 +3353,6 @@ zfs_do_userspace(int argc, char **argv)
 {
 	zfs_handle_t *zhp;
 	zfs_userquota_prop_t p;
-	uu_avl_pool_t *avl_pool;
-	uu_avl_t *avl_tree;
-	uu_avl_walk_t *walk;
 	char *delim;
 	char deffields[] = "type,name,used,quota,objused,objquota";
 	char *ofield = NULL;
@@ -3376,10 +3371,8 @@ zfs_do_userspace(int argc, char **argv)
 	us_cbdata_t cb;
 	us_node_t *node;
 	us_node_t *rmnode;
-	uu_list_pool_t *listpool;
-	uu_list_t *list;
-	uu_avl_index_t idx = 0;
-	uu_list_index_t idx2 = 0;
+	list_t list;
+	avl_index_t idx = 0;
 
 	if (argc < 2)
 		usage(B_FALSE);
@@ -3513,12 +3506,6 @@ zfs_do_userspace(int argc, char **argv)
 		return (1);
 	}
 
-	if ((avl_pool = uu_avl_pool_create("us_avl_pool", sizeof (us_node_t),
-	    offsetof(us_node_t, usn_avlnode), us_compare, UU_DEFAULT)) == NULL)
-		nomem();
-	if ((avl_tree = uu_avl_create(avl_pool, NULL, UU_DEFAULT)) == NULL)
-		nomem();
-
 	/* Always add default sorting columns */
 	(void) zfs_add_sort_column(&sortcol, "type", B_FALSE);
 	(void) zfs_add_sort_column(&sortcol, "name", B_FALSE);
@@ -3526,9 +3513,11 @@ zfs_do_userspace(int argc, char **argv)
 	cb.cb_sortcol = sortcol;
 	cb.cb_numname = prtnum;
 	cb.cb_nicenum = !parsable;
-	cb.cb_avl_pool = avl_pool;
-	cb.cb_avl = avl_tree;
 	cb.cb_sid2posix = sid2posix;
+
+	avl_create(&cb.cb_avl, us_compare,
+	    sizeof (us_node_t), offsetof(us_node_t, usn_avlnode));
+
 
 	for (i = 0; i < USFIELD_LAST; i++)
 		cb.cb_width[i] = strlen(gettext(us_field_hdr[i]));
@@ -3544,59 +3533,52 @@ zfs_do_userspace(int argc, char **argv)
 		cb.cb_prop = p;
 		if ((ret = zfs_userspace(zhp, p, userspace_cb, &cb)) != 0) {
 			zfs_close(zhp);
+			avl_destroy(&cb.cb_avl);
 			return (ret);
 		}
 	}
 	zfs_close(zhp);
 
 	/* Sort the list */
-	if ((node = uu_avl_first(avl_tree)) == NULL)
+	if ((node = avl_first(&cb.cb_avl)) == NULL) {
+		avl_destroy(&cb.cb_avl);
 		return (0);
+	}
 
 	us_populated = B_TRUE;
 
-	listpool = uu_list_pool_create("tmplist", sizeof (us_node_t),
-	    offsetof(us_node_t, usn_listnode), NULL, UU_DEFAULT);
-	list = uu_list_create(listpool, NULL, UU_DEFAULT);
-	uu_list_node_init(node, &node->usn_listnode, listpool);
+	list_create(&list, sizeof (us_node_t),
+	    offsetof(us_node_t, usn_listnode));
+	list_link_init(&node->usn_listnode);
 
 	while (node != NULL) {
 		rmnode = node;
-		node = uu_avl_next(avl_tree, node);
-		uu_avl_remove(avl_tree, rmnode);
-		if (uu_list_find(list, rmnode, NULL, &idx2) == NULL)
-			uu_list_insert(list, rmnode, idx2);
+		node = AVL_NEXT(&cb.cb_avl, node);
+		avl_remove(&cb.cb_avl, rmnode);
+		list_insert_head(&list, rmnode);
 	}
 
-	for (node = uu_list_first(list); node != NULL;
-	    node = uu_list_next(list, node)) {
-		us_sort_info_t sortinfo = { sortcol, cb.cb_numname };
-
-		if (uu_avl_find(avl_tree, node, &sortinfo, &idx) == NULL)
-			uu_avl_insert(avl_tree, node, idx);
+	for (node = list_head(&list); node != NULL;
+	    node = list_next(&list, node)) {
+		if (avl_find(&cb.cb_avl, node, &idx) == NULL)
+			avl_insert(&cb.cb_avl, node, idx);
 	}
 
-	uu_list_destroy(list);
-	uu_list_pool_destroy(listpool);
+	while ((node = list_remove_head(&list)) != NULL) { }
+	list_destroy(&list);
 
 	/* Print and free node nvlist memory */
 	print_us(scripted, parsable, fields, types, cb.cb_width, B_TRUE,
-	    cb.cb_avl);
+	    &cb.cb_avl);
 
 	zfs_free_sort_columns(sortcol);
 
 	/* Clean up the AVL tree */
-	if ((walk = uu_avl_walk_start(cb.cb_avl, UU_WALK_ROBUST)) == NULL)
-		nomem();
-
-	while ((node = uu_avl_walk_next(walk)) != NULL) {
-		uu_avl_remove(cb.cb_avl, node);
+	void *cookie = NULL;
+	while ((node = avl_destroy_nodes(&cb.cb_avl, &cookie)) != NULL) {
 		free(node);
 	}
-
-	uu_avl_walk_end(walk);
-	uu_avl_destroy(avl_tree);
-	uu_avl_pool_destroy(avl_pool);
+	avl_destroy(&cb.cb_avl);
 
 	return (ret);
 }
@@ -4071,7 +4053,7 @@ zfs_do_rename(int argc, char **argv)
 	zfs_handle_t *zhp;
 	renameflags_t flags = { 0 };
 	int c;
-	int ret = 0;
+	int ret = 1;
 	int types;
 	boolean_t parents = B_FALSE;
 
@@ -4143,18 +4125,19 @@ zfs_do_rename(int argc, char **argv)
 		types = ZFS_TYPE_DATASET;
 
 	if ((zhp = zfs_open(g_zfs, argv[0], types)) == NULL)
-		return (1);
+		goto error_open;
 
 	/* If we were asked and the name looks good, try to create ancestors. */
 	if (parents && zfs_name_valid(argv[1], zfs_get_type(zhp)) &&
 	    zfs_create_ancestors(g_zfs, argv[1]) != 0) {
-		zfs_close(zhp);
-		return (1);
+		goto error;
 	}
 
 	ret = (zfs_rename(zhp, argv[1], flags) != 0);
 
+error:
 	zfs_close(zhp);
+error_open:
 	return (ret);
 }
 
@@ -5401,7 +5384,7 @@ typedef struct deleg_perm {
 typedef struct deleg_perm_node {
 	deleg_perm_t		dpn_perm;
 
-	uu_avl_node_t		dpn_avl_node;
+	avl_node_t		dpn_avl_node;
 } deleg_perm_node_t;
 
 typedef struct fs_perm fs_perm_t;
@@ -5413,13 +5396,13 @@ typedef struct who_perm {
 	char			who_ug_name[256];	/* user/group name */
 	fs_perm_t		*who_fsperm;		/* uplink */
 
-	uu_avl_t		*who_deleg_perm_avl;	/* permissions */
+	avl_tree_t		who_deleg_perm_avl;	/* permissions */
 } who_perm_t;
 
 /* */
 typedef struct who_perm_node {
 	who_perm_t	who_perm;
-	uu_avl_node_t	who_avl_node;
+	avl_node_t	who_avl_node;
 } who_perm_node_t;
 
 typedef struct fs_perm_set fs_perm_set_t;
@@ -5427,8 +5410,8 @@ typedef struct fs_perm_set fs_perm_set_t;
 struct fs_perm {
 	const char		*fsp_name;
 
-	uu_avl_t		*fsp_sc_avl;	/* sets,create */
-	uu_avl_t		*fsp_uge_avl;	/* user,group,everyone */
+	avl_tree_t		fsp_sc_avl;	/* sets,create */
+	avl_tree_t		fsp_uge_avl;	/* user,group,everyone */
 
 	fs_perm_set_t		*fsp_set;	/* uplink */
 };
@@ -5436,19 +5419,14 @@ struct fs_perm {
 /* */
 typedef struct fs_perm_node {
 	fs_perm_t	fspn_fsperm;
-	uu_avl_t	*fspn_avl;
+	avl_tree_t	fspn_avl;
 
-	uu_list_node_t	fspn_list_node;
+	list_node_t	fspn_list_node;
 } fs_perm_node_t;
 
 /* top level structure */
 struct fs_perm_set {
-	uu_list_pool_t	*fsps_list_pool;
-	uu_list_t	*fsps_list; /* list of fs_perms */
-
-	uu_avl_pool_t	*fsps_named_set_avl_pool;
-	uu_avl_pool_t	*fsps_who_perm_avl_pool;
-	uu_avl_pool_t	*fsps_deleg_perm_avl_pool;
+	list_t		fsps_list; /* list of fs_perms */
 };
 
 static inline const char *
@@ -5511,9 +5489,8 @@ who_type2weight(zfs_deleg_who_type_t who_type)
 }
 
 static int
-who_perm_compare(const void *larg, const void *rarg, void *unused)
+who_perm_compare(const void *larg, const void *rarg)
 {
-	(void) unused;
 	const who_perm_node_t *l = larg;
 	const who_perm_node_t *r = rarg;
 	zfs_deleg_who_type_t ltype = l->who_perm.who_type;
@@ -5524,63 +5501,24 @@ who_perm_compare(const void *larg, const void *rarg, void *unused)
 	if (res == 0)
 		res = strncmp(l->who_perm.who_name, r->who_perm.who_name,
 		    ZFS_MAX_DELEG_NAME-1);
-
-	if (res == 0)
-		return (0);
-	if (res > 0)
-		return (1);
-	else
-		return (-1);
+	return (TREE_ISIGN(res));
 }
 
 static int
-deleg_perm_compare(const void *larg, const void *rarg, void *unused)
+deleg_perm_compare(const void *larg, const void *rarg)
 {
-	(void) unused;
 	const deleg_perm_node_t *l = larg;
 	const deleg_perm_node_t *r = rarg;
-	int res =  strncmp(l->dpn_perm.dp_name, r->dpn_perm.dp_name,
-	    ZFS_MAX_DELEG_NAME-1);
-
-	if (res == 0)
-		return (0);
-
-	if (res > 0)
-		return (1);
-	else
-		return (-1);
+	return (TREE_ISIGN(strncmp(l->dpn_perm.dp_name, r->dpn_perm.dp_name,
+	    ZFS_MAX_DELEG_NAME-1)));
 }
 
 static inline void
 fs_perm_set_init(fs_perm_set_t *fspset)
 {
 	memset(fspset, 0, sizeof (fs_perm_set_t));
-
-	if ((fspset->fsps_list_pool = uu_list_pool_create("fsps_list_pool",
-	    sizeof (fs_perm_node_t), offsetof(fs_perm_node_t, fspn_list_node),
-	    NULL, UU_DEFAULT)) == NULL)
-		nomem();
-	if ((fspset->fsps_list = uu_list_create(fspset->fsps_list_pool, NULL,
-	    UU_DEFAULT)) == NULL)
-		nomem();
-
-	if ((fspset->fsps_named_set_avl_pool = uu_avl_pool_create(
-	    "named_set_avl_pool", sizeof (who_perm_node_t), offsetof(
-	    who_perm_node_t, who_avl_node), who_perm_compare,
-	    UU_DEFAULT)) == NULL)
-		nomem();
-
-	if ((fspset->fsps_who_perm_avl_pool = uu_avl_pool_create(
-	    "who_perm_avl_pool", sizeof (who_perm_node_t), offsetof(
-	    who_perm_node_t, who_avl_node), who_perm_compare,
-	    UU_DEFAULT)) == NULL)
-		nomem();
-
-	if ((fspset->fsps_deleg_perm_avl_pool = uu_avl_pool_create(
-	    "deleg_perm_avl_pool", sizeof (deleg_perm_node_t), offsetof(
-	    deleg_perm_node_t, dpn_avl_node), deleg_perm_compare, UU_DEFAULT))
-	    == NULL)
-		nomem();
+	list_create(&fspset->fsps_list, sizeof (fs_perm_node_t),
+	    offsetof(fs_perm_node_t, fspn_list_node));
 }
 
 static inline void fs_perm_fini(fs_perm_t *);
@@ -5589,21 +5527,13 @@ static inline void who_perm_fini(who_perm_t *);
 static inline void
 fs_perm_set_fini(fs_perm_set_t *fspset)
 {
-	fs_perm_node_t *node = uu_list_first(fspset->fsps_list);
-
-	while (node != NULL) {
-		fs_perm_node_t *next_node =
-		    uu_list_next(fspset->fsps_list, node);
+	fs_perm_node_t *node;
+	while ((node = list_remove_head(&fspset->fsps_list)) != NULL) {
 		fs_perm_t *fsperm = &node->fspn_fsperm;
 		fs_perm_fini(fsperm);
-		uu_list_remove(fspset->fsps_list, node);
 		free(node);
-		node = next_node;
 	}
-
-	uu_avl_pool_destroy(fspset->fsps_named_set_avl_pool);
-	uu_avl_pool_destroy(fspset->fsps_who_perm_avl_pool);
-	uu_avl_pool_destroy(fspset->fsps_deleg_perm_avl_pool);
+	list_destroy(&fspset->fsps_list);
 }
 
 static inline void
@@ -5618,14 +5548,11 @@ static inline void
 who_perm_init(who_perm_t *who_perm, fs_perm_t *fsperm,
     zfs_deleg_who_type_t type, const char *name)
 {
-	uu_avl_pool_t	*pool;
-	pool = fsperm->fsp_set->fsps_deleg_perm_avl_pool;
-
 	memset(who_perm, 0, sizeof (who_perm_t));
 
-	if ((who_perm->who_deleg_perm_avl = uu_avl_create(pool, NULL,
-	    UU_DEFAULT)) == NULL)
-		nomem();
+	avl_create(&who_perm->who_deleg_perm_avl, deleg_perm_compare,
+	    sizeof (deleg_perm_node_t),
+	    offsetof(deleg_perm_node_t, dpn_avl_node));
 
 	who_perm->who_type = type;
 	who_perm->who_name = name;
@@ -5635,35 +5562,26 @@ who_perm_init(who_perm_t *who_perm, fs_perm_t *fsperm,
 static inline void
 who_perm_fini(who_perm_t *who_perm)
 {
-	deleg_perm_node_t *node = uu_avl_first(who_perm->who_deleg_perm_avl);
+	deleg_perm_node_t *node;
+	void *cookie = NULL;
 
-	while (node != NULL) {
-		deleg_perm_node_t *next_node =
-		    uu_avl_next(who_perm->who_deleg_perm_avl, node);
-
-		uu_avl_remove(who_perm->who_deleg_perm_avl, node);
+	while ((node = avl_destroy_nodes(&who_perm->who_deleg_perm_avl,
+	    &cookie)) != NULL) {
 		free(node);
-		node = next_node;
 	}
 
-	uu_avl_destroy(who_perm->who_deleg_perm_avl);
+	avl_destroy(&who_perm->who_deleg_perm_avl);
 }
 
 static inline void
 fs_perm_init(fs_perm_t *fsperm, fs_perm_set_t *fspset, const char *fsname)
 {
-	uu_avl_pool_t	*nset_pool = fspset->fsps_named_set_avl_pool;
-	uu_avl_pool_t	*who_pool = fspset->fsps_who_perm_avl_pool;
-
 	memset(fsperm, 0, sizeof (fs_perm_t));
 
-	if ((fsperm->fsp_sc_avl = uu_avl_create(nset_pool, NULL, UU_DEFAULT))
-	    == NULL)
-		nomem();
-
-	if ((fsperm->fsp_uge_avl = uu_avl_create(who_pool, NULL, UU_DEFAULT))
-	    == NULL)
-		nomem();
+	avl_create(&fsperm->fsp_sc_avl, who_perm_compare,
+	    sizeof (who_perm_node_t), offsetof(who_perm_node_t, who_avl_node));
+	avl_create(&fsperm->fsp_uge_avl, who_perm_compare,
+	    sizeof (who_perm_node_t), offsetof(who_perm_node_t, who_avl_node));
 
 	fsperm->fsp_set = fspset;
 	fsperm->fsp_name = fsname;
@@ -5672,46 +5590,41 @@ fs_perm_init(fs_perm_t *fsperm, fs_perm_set_t *fspset, const char *fsname)
 static inline void
 fs_perm_fini(fs_perm_t *fsperm)
 {
-	who_perm_node_t *node = uu_avl_first(fsperm->fsp_sc_avl);
-	while (node != NULL) {
-		who_perm_node_t *next_node = uu_avl_next(fsperm->fsp_sc_avl,
-		    node);
+	who_perm_node_t *node;
+	void *cookie = NULL;
+
+	while ((node = avl_destroy_nodes(&fsperm->fsp_sc_avl,
+	    &cookie)) != NULL) {
 		who_perm_t *who_perm = &node->who_perm;
 		who_perm_fini(who_perm);
-		uu_avl_remove(fsperm->fsp_sc_avl, node);
 		free(node);
-		node = next_node;
 	}
 
-	node = uu_avl_first(fsperm->fsp_uge_avl);
-	while (node != NULL) {
-		who_perm_node_t *next_node = uu_avl_next(fsperm->fsp_uge_avl,
-		    node);
+	cookie = NULL;
+	while ((node = avl_destroy_nodes(&fsperm->fsp_uge_avl,
+	    &cookie)) != NULL) {
 		who_perm_t *who_perm = &node->who_perm;
 		who_perm_fini(who_perm);
-		uu_avl_remove(fsperm->fsp_uge_avl, node);
 		free(node);
-		node = next_node;
 	}
 
-	uu_avl_destroy(fsperm->fsp_sc_avl);
-	uu_avl_destroy(fsperm->fsp_uge_avl);
+	avl_destroy(&fsperm->fsp_sc_avl);
+	avl_destroy(&fsperm->fsp_uge_avl);
 }
 
 static void
-set_deleg_perm_node(uu_avl_t *avl, deleg_perm_node_t *node,
+set_deleg_perm_node(avl_tree_t *avl, deleg_perm_node_t *node,
     zfs_deleg_who_type_t who_type, const char *name, char locality)
 {
-	uu_avl_index_t idx = 0;
+	avl_index_t idx = 0;
 
 	deleg_perm_node_t *found_node = NULL;
 	deleg_perm_t	*deleg_perm = &node->dpn_perm;
 
 	deleg_perm_init(deleg_perm, who_type, name);
 
-	if ((found_node = uu_avl_find(avl, node, NULL, &idx))
-	    == NULL)
-		uu_avl_insert(avl, node, idx);
+	if ((found_node = avl_find(avl, node, &idx)) == NULL)
+		avl_insert(avl, node, idx);
 	else {
 		node = found_node;
 		deleg_perm = &node->dpn_perm;
@@ -5736,20 +5649,17 @@ static inline int
 parse_who_perm(who_perm_t *who_perm, nvlist_t *nvl, char locality)
 {
 	nvpair_t *nvp = NULL;
-	fs_perm_set_t *fspset = who_perm->who_fsperm->fsp_set;
-	uu_avl_t *avl = who_perm->who_deleg_perm_avl;
+	avl_tree_t *avl = &who_perm->who_deleg_perm_avl;
 	zfs_deleg_who_type_t who_type = who_perm->who_type;
 
 	while ((nvp = nvlist_next_nvpair(nvl, nvp)) != NULL) {
 		const char *name = nvpair_name(nvp);
 		data_type_t type = nvpair_type(nvp);
-		uu_avl_pool_t *avl_pool = fspset->fsps_deleg_perm_avl_pool;
 		deleg_perm_node_t *node =
 		    safe_malloc(sizeof (deleg_perm_node_t));
 
 		VERIFY(type == DATA_TYPE_BOOLEAN);
 
-		uu_avl_node_init(node, &node->dpn_avl_node, avl_pool);
 		set_deleg_perm_node(avl, node, who_type, name, locality);
 	}
 
@@ -5760,13 +5670,11 @@ static inline int
 parse_fs_perm(fs_perm_t *fsperm, nvlist_t *nvl)
 {
 	nvpair_t *nvp = NULL;
-	fs_perm_set_t *fspset = fsperm->fsp_set;
 
 	while ((nvp = nvlist_next_nvpair(nvl, nvp)) != NULL) {
 		nvlist_t *nvl2 = NULL;
 		const char *name = nvpair_name(nvp);
-		uu_avl_t *avl = NULL;
-		uu_avl_pool_t *avl_pool = NULL;
+		avl_tree_t *avl = NULL;
 		zfs_deleg_who_type_t perm_type = name[0];
 		char perm_locality = name[1];
 		const char *perm_name = name + 3;
@@ -5782,8 +5690,7 @@ parse_fs_perm(fs_perm_t *fsperm, nvlist_t *nvl)
 		case ZFS_DELEG_CREATE_SETS:
 		case ZFS_DELEG_NAMED_SET:
 		case ZFS_DELEG_NAMED_SET_SETS:
-			avl_pool = fspset->fsps_named_set_avl_pool;
-			avl = fsperm->fsp_sc_avl;
+			avl = &fsperm->fsp_sc_avl;
 			break;
 		case ZFS_DELEG_USER:
 		case ZFS_DELEG_USER_SETS:
@@ -5791,8 +5698,7 @@ parse_fs_perm(fs_perm_t *fsperm, nvlist_t *nvl)
 		case ZFS_DELEG_GROUP_SETS:
 		case ZFS_DELEG_EVERYONE:
 		case ZFS_DELEG_EVERYONE_SETS:
-			avl_pool = fspset->fsps_who_perm_avl_pool;
-			avl = fsperm->fsp_uge_avl;
+			avl = &fsperm->fsp_uge_avl;
 			break;
 
 		default:
@@ -5803,14 +5709,12 @@ parse_fs_perm(fs_perm_t *fsperm, nvlist_t *nvl)
 		who_perm_node_t *node = safe_malloc(
 		    sizeof (who_perm_node_t));
 		who_perm = &node->who_perm;
-		uu_avl_index_t idx = 0;
+		avl_index_t idx = 0;
 
-		uu_avl_node_init(node, &node->who_avl_node, avl_pool);
 		who_perm_init(who_perm, fsperm, perm_type, perm_name);
 
-		if ((found_node = uu_avl_find(avl, node, NULL, &idx))
-		    == NULL) {
-			if (avl == fsperm->fsp_uge_avl) {
+		if ((found_node = avl_find(avl, node, &idx)) == NULL) {
+			if (avl == &fsperm->fsp_uge_avl) {
 				uid_t rid = 0;
 				struct passwd *p = NULL;
 				struct group *g = NULL;
@@ -5849,7 +5753,7 @@ parse_fs_perm(fs_perm_t *fsperm, nvlist_t *nvl)
 				}
 			}
 
-			uu_avl_insert(avl, node, idx);
+			avl_insert(avl, node, idx);
 		} else {
 			node = found_node;
 			who_perm = &node->who_perm;
@@ -5866,7 +5770,6 @@ static inline int
 parse_fs_perm_set(fs_perm_set_t *fspset, nvlist_t *nvl)
 {
 	nvpair_t *nvp = NULL;
-	uu_avl_index_t idx = 0;
 
 	while ((nvp = nvlist_next_nvpair(nvl, nvp)) != NULL) {
 		nvlist_t *nvl2 = NULL;
@@ -5879,10 +5782,6 @@ parse_fs_perm_set(fs_perm_set_t *fspset, nvlist_t *nvl)
 
 		VERIFY(DATA_TYPE_NVLIST == type);
 
-		uu_list_node_init(node, &node->fspn_list_node,
-		    fspset->fsps_list_pool);
-
-		idx = uu_list_numnodes(fspset->fsps_list);
 		fs_perm_init(fsperm, fspset, fsname);
 
 		if (nvpair_value_nvlist(nvp, &nvl2) != 0)
@@ -5890,7 +5789,7 @@ parse_fs_perm_set(fs_perm_set_t *fspset, nvlist_t *nvl)
 
 		(void) parse_fs_perm(fsperm, nvl2);
 
-		uu_list_insert(fspset->fsps_list, node, idx);
+		list_insert_tail(&fspset->fsps_list, node);
 	}
 
 	return (0);
@@ -6442,7 +6341,7 @@ construct_fsacl_list(boolean_t un, struct allow_opts *opts, nvlist_t **nvlp)
 }
 
 static void
-print_set_creat_perms(uu_avl_t *who_avl)
+print_set_creat_perms(avl_tree_t *who_avl)
 {
 	const char *sc_title[] = {
 		gettext("Permission sets:\n"),
@@ -6452,9 +6351,9 @@ print_set_creat_perms(uu_avl_t *who_avl)
 	who_perm_node_t *who_node = NULL;
 	int prev_weight = -1;
 
-	for (who_node = uu_avl_first(who_avl); who_node != NULL;
-	    who_node = uu_avl_next(who_avl, who_node)) {
-		uu_avl_t *avl = who_node->who_perm.who_deleg_perm_avl;
+	for (who_node = avl_first(who_avl); who_node != NULL;
+	    who_node = AVL_NEXT(who_avl, who_node)) {
+		avl_tree_t *avl = &who_node->who_perm.who_deleg_perm_avl;
 		zfs_deleg_who_type_t who_type = who_node->who_perm.who_type;
 		const char *who_name = who_node->who_perm.who_name;
 		int weight = who_type2weight(who_type);
@@ -6471,8 +6370,8 @@ print_set_creat_perms(uu_avl_t *who_avl)
 		else
 			(void) printf("\t%s ", who_name);
 
-		for (deleg_node = uu_avl_first(avl); deleg_node != NULL;
-		    deleg_node = uu_avl_next(avl, deleg_node)) {
+		for (deleg_node = avl_first(avl); deleg_node != NULL;
+		    deleg_node = AVL_NEXT(avl, deleg_node)) {
 			if (first) {
 				(void) printf("%s",
 				    deleg_node->dpn_perm.dp_name);
@@ -6487,28 +6386,24 @@ print_set_creat_perms(uu_avl_t *who_avl)
 }
 
 static void
-print_uge_deleg_perms(uu_avl_t *who_avl, boolean_t local, boolean_t descend,
+print_uge_deleg_perms(avl_tree_t *who_avl, boolean_t local, boolean_t descend,
     const char *title)
 {
 	who_perm_node_t *who_node = NULL;
 	boolean_t prt_title = B_TRUE;
-	uu_avl_walk_t *walk;
 
-	if ((walk = uu_avl_walk_start(who_avl, UU_WALK_ROBUST)) == NULL)
-		nomem();
-
-	while ((who_node = uu_avl_walk_next(walk)) != NULL) {
+	for (who_node = avl_first(who_avl); who_node != NULL;
+	    who_node = AVL_NEXT(who_avl, who_node)) {
 		const char *who_name = who_node->who_perm.who_name;
 		const char *nice_who_name = who_node->who_perm.who_ug_name;
-		uu_avl_t *avl = who_node->who_perm.who_deleg_perm_avl;
+		avl_tree_t *avl = &who_node->who_perm.who_deleg_perm_avl;
 		zfs_deleg_who_type_t who_type = who_node->who_perm.who_type;
 		char delim = ' ';
 		deleg_perm_node_t *deleg_node;
 		boolean_t prt_who = B_TRUE;
 
-		for (deleg_node = uu_avl_first(avl);
-		    deleg_node != NULL;
-		    deleg_node = uu_avl_next(avl, deleg_node)) {
+		for (deleg_node = avl_first(avl); deleg_node != NULL;
+		    deleg_node = AVL_NEXT(avl, deleg_node)) {
 			if (local != deleg_node->dpn_perm.dp_local ||
 			    descend != deleg_node->dpn_perm.dp_descend)
 				continue;
@@ -6558,8 +6453,6 @@ print_uge_deleg_perms(uu_avl_t *who_avl, boolean_t local, boolean_t descend,
 		if (!prt_who)
 			(void) printf("\n");
 	}
-
-	uu_avl_walk_end(walk);
 }
 
 static void
@@ -6569,10 +6462,10 @@ print_fs_perms(fs_perm_set_t *fspset)
 	char buf[MAXNAMELEN + 32];
 	const char *dsname = buf;
 
-	for (node = uu_list_first(fspset->fsps_list); node != NULL;
-	    node = uu_list_next(fspset->fsps_list, node)) {
-		uu_avl_t *sc_avl = node->fspn_fsperm.fsp_sc_avl;
-		uu_avl_t *uge_avl = node->fspn_fsperm.fsp_uge_avl;
+	for (node = list_head(&fspset->fsps_list); node != NULL;
+	    node = list_next(&fspset->fsps_list, node)) {
+		avl_tree_t *sc_avl = &node->fspn_fsperm.fsp_sc_avl;
+		avl_tree_t *uge_avl = &node->fspn_fsperm.fsp_uge_avl;
 		int left = 0;
 
 		(void) snprintf(buf, sizeof (buf),
@@ -6594,7 +6487,7 @@ print_fs_perms(fs_perm_set_t *fspset)
 	}
 }
 
-static fs_perm_set_t fs_perm_set = { NULL, NULL, NULL, NULL };
+static fs_perm_set_t fs_perm_set = {};
 
 struct deleg_perms {
 	boolean_t un;
@@ -7454,15 +7347,14 @@ append_options(char *mntopts, char *newopts)
 static enum sa_protocol
 sa_protocol_decode(const char *protocol)
 {
-	for (enum sa_protocol i = 0; i < ARRAY_SIZE(sa_protocol_names); ++i)
-		if (strcmp(protocol, sa_protocol_names[i]) == 0)
+	for (enum sa_protocol i = 0; i < SA_PROTOCOL_COUNT; ++i)
+		if (strcmp(protocol, zfs_share_protocol_name(i)) == 0)
 			return (i);
 
 	(void) fputs(gettext("share type must be one of: "), stderr);
-	for (enum sa_protocol i = 0;
-	    i < ARRAY_SIZE(sa_protocol_names); ++i)
+	for (enum sa_protocol i = 0; i < SA_PROTOCOL_COUNT; ++i)
 		(void) fprintf(stderr, "%s%s",
-		    i != 0 ? ", " : "", sa_protocol_names[i]);
+		    i != 0 ? ", " : "", zfs_share_protocol_name(i));
 	(void) fputc('\n', stderr);
 	usage(B_FALSE);
 }
@@ -7726,17 +7618,16 @@ zfs_do_share(int argc, char **argv)
 typedef struct unshare_unmount_node {
 	zfs_handle_t	*un_zhp;
 	char		*un_mountp;
-	uu_avl_node_t	un_avlnode;
+	avl_node_t	un_avlnode;
 } unshare_unmount_node_t;
 
 static int
-unshare_unmount_compare(const void *larg, const void *rarg, void *unused)
+unshare_unmount_compare(const void *larg, const void *rarg)
 {
-	(void) unused;
 	const unshare_unmount_node_t *l = larg;
 	const unshare_unmount_node_t *r = rarg;
 
-	return (strcmp(l->un_mountp, r->un_mountp));
+	return (TREE_ISIGN(strcmp(l->un_mountp, r->un_mountp)));
 }
 
 /*
@@ -7918,11 +7809,9 @@ unshare_unmount(int op, int argc, char **argv)
 		 */
 		FILE *mnttab;
 		struct mnttab entry;
-		uu_avl_pool_t *pool;
-		uu_avl_t *tree = NULL;
+		avl_tree_t tree;
 		unshare_unmount_node_t *node;
-		uu_avl_index_t idx;
-		uu_avl_walk_t *walk;
+		avl_index_t idx;
 		enum sa_protocol *protocol = NULL,
 		    single_protocol[] = {SA_NO_PROTOCOL, SA_NO_PROTOCOL};
 
@@ -7938,16 +7827,12 @@ unshare_unmount(int op, int argc, char **argv)
 			usage(B_FALSE);
 		}
 
-		if (((pool = uu_avl_pool_create("unmount_pool",
+		avl_create(&tree, unshare_unmount_compare,
 		    sizeof (unshare_unmount_node_t),
-		    offsetof(unshare_unmount_node_t, un_avlnode),
-		    unshare_unmount_compare, UU_DEFAULT)) == NULL) ||
-		    ((tree = uu_avl_create(pool, NULL, UU_DEFAULT)) == NULL))
-			nomem();
+		    offsetof(unshare_unmount_node_t, un_avlnode));
 
 		if ((mnttab = fopen(MNTTAB, "re")) == NULL) {
-			uu_avl_destroy(tree);
-			uu_avl_pool_destroy(pool);
+			avl_destroy(&tree);
 			return (ENOENT);
 		}
 
@@ -8012,10 +7897,8 @@ unshare_unmount(int op, int argc, char **argv)
 			node->un_zhp = zhp;
 			node->un_mountp = safe_strdup(entry.mnt_mountp);
 
-			uu_avl_node_init(node, &node->un_avlnode, pool);
-
-			if (uu_avl_find(tree, node, NULL, &idx) == NULL) {
-				uu_avl_insert(tree, node, idx);
+			if (avl_find(&tree, node, &idx) == NULL) {
+				avl_insert(&tree, node, idx);
 			} else {
 				zfs_close(node->un_zhp);
 				free(node->un_mountp);
@@ -8028,14 +7911,10 @@ unshare_unmount(int op, int argc, char **argv)
 		 * Walk the AVL tree in reverse, unmounting each filesystem and
 		 * removing it from the AVL tree in the process.
 		 */
-		if ((walk = uu_avl_walk_start(tree,
-		    UU_WALK_REVERSE | UU_WALK_ROBUST)) == NULL)
-			nomem();
-
-		while ((node = uu_avl_walk_next(walk)) != NULL) {
+		while ((node = avl_last(&tree)) != NULL) {
 			const char *mntarg = NULL;
 
-			uu_avl_remove(tree, node);
+			avl_remove(&tree, node);
 			switch (op) {
 			case OP_SHARE:
 				if (zfs_unshare(node->un_zhp,
@@ -8058,9 +7937,7 @@ unshare_unmount(int op, int argc, char **argv)
 		if (op == OP_SHARE)
 			zfs_commit_shares(protocol);
 
-		uu_avl_walk_end(walk);
-		uu_avl_destroy(tree);
-		uu_avl_pool_destroy(pool);
+		avl_destroy(&tree);
 
 	} else {
 		if (argc != 1) {
@@ -9203,10 +9080,16 @@ zfs_do_rewrite(int argc, char **argv)
 	zfs_rewrite_args_t args;
 	memset(&args, 0, sizeof (args));
 
-	while ((c = getopt(argc, argv, "Pl:o:rvx")) != -1) {
+	while ((c = getopt(argc, argv, "CPSl:o:rvx")) != -1) {
 		switch (c) {
+		case 'C':
+			args.flags |= ZFS_REWRITE_SKIP_BRT;
+			break;
 		case 'P':
 			args.flags |= ZFS_REWRITE_PHYSICAL;
+			break;
+		case 'S':
+			args.flags |= ZFS_REWRITE_SKIP_SNAPSHOT;
 			break;
 		case 'l':
 			args.len = strtoll(optarg, NULL, 0);
@@ -9402,7 +9285,7 @@ zfs_do_help(int argc, char **argv)
 
 	execlp("man", "man", page, NULL);
 
-	fprintf(stderr, "couldn't run man program: %s", strerror(errno));
+	fprintf(stderr, "couldn't run man program: %s\n", strerror(errno));
 	return (-1);
 }
 

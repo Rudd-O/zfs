@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: CDDL-1.0
 zpool_CFLAGS  = $(AM_CFLAGS)
 zpool_CFLAGS += $(LIBBLKID_CFLAGS) $(LIBUUID_CFLAGS)
 
@@ -28,7 +29,6 @@ zpool_LDADD = \
 	libzfs.la \
 	libzfs_core.la \
 	libnvpair.la \
-	libuutil.la \
 	libzutil.la
 
 zpool_LDADD += $(LTLIBINTL)

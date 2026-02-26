@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: CDDL-1.0
 scripts_zfs_tests_bindir = $(datadir)/$(PACKAGE)/zfs-tests/bin
 
 
@@ -27,8 +28,7 @@ scripts_zfs_tests_bin_PROGRAMS += %D%/btree_test
 %C%_btree_test_CPPFLAGS = $(AM_CPPFLAGS) $(LIBZPOOL_CPPFLAGS)
 %C%_btree_test_LDADD = \
 	libzpool.la \
-	libzfs_core.la
-
+	libbtree.la
 
 scripts_zfs_tests_bin_PROGRAMS += %D%/crypto_test
 %C%_crypto_test_SOURCES = %D%/crypto_test.c
@@ -60,7 +60,6 @@ scripts_zfs_tests_bin_PROGRAMS += %D%/file_append %D%/file_check %D%/file_trunc 
 
 
 scripts_zfs_tests_bin_PROGRAMS += %D%/libzfs_input_check
-%C%_libzfs_input_check_CPPFLAGS = $(AM_CPPFLAGS) -I$(top_srcdir)/include/os/@ac_system_l@/zfs
 %C%_libzfs_input_check_LDADD = \
 	libzfs_core.la \
 	libnvpair.la
@@ -117,9 +116,7 @@ scripts_zfs_tests_bin_PROGRAMS += %D%/edonr_test %D%/skein_test \
 %C%_edonr_test_SOURCES = %D%/checksum/edonr_test.c
 %C%_blake3_test_SOURCES = %D%/checksum/blake3_test.c
 %C%_skein_test_LDADD = \
-	libicp.la \
-	libspl.la \
-	libspl_assert.la
+	libzpool.la
 %C%_sha2_test_LDADD  = $(%C%_skein_test_LDADD)
 %C%_edonr_test_LDADD = $(%C%_skein_test_LDADD)
 %C%_blake3_test_LDADD = $(%C%_skein_test_LDADD)
@@ -132,6 +129,7 @@ scripts_zfs_tests_bin_PROGRAMS += %D%/statx
 scripts_zfs_tests_bin_PROGRAMS += %D%/xattrtest
 scripts_zfs_tests_bin_PROGRAMS += %D%/zed_fd_spill-zedlet
 scripts_zfs_tests_bin_PROGRAMS += %D%/idmap_util
+scripts_zfs_tests_bin_PROGRAMS += %D%/setlease
 
 %C%_idmap_util_LDADD = libspl.la
 

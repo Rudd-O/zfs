@@ -29,7 +29,7 @@
  * Copyright 2017 Joyent, Inc.
  * Copyright (c) 2017, Intel Corporation.
  * Copyright (c) 2019, Allan Jude
- * Copyright (c) 2019, Klara Inc.
+ * Copyright (c) 2019, 2025, Klara, Inc.
  * Copyright (c) 2019, Datto Inc.
  */
 
@@ -867,10 +867,14 @@ uint_t spa_acq_allocator(spa_t *spa);
 void spa_rel_allocator(spa_t *spa, uint_t allocator);
 void spa_select_allocator(zio_t *zio);
 
-/* spa namespace global mutex */
-extern kmutex_t spa_namespace_lock;
-extern avl_tree_t spa_namespace_avl;
-extern kcondvar_t spa_namespace_cv;
+/* spa namespace global lock */
+extern void spa_namespace_enter(const void *tag);
+extern boolean_t spa_namespace_tryenter(const void *tag);
+extern int spa_namespace_enter_interruptible(const void *tag);
+extern void spa_namespace_exit(const void *tag);
+extern boolean_t spa_namespace_held(void);
+extern void spa_namespace_wait(void);
+extern void spa_namespace_broadcast(void);
 
 /*
  * SPA configuration functions in spa_config.c
@@ -1073,6 +1077,7 @@ extern void spa_set_rootblkptr(spa_t *spa, const blkptr_t *bp);
 extern void spa_altroot(spa_t *, char *, size_t);
 extern uint32_t spa_sync_pass(spa_t *spa);
 extern char *spa_name(spa_t *spa);
+extern char *spa_load_name(spa_t *spa);
 extern uint64_t spa_guid(spa_t *spa);
 extern uint64_t spa_load_guid(spa_t *spa);
 extern uint64_t spa_last_synced_txg(spa_t *spa);
@@ -1123,9 +1128,9 @@ extern void spa_set_allocator(spa_t *spa, const char *allocator);
 
 /* Miscellaneous support routines */
 extern void spa_load_failed(spa_t *spa, const char *fmt, ...)
-    __attribute__((format(printf, 2, 3)));
+    __attribute__((format(__printf__, 2, 3)));
 extern void spa_load_note(spa_t *spa, const char *fmt, ...)
-    __attribute__((format(printf, 2, 3)));
+    __attribute__((format(__printf__, 2, 3)));
 extern void spa_activate_mos_feature(spa_t *spa, const char *feature,
     dmu_tx_t *tx);
 extern void spa_deactivate_mos_feature(spa_t *spa, const char *feature);

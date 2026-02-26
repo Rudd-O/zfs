@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: CDDL-1.0
 sbin_PROGRAMS   += zfs
 CPPCHECKTARGETS += zfs
 
@@ -12,8 +13,7 @@ zfs_SOURCES = \
 zfs_LDADD = \
 	libzfs.la \
 	libzfs_core.la \
-	libnvpair.la \
-	libuutil.la
+	libnvpair.la
 
 zfs_LDADD += $(LTLIBINTL)
 

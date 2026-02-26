@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: CDDL-1.0
 libzutil_la_CFLAGS  = $(AM_CFLAGS) $(LIBRARY_CFLAGS)
 libzutil_la_CFLAGS += $(LIBBLKID_CFLAGS) $(LIBUDEV_CFLAGS)
 libzutil_la_CFLAGS += -fvisibility=hidden
@@ -30,7 +31,6 @@ endif
 
 libzutil_la_LIBADD = \
 	libavl.la \
-	libtpool.la \
 	libnvpair.la \
 	libspl.la
 

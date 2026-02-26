@@ -43,19 +43,24 @@ case "$OS" in
     OSv="almalinux9"
     URL="https://repo.almalinux.org/almalinux/10/cloud/x86_64/images/AlmaLinux-10-GenericCloud-latest.x86_64.qcow2"
     ;;
+  alpine3-23)
+    OSNAME="Alpine Linux 3.23.2"
+    # Alpine Linux v3.22 and v3.23 are unknown to osinfo as of 2025-12-26.
+    OSv="alpinelinux3.21"
+    URL="https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/cloud/generic_alpine-3.23.2-x86_64-bios-cloudinit-r0.qcow2"
+    ;;
   archlinux)
     OSNAME="Archlinux"
     URL="https://geo.mirror.pkgbuild.com/images/latest/Arch-Linux-x86_64-cloudimg.qcow2"
     ;;
-  centos-stream10)
-    OSNAME="CentOS Stream 10"
-    # TODO: #16903 Overwrite OSv to stream9 for virt-install until it's added to osinfo
-    OSv="centos-stream9"
-    URL="https://cloud.centos.org/centos/10-stream/x86_64/images/CentOS-Stream-GenericCloud-10-latest.x86_64.qcow2"
-    ;;
   centos-stream9)
     OSNAME="CentOS Stream 9"
     URL="https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2"
+    ;;
+  centos-stream10)
+    OSNAME="CentOS Stream 10"
+    OSv="centos-stream9"
+    URL="https://cloud.centos.org/centos/10-stream/x86_64/images/CentOS-Stream-GenericCloud-10-latest.x86_64.qcow2"
     ;;
   debian11)
     OSNAME="Debian 11"
@@ -73,15 +78,15 @@ case "$OS" in
     OPTS[0]="--boot"
     OPTS[1]="uefi=on"
     ;;
-  fedora41)
-    OSNAME="Fedora 41"
-    OSv="fedora-unknown"
-    URL="https://download.fedoraproject.org/pub/fedora/linux/releases/41/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-41-1.4.x86_64.qcow2"
-    ;;
   fedora42)
     OSNAME="Fedora 42"
     OSv="fedora-unknown"
     URL="https://download.fedoraproject.org/pub/fedora/linux/releases/42/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-42-1.1.x86_64.qcow2"
+    ;;
+  fedora43)
+    OSNAME="Fedora 43"
+    OSv="fedora-unknown"
+    URL="https://download.fedoraproject.org/pub/fedora/linux/releases/43/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-43-1.6.x86_64.qcow2"
     ;;
   freebsd13-5r)
     FreeBSD="13.5-RELEASE"
@@ -90,13 +95,6 @@ case "$OS" in
     URLxz="$FREEBSD_REL/$FreeBSD/amd64/Latest/FreeBSD-$FreeBSD-amd64-BASIC-CI.raw.xz"
     KSRC="$FREEBSD_REL/../amd64/$FreeBSD/src.txz"
     NIC="rtl8139"
-    ;;
-  freebsd14-2r)
-    FreeBSD="14.2-RELEASE"
-    OSNAME="FreeBSD $FreeBSD"
-    OSv="freebsd14.0"
-    KSRC="$FREEBSD_REL/../amd64/$FreeBSD/src.txz"
-    URLxz="$FREEBSD_REL/$FreeBSD/amd64/Latest/FreeBSD-$FreeBSD-amd64-BASIC-CI.raw.xz"
     ;;
   freebsd14-3r)
     FreeBSD="14.3-RELEASE"
@@ -120,8 +118,8 @@ case "$OS" in
     URLxz="$FREEBSD_SNAP/$FreeBSD/amd64/Latest/FreeBSD-$FreeBSD-amd64-BASIC-CI-ufs.raw.xz"
     KSRC="$FREEBSD_SNAP/../amd64/$FreeBSD/src.txz"
     ;;
-  freebsd15-0c)
-    FreeBSD="15.0-ALPHA4"
+  freebsd15-0s)
+    FreeBSD="15.0-STABLE"
     OSNAME="FreeBSD $FreeBSD"
     OSv="freebsd14.0"
     URLxz="$FREEBSD_SNAP/$FreeBSD/amd64/Latest/FreeBSD-$FreeBSD-amd64-BASIC-CI-ufs.raw.xz"
@@ -219,13 +217,21 @@ if [ ${OS:0:7} != "freebsd" ]; then
 hostname: $OS
 
 users:
-- name: root
-  shell: $BASH
-- name: zfs
-  sudo: ALL=(ALL) NOPASSWD:ALL
-  shell: $BASH
-  ssh_authorized_keys:
-    - $PUBKEY
+  - name: root
+    shell: /bin/bash
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+  - name: zfs
+    shell: /bin/bash
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+    ssh_authorized_keys:
+      - $PUBKEY
+    # Workaround for Alpine Linux.
+    lock_passwd: false
+    passwd: '*'
+
+packages:
+  - sudo
+  - bash
 
 growpart:
   mode: auto
@@ -307,4 +313,24 @@ else
   ssh root@vm0 'service sshd restart'
   scp ~/src.txz "root@vm0:/tmp/src.txz"
   ssh root@vm0 'tar -C / -zxf /tmp/src.txz'
+fi
+
+#
+# Config for Alpine Linux similar to FreeBSD.
+#
+if [ ${OS:0:6} == "alpine" ]; then
+  while pidof /usr/bin/qemu-system-x86_64 >/dev/null; do
+    ssh 2>/dev/null zfs@vm0 "uname -a" && break
+  done
+  # Enable community and testing repositories.
+  ssh zfs@vm0 "sudo rm -rf /etc/apk/repositories"
+  ssh zfs@vm0 "sudo setup-apkrepos -c1"
+  ssh zfs@vm0 "echo '@testing http://dl-cdn.alpinelinux.org/alpine/edge/testing' | sudo tee -a /etc/apk/repositories"
+  # Upgrade to edge or latest-stable.
+  #ssh zfs@vm0 "sudo sed -i 's#/v[0-9]\+\.[0-9]\+/#/edge/#g' /etc/apk/repositories"
+  #ssh zfs@vm0 "sudo sed -i 's#/v[0-9]\+\.[0-9]\+/#/latest-stable/#g' /etc/apk/repositories"
+  # Update and upgrade after repository setup.
+  ssh zfs@vm0 "sudo apk update"
+  ssh zfs@vm0 "sudo apk add --upgrade apk-tools"
+  ssh zfs@vm0 "sudo apk upgrade --available"
 fi

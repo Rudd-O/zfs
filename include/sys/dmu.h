@@ -126,7 +126,7 @@ typedef enum dmu_object_byteswap {
 	(ot) < DMU_OT_NUMTYPES)
 
 #define	DMU_OT_IS_METADATA_CACHED(ot) (((ot) & DMU_OT_NEWTYPE) ? \
-	B_TRUE : dmu_ot[(ot)].ot_dbuf_metadata_cache)
+	((ot) & DMU_OT_METADATA) != 0 : dmu_ot[(ot)].ot_dbuf_metadata_cache)
 
 /*
  * MDB doesn't have dmu_ot; it defines these macros itself.
@@ -573,6 +573,7 @@ typedef enum dmu_flags {
 	DMU_PARTIAL_FIRST	= 1 << 7, /* First partial access. */
 	DMU_PARTIAL_MORE	= 1 << 8, /* Following partial access. */
 	DMU_KEEP_CACHING	= 1 << 9, /* Don't affect caching. */
+	DMU_IS_PREFETCH		= 1 << 10, /* This read is a prefetch. */
 } dmu_flags_t;
 
 /*
@@ -625,7 +626,7 @@ int dmu_buf_hold(objset_t *os, uint64_t object, uint64_t offset,
     const void *tag, dmu_buf_t **, dmu_flags_t flags);
 int dmu_buf_hold_array(objset_t *os, uint64_t object, uint64_t offset,
     uint64_t length, int read, const void *tag, int *numbufsp,
-    dmu_buf_t ***dbpp);
+    dmu_buf_t ***dbpp, dmu_flags_t flags);
 int dmu_buf_hold_noread(objset_t *os, uint64_t object, uint64_t offset,
     const void *tag, dmu_buf_t **dbp);
 int dmu_buf_hold_by_dnode(dnode_t *dn, uint64_t offset,
@@ -668,7 +669,7 @@ uint64_t dmu_buf_user_refcount(dmu_buf_t *db);
  */
 int dmu_buf_hold_array_by_bonus(dmu_buf_t *db, uint64_t offset,
     uint64_t length, boolean_t read, const void *tag,
-    int *numbufsp, dmu_buf_t ***dbpp);
+    int *numbufsp, dmu_buf_t ***dbpp, dmu_flags_t flags);
 void dmu_buf_rele_array(dmu_buf_t **, int numbufs, const void *tag);
 
 typedef void dmu_buf_evict_func_t(void *user_ptr);
@@ -924,7 +925,7 @@ int dmu_read(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
 int dmu_read_by_dnode(dnode_t *dn, uint64_t offset, uint64_t size, void *buf,
     dmu_flags_t flags);
 void dmu_write(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
-    const void *buf, dmu_tx_t *tx);
+    const void *buf, dmu_tx_t *tx, dmu_flags_t flags);
 int dmu_write_by_dnode(dnode_t *dn, uint64_t offset, uint64_t size,
     const void *buf, dmu_tx_t *tx, dmu_flags_t flags);
 void dmu_prealloc(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,

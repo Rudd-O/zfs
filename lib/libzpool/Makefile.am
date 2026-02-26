@@ -1,8 +1,10 @@
+# SPDX-License-Identifier: CDDL-1.0
+include $(srcdir)/%D%/include/Makefile.am
+
 libzpool_la_CFLAGS  = $(AM_CFLAGS) $(KERNEL_CFLAGS) $(LIBRARY_CFLAGS)
 libzpool_la_CFLAGS += $(ZLIB_CFLAGS)
 
 libzpool_la_CPPFLAGS  = $(AM_CPPFLAGS) $(LIBZPOOL_CPPFLAGS)
-libzpool_la_CPPFLAGS += -I$(srcdir)/include/os/@ac_system_l@/zfs
 libzpool_la_CPPFLAGS += -DLIB_ZPOOL_BUILD
 
 lib_LTLIBRARIES += libzpool.la
@@ -12,7 +14,6 @@ dist_libzpool_la_SOURCES = \
 	%D%/abd_os.c \
 	%D%/arc_os.c \
 	%D%/kernel.c \
-	%D%/taskq.c \
 	%D%/util.c \
 	%D%/vdev_label_os.c \
 	%D%/zfs_racct.c \
@@ -73,7 +74,6 @@ nodist_libzpool_la_SOURCES = \
 	module/zfs/bpobj.c \
 	module/zfs/bptree.c \
 	module/zfs/bqueue.c \
-	module/zfs/btree.c \
 	module/zfs/brt.c \
 	module/zfs/dbuf.c \
 	module/zfs/dbuf_stats.c \
@@ -118,7 +118,6 @@ nodist_libzpool_la_SOURCES = \
 	module/zfs/multilist.c \
 	module/zfs/objlist.c \
 	module/zfs/pathname.c \
-	module/zfs/range_tree.c \
 	module/zfs/refcount.c \
 	module/zfs/rrwlock.c \
 	module/zfs/sa.c \
@@ -135,6 +134,7 @@ nodist_libzpool_la_SOURCES = \
 	module/zfs/space_map.c \
 	module/zfs/space_reftree.c \
 	module/zfs/txg.c \
+	module/zfs/u8_textprep.c \
 	module/zfs/uberblock.c \
 	module/zfs/unique.c \
 	module/zfs/vdev.c \
@@ -180,6 +180,7 @@ nodist_libzpool_la_SOURCES = \
 	module/zfs/zfs_crrd.c \
 	module/zfs/zfs_fm.c \
 	module/zfs/zfs_fuid.c \
+	module/zfs/zfs_impl.c \
 	module/zfs/zfs_ratelimit.c \
 	module/zfs/zfs_rlock.c \
 	module/zfs/zfs_sa.c \
@@ -193,9 +194,17 @@ nodist_libzpool_la_SOURCES = \
 	module/zfs/zrlock.c \
 	module/zfs/zthr.c
 
+# Special case:
+#
+# We need to include btree.c and range_tree.c as SOURCES rather than
+# LIBADD'ing them.  This is because  LIBADD'ing them will add their symbols to
+# the libzpool API, which we do not want at this time.
+nodist_libzpool_la_SOURCES += \
+	module/zfs/btree.c \
+	module/zfs/range_tree.c
+
 libzpool_la_LIBADD = \
 	libicp.la \
-	libunicode.la \
 	libnvpair.la \
 	libzstd.la \
 	libzutil.la
@@ -212,7 +221,7 @@ if BUILD_FREEBSD
 libzpool_la_LIBADD += -lgeom
 endif
 
-libzpool_la_LDFLAGS += -version-info 6:0:0
+libzpool_la_LDFLAGS += -version-info 7:0:0
 
 if TARGET_CPU_POWERPC
 module/zfs/libzpool_la-vdev_raidz_math_powerpc_altivec.$(OBJEXT) : CFLAGS += -maltivec

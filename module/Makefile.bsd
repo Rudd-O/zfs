@@ -62,11 +62,6 @@ CFLAGS+= -DZFS_DEBUG -g
 CFLAGS += -DNDEBUG
 .endif
 
-.if defined(WITH_VFS_DEBUG) && ${WITH_VFS_DEBUG} == "true"
-# kernel must also be built with this option for this to work
-CFLAGS+= -DDEBUG_VFS_LOCKS
-.endif
-
 .if defined(WITH_GCOV) && ${WITH_GCOV} == "true"
 CFLAGS+=	 -fprofile-arcs -ftest-coverage
 .endif
@@ -230,9 +225,6 @@ SRCS+=	abd_os.c \
 	zio_crypt.c \
 	zvol_os.c
 
-#unicode
-SRCS+= 	u8_textprep.c
-
 #zcommon
 SRCS+=	cityhash.c \
 	zfeature_common.c \
@@ -322,6 +314,7 @@ SRCS+=	abd.c \
 	spa_misc.c \
 	spa_stats.c \
 	txg.c \
+	u8_textprep.c \
 	uberblock.c \
 	unique.c \
 	vdev.c \
@@ -391,7 +384,6 @@ SRCS+=	entropy_common.c \
 	error_private.c \
 	fse_decompress.c \
 	pool.c \
-	xxhash.c \
 	zstd_common.c \
 
 #zstd/compress
@@ -406,7 +398,8 @@ SRCS+=	fse_compress.c \
 	zstd_fast.c \
 	zstd_lazy.c \
 	zstd_ldm.c \
-	zstd_opt.c
+	zstd_opt.c \
+	zstd_preSplit.c
 
 #zstd/decompress
 SRCS+=	huf_decompress.c \
@@ -521,30 +514,6 @@ CFLAGS.zstd_ldm.c= -U__BMI__ -fno-tree-vectorize ${NO_WBITWISE_INSTEAD_OF_LOGICA
 CFLAGS.zstd_opt.c= -U__BMI__ -fno-tree-vectorize ${NO_WBITWISE_INSTEAD_OF_LOGICAL}
 
 .if ${MACHINE_ARCH} == "aarch64"
-__ZFS_ZSTD_AARCH64_FLAGS= -include ${SRCDIR}/zstd/include/aarch64_compat.h
-CFLAGS.zstd.c+= ${__ZFS_ZSTD_AARCH64_FLAGS}
-CFLAGS.entropy_common.c+= ${__ZFS_ZSTD_AARCH64_FLAGS}
-CFLAGS.error_private.c+= ${__ZFS_ZSTD_AARCH64_FLAGS}
-CFLAGS.fse_compress.c+= ${__ZFS_ZSTD_AARCH64_FLAGS}
-CFLAGS.fse_decompress.c+= ${__ZFS_ZSTD_AARCH64_FLAGS}
-CFLAGS.hist.c+= ${__ZFS_ZSTD_AARCH64_FLAGS}
-CFLAGS.huf_compress.c+= ${__ZFS_ZSTD_AARCH64_FLAGS}
-CFLAGS.huf_decompress.c+= ${__ZFS_ZSTD_AARCH64_FLAGS}
-CFLAGS.pool.c+= ${__ZFS_ZSTD_AARCH64_FLAGS}
-CFLAGS.xxhash.c+= ${__ZFS_ZSTD_AARCH64_FLAGS}
-CFLAGS.zstd_common.c+= ${__ZFS_ZSTD_AARCH64_FLAGS}
-CFLAGS.zstd_compress.c+= ${__ZFS_ZSTD_AARCH64_FLAGS}
-CFLAGS.zstd_compress_literals.c+= ${__ZFS_ZSTD_AARCH64_FLAGS}
-CFLAGS.zstd_compress_sequences.c+= ${__ZFS_ZSTD_AARCH64_FLAGS}
-CFLAGS.zstd_compress_superblock.c+= ${__ZFS_ZSTD_AARCH64_FLAGS}
-CFLAGS.zstd_ddict.c+= ${__ZFS_ZSTD_AARCH64_FLAGS}
-CFLAGS.zstd_decompress.c+= ${__ZFS_ZSTD_AARCH64_FLAGS}
-CFLAGS.zstd_decompress_block.c+= ${__ZFS_ZSTD_AARCH64_FLAGS}
-CFLAGS.zstd_double_fast.c+= ${__ZFS_ZSTD_AARCH64_FLAGS}
-CFLAGS.zstd_fast.c+= ${__ZFS_ZSTD_AARCH64_FLAGS}
-CFLAGS.zstd_lazy.c+= ${__ZFS_ZSTD_AARCH64_FLAGS}
-CFLAGS.zstd_ldm.c+= ${__ZFS_ZSTD_AARCH64_FLAGS}
-CFLAGS.zstd_opt.c+= ${__ZFS_ZSTD_AARCH64_FLAGS}
 
 sha256-armv8.o: sha256-armv8.S
 	${CC} -c ${CFLAGS:N-mgeneral-regs-only} ${WERROR} ${.IMPSRC} \

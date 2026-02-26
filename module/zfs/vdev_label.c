@@ -862,8 +862,8 @@ retry:
 		}
 	}
 
-	if (config == NULL && !(flags & ZIO_FLAG_TRYHARD)) {
-		flags |= ZIO_FLAG_TRYHARD;
+	if (config == NULL && !(flags & ZIO_FLAG_IO_RETRY)) {
+		flags |= ZIO_FLAG_IO_RETRY;
 		goto retry;
 	}
 
@@ -1079,7 +1079,8 @@ vdev_label_init(vdev_t *vd, uint64_t crtxg, vdev_labeltype_t reason)
 	size_t buflen;
 	int error;
 	uint64_t spare_guid = 0, l2cache_guid = 0;
-	int flags = ZIO_FLAG_CONFIG_WRITER | ZIO_FLAG_CANFAIL;
+	int flags = ZIO_FLAG_CONFIG_WRITER | ZIO_FLAG_CANFAIL |
+	    ZIO_FLAG_TRYHARD;
 	boolean_t reason_spare = (reason == VDEV_LABEL_SPARE || (reason ==
 	    VDEV_LABEL_REMOVE && vd->vdev_isspare));
 	boolean_t reason_l2cache = (reason == VDEV_LABEL_L2CACHE || (reason ==
@@ -1223,7 +1224,6 @@ vdev_label_init(vdev_t *vd, uint64_t crtxg, vdev_labeltype_t reason)
 	/*
 	 * Write everything in parallel.
 	 */
-retry:
 	zio = zio_root(spa, NULL, NULL, flags);
 
 	for (int l = 0; l < VDEV_LABELS; l++) {
@@ -1247,11 +1247,6 @@ retry:
 	}
 
 	error = zio_wait(zio);
-
-	if (error != 0 && !(flags & ZIO_FLAG_TRYHARD)) {
-		flags |= ZIO_FLAG_TRYHARD;
-		goto retry;
-	}
 
 	nvlist_free(label);
 	abd_free(bootenv);
@@ -1398,7 +1393,8 @@ vdev_label_write_bootenv(vdev_t *vd, nvlist_t *env)
 	zio_t *zio;
 	spa_t *spa = vd->vdev_spa;
 	vdev_boot_envblock_t *bootenv;
-	int flags = ZIO_FLAG_CONFIG_WRITER | ZIO_FLAG_CANFAIL;
+	int flags = ZIO_FLAG_CONFIG_WRITER | ZIO_FLAG_CANFAIL |
+	    ZIO_FLAG_TRYHARD;
 	int error;
 	size_t nvsize;
 	char *nvbuf;
@@ -1466,7 +1462,6 @@ vdev_label_write_bootenv(vdev_t *vd, nvlist_t *env)
 		return (SET_ERROR(error));
 	}
 
-retry:
 	zio = zio_root(spa, NULL, NULL, flags);
 	for (int l = 0; l < VDEV_LABELS; l++) {
 		vdev_label_write(zio, vd, l, abd,
@@ -1475,10 +1470,6 @@ retry:
 	}
 
 	error = zio_wait(zio);
-	if (error != 0 && !(flags & ZIO_FLAG_TRYHARD)) {
-		flags |= ZIO_FLAG_TRYHARD;
-		goto retry;
-	}
 
 	abd_free(abd);
 	return (error);
@@ -1500,7 +1491,7 @@ retry:
  * conflicting uberblocks on disk with the same txg.  The solution is simple:
  * among uberblocks with equal txg, choose the one with the latest timestamp.
  */
-static int
+int
 vdev_uberblock_compare(const uberblock_t *ub1, const uberblock_t *ub2)
 {
 	int cmp = TREE_CMP(ub1->ub_txg, ub2->ub_txg);
@@ -1631,8 +1622,10 @@ vdev_uberblock_load(vdev_t *rvd, uberblock_t *ub, nvlist_t **config)
 	 * matches the txg for our uberblock.
 	 */
 	if (cb.ubl_vd != NULL) {
-		vdev_dbgmsg(cb.ubl_vd, "best uberblock found for spa %s. "
-		    "txg %llu", spa->spa_name, (u_longlong_t)ub->ub_txg);
+		vdev_dbgmsg(cb.ubl_vd, "best uberblock found for spa %s, "
+		    "txg=%llu seq=%llu", spa_load_name(spa),
+		    (u_longlong_t)ub->ub_txg,
+		    (u_longlong_t)(MMP_SEQ_VALID(ub) ? MMP_SEQ(ub) : 0));
 
 		if (ub->ub_raidz_reflow_info !=
 		    cb.ubl_latest.ub_raidz_reflow_info) {
@@ -1640,7 +1633,7 @@ vdev_uberblock_load(vdev_t *rvd, uberblock_t *ub, nvlist_t **config)
 			    "spa=%s best uberblock (txg=%llu info=0x%llx) "
 			    "has different raidz_reflow_info than latest "
 			    "uberblock (txg=%llu info=0x%llx)",
-			    spa->spa_name,
+			    spa_load_name(spa),
 			    (u_longlong_t)ub->ub_txg,
 			    (u_longlong_t)ub->ub_raidz_reflow_info,
 			    (u_longlong_t)cb.ubl_latest.ub_txg,
@@ -2056,13 +2049,13 @@ retry:
 	 * Normally, we don't want to try too hard to write every label and
 	 * uberblock.  If there is a flaky disk, we don't want the rest of the
 	 * sync process to block while we retry.  But if we can't write a
-	 * single label out, we should retry with ZIO_FLAG_TRYHARD before
+	 * single label out, we should retry with ZIO_FLAG_IO_RETRY before
 	 * bailing out and declaring the pool faulted.
 	 */
 	if (error != 0) {
-		if ((flags & ZIO_FLAG_TRYHARD) != 0)
+		if ((flags & ZIO_FLAG_IO_RETRY) != 0)
 			return (error);
-		flags |= ZIO_FLAG_TRYHARD;
+		flags |= ZIO_FLAG_IO_RETRY;
 	}
 
 	ASSERT(ub->ub_txg <= txg);
@@ -2113,7 +2106,7 @@ retry:
 	 * are committed to stable storage before the uberblock update.
 	 */
 	if ((error = vdev_label_sync_list(spa, 0, txg, flags)) != 0) {
-		if ((flags & ZIO_FLAG_TRYHARD) != 0) {
+		if ((flags & ZIO_FLAG_IO_RETRY) != 0) {
 			zfs_dbgmsg("vdev_label_sync_list() returned error %d "
 			    "for pool '%s' when syncing out the even labels "
 			    "of dirty vdevs", error, spa_name(spa));
@@ -2137,7 +2130,7 @@ retry:
 	 *	to the new uberblocks.
 	 */
 	if ((error = vdev_uberblock_sync_list(svd, svdcount, ub, flags)) != 0) {
-		if ((flags & ZIO_FLAG_TRYHARD) != 0) {
+		if ((flags & ZIO_FLAG_IO_RETRY) != 0) {
 			zfs_dbgmsg("vdev_uberblock_sync_list() returned error "
 			    "%d for pool '%s'", error, spa_name(spa));
 		}
@@ -2158,7 +2151,7 @@ retry:
 	 * stable storage before the next transaction group begins.
 	 */
 	if ((error = vdev_label_sync_list(spa, 1, txg, flags)) != 0) {
-		if ((flags & ZIO_FLAG_TRYHARD) != 0) {
+		if ((flags & ZIO_FLAG_IO_RETRY) != 0) {
 			zfs_dbgmsg("vdev_label_sync_list() returned error %d "
 			    "for pool '%s' when syncing out the odd labels of "
 			    "dirty vdevs", error, spa_name(spa));

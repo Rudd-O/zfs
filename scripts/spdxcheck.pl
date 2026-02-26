@@ -82,6 +82,11 @@ my $tagged_patterns = q(
 	man/man?/*.?
 	man/man?/*.?.in
 
+	# Build system
+	*.ac
+	*.am
+	*.m4
+
 	# Unsuffixed programs (or generated of same)
 	cmd/zarcstat.in
 	cmd/zarcsummary
@@ -98,8 +103,6 @@ my $tagged_patterns = q(
 
 	# Misc items that have clear licensing info but aren't easily matched,
 	# or are the first of a class that we aren't ready to match yet.
-	config/ax_code_coverage.m4
-	configure.ac
 	module/lua/README.zfs
 	scripts/kmodtool
 	tests/zfs-tests/tests/functional/inheritance/README.config
@@ -124,14 +127,12 @@ my $untagged_patterns = q(
 	include/os/freebsd/spl/sys/inttypes.h
 	include/os/freebsd/spl/sys/mode.h
 	include/os/freebsd/spl/sys/trace.h
-	include/os/freebsd/spl/sys/trace_zfs.h
+	include/os/freebsd/zfs/sys/trace_zfs.h
 	include/os/freebsd/zfs/sys/zpl.h
 	include/os/linux/kernel/linux/page_compat.h
-	lib/libspl/include/os/freebsd/sys/sysmacros.h
 	lib/libspl/include/sys/string.h
-	lib/libspl/include/sys/trace_spl.h
-	lib/libspl/include/sys/trace_zfs.h
 	lib/libzdb/libzdb.c
+	lib/libzpool/include/sys/trace_zfs.h
 	module/lua/setjmp/setjmp.S
 	module/lua/setjmp/setjmp_ppc.S
 	module/zstd/include/sparc_compat.h
@@ -143,7 +144,6 @@ my $untagged_patterns = q(
 	tests/zfs-tests/tests/functional/tmpfile/tmpfile_003_pos.c
 	tests/zfs-tests/tests/functional/tmpfile/tmpfile_test.c
 
-	autogen.sh
 	contrib/bpftrace/zfs-trace.sh
 	contrib/pyzfs/docs/source/conf.py
 	contrib/pyzfs/libzfs_core/test/__init__.py
@@ -192,8 +192,18 @@ my @path_license_tags = (
 	'module/icp' => ['Apache-2.0', 'CDDL-1.0'],
 	'contrib/icp' => ['Apache-2.0', 'CDDL-1.0'],
 
-	# Python bindings are always Apache-2.0
-	'contrib/pyzfs' => ['Apache-2.0'],
+	# Python bindings are always Apache-2.0; CDDL is available for build
+	# files in that dir.
+	'contrib/pyzfs' => ['Apache-2.0', 'CDDL-1.0'],
+
+	# Common licenses for autoconf macros; some of these are complex
+	# with exceptions, so we don't have a "generic" list as such, just
+	# a list of all the ones currently in use.
+	'config' => [
+	    'CDDL-1.0', 'LGPL-2.1-or-later', 'FSFAP', 'FSFULLR',
+	    'GPL-2.0-or-later WITH Autoconf-exception-generic',
+	    'GPL-3.0-or-later WITH Autoconf-exception-macro',
+	],
 );
 
 # This is a list of "special case" license tags that are in use in the tree,
@@ -238,9 +248,6 @@ my %override_file_license_tags = (
 	)],
 	'OpenSSL-standalone' => [qw(
 		module/icp/asm-x86_64/aes/aes_aesni.S
-	)],
-	'LGPL-2.1-or-later' => [qw(
-		config/ax_code_coverage.m4
 	)],
 
 	# Legacy inclusions of BSD-2-Clause files in Linux SPL.

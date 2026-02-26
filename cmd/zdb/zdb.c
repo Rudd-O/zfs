@@ -36,6 +36,7 @@
  * Copyright (c) 2021 Toomas Soome <tsoome@me.com>
  * Copyright (c) 2023, 2024, Klara Inc.
  * Copyright (c) 2023, Rob Norris <robn@despairlabs.com>
+ * Copyright (c) 2026, TrueNAS.
  */
 
 #include <stdio.h>
@@ -89,6 +90,7 @@
 #include <sys/zstd/zstd.h>
 #include <sys/backtrace.h>
 
+#include <libzpool.h>
 #include <libnvpair.h>
 #include <libzutil.h>
 #include <libzfs_core.h>
@@ -738,13 +740,14 @@ usage(void)
 	    "[-U <cache>]\n\t\t<poolname> [<vdev> [<metaslab> ...]]\n"
 	    "\t%s -O [-K <key>] <dataset> <path>\n"
 	    "\t%s -r [-K <key>] <dataset> <path> <destination>\n"
+	    "\t%s -r [-K <key>] -O <dataset> <object-id> <destination>\n"
 	    "\t%s -R [-A] [-e [-V] [-p <path> ...]] [-U <cache>]\n"
 	    "\t\t<poolname> <vdev>:<offset>:<size>[:<flags>]\n"
 	    "\t%s -E [-A] word0:word1:...:word15\n"
 	    "\t%s -S [-AP] [-e [-V] [-p <path> ...]] [-U <cache>] "
 	    "<poolname>\n\n",
 	    cmdname, cmdname, cmdname, cmdname, cmdname, cmdname, cmdname,
-	    cmdname, cmdname, cmdname, cmdname, cmdname);
+	    cmdname, cmdname, cmdname, cmdname, cmdname, cmdname);
 
 	(void) fprintf(stderr, "    Dataset name must include at least one "
 	    "separator character '/' or '@'\n");
@@ -3388,14 +3391,14 @@ zdb_derive_key(dsl_dir_t *dd, uint8_t *key_out)
 static char encroot[ZFS_MAX_DATASET_NAME_LEN];
 static boolean_t key_loaded = B_FALSE;
 
-static void
+static int
 zdb_load_key(objset_t *os)
 {
 	dsl_pool_t *dp;
 	dsl_dir_t *dd, *rdd;
 	uint8_t key[WRAPPING_KEY_LEN];
 	uint64_t rddobj;
-	int err;
+	int err = 0;
 
 	dp = spa_get_dsl(os->os_spa);
 	dd = os->os_dsl_dataset->ds_dir;
@@ -3408,9 +3411,13 @@ zdb_load_key(objset_t *os)
 	dsl_dir_rele(rdd, FTAG);
 
 	if (!zdb_derive_key(dd, key))
-		fatal("couldn't derive encryption key");
-
+		err = EINVAL;
 	dsl_pool_config_exit(dp, FTAG);
+
+	if (err != 0) {
+		fprintf(stderr, "couldn't derive encryption key\n");
+		return (err);
+	}
 
 	ASSERT3U(dsl_dataset_get_keystatus(dd), ==, ZFS_KEYSTATUS_UNAVAILABLE);
 
@@ -3427,16 +3434,20 @@ zdb_load_key(objset_t *os)
 	dsl_crypto_params_free(dcp, (err != 0));
 	fnvlist_free(crypto_args);
 
-	if (err != 0)
-		fatal(
-		    "couldn't load encryption key for %s: %s",
+	if (err != 0) {
+		fprintf(stderr,
+		    "couldn't load encryption key for %s: %s\n",
 		    encroot, err == ZFS_ERR_CRYPTO_NOTSUP ?
 		    "crypto params not supported" : strerror(err));
+		return (err);
+	}
 
 	ASSERT3U(dsl_dataset_get_keystatus(dd), ==, ZFS_KEYSTATUS_AVAILABLE);
 
 	printf("Unlocked encryption root: %s\n", encroot);
 	key_loaded = B_TRUE;
+
+	return (0);
 }
 
 static void
@@ -3479,15 +3490,30 @@ open_objset(const char *path, const void *tag, objset_t **osp)
 			    path, strerror(err));
 			return (err);
 		}
-		dsl_dataset_long_hold(dmu_objset_ds(*osp), tag);
-		dsl_pool_rele(dmu_objset_pool(*osp), tag);
 
-		/* succeeds or dies */
-		zdb_load_key(*osp);
+		/*
+		 * Only try to load the key and unlock the dataset if it is
+		 * actually encrypted; otherwise we'll just crash. Just
+		 * ignore the -K switch entirely otherwise; it's useful to be
+		 * able to provide even if it's not needed.
+		 */
+		if ((*osp)->os_encrypted) {
+			dsl_dataset_long_hold(dmu_objset_ds(*osp), tag);
+			dsl_pool_rele(dmu_objset_pool(*osp), tag);
 
-		/* release it all */
-		dsl_dataset_long_rele(dmu_objset_ds(*osp), tag);
-		dsl_dataset_rele(dmu_objset_ds(*osp), tag);
+			err = zdb_load_key(*osp);
+
+			/* release it all */
+			dsl_dataset_long_rele(dmu_objset_ds(*osp), tag);
+			dsl_dataset_rele(dmu_objset_ds(*osp), tag);
+
+			if (err != 0) {
+				*osp = NULL;
+				return (err);
+			}
+		} else {
+			dmu_objset_rele(*osp, tag);
+		}
 	}
 
 	int ds_hold_flags = key_loaded ? DS_HOLD_FLAG_DECRYPT : 0;
@@ -3496,6 +3522,7 @@ open_objset(const char *path, const void *tag, objset_t **osp)
 	if (err != 0) {
 		(void) fprintf(stderr, "failed to hold dataset '%s': %s\n",
 		    path, strerror(err));
+		*osp = NULL;
 		return (err);
 	}
 	dsl_dataset_long_hold(dmu_objset_ds(*osp), tag);
@@ -7899,11 +7926,11 @@ zdb_set_skip_mmp(char *target)
 	 * Disable the activity check to allow examination of
 	 * active pools.
 	 */
-	mutex_enter(&spa_namespace_lock);
+	spa_namespace_enter(FTAG);
 	if ((spa = spa_lookup(target)) != NULL) {
 		spa->spa_import_flags |= ZFS_IMPORT_SKIP_MMP;
 	}
-	mutex_exit(&spa_namespace_lock);
+	spa_namespace_exit(FTAG);
 }
 
 #define	BOGUS_SUFFIX "_CHECKPOINTED_UNIVERSE"
@@ -9955,7 +9982,7 @@ main(int argc, char **argv)
 	 * which imports the pool to the namespace if it's
 	 * not in the cachefile.
 	 */
-	if (dump_opt['O']) {
+	if (dump_opt['O'] && !dump_opt['r']) {
 		if (argc != 2)
 			usage();
 		dump_opt['v'] = verbose + 3;
@@ -9968,7 +9995,11 @@ main(int argc, char **argv)
 		if (argc != 3)
 			usage();
 		dump_opt['v'] = verbose;
-		error = dump_path(argv[0], argv[1], &object);
+		if (dump_opt['O']) {
+			object = strtoull(argv[1], NULL, 0);
+		} else {
+			error = dump_path(argv[0], argv[1], &object);
+		}
 		if (error != 0)
 			fatal("internal error: %s", strerror(error));
 	}
@@ -10022,13 +10053,13 @@ main(int argc, char **argv)
 				 * try opening the pool after clearing the
 				 * log state.
 				 */
-				mutex_enter(&spa_namespace_lock);
+				spa_namespace_enter(FTAG);
 				if ((spa = spa_lookup(target)) != NULL &&
 				    spa->spa_log_state == SPA_LOG_MISSING) {
 					spa->spa_log_state = SPA_LOG_CLEAR;
 					error = 0;
 				}
-				mutex_exit(&spa_namespace_lock);
+				spa_namespace_exit(FTAG);
 
 				if (!error) {
 					error = spa_open_rewind(target, &spa,

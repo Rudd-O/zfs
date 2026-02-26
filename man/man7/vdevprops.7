@@ -45,7 +45,7 @@ section, below.
 Every vdev has a set of properties that export statistics about the vdev
 as well as control various behaviors.
 Properties are not inherited from top-level vdevs, with the exception of
-checksum_n, checksum_t, io_n, io_t, slow_io_n, and slow_io_t.
+checksum_n, checksum_t, io_n, io_t, slow_io_events, slow_io_n, and slow_io_t.
 .Pp
 The values of numeric properties can be specified using human-readable suffixes
 .Po for example,
@@ -149,6 +149,12 @@ For
 .Sy OpenZFS on FreeBSD
 defaults see
 .Xr zfsd 8 .
+The
+.It Sy slow_io_events
+property controls whether slow I/O events are generated.
+Even when disabled, slow I/Os will be included in the
+.Nm zpool Cm status Fl s
+output.
 .It Sy comment
 A text comment up to 8192 characters long
 .It Sy bootsize
@@ -188,6 +194,23 @@ If this device should perform new allocations, used to disable a device
 when it is scheduled for later removal.
 See
 .Xr zpool-remove 8 .
+.It Sy scheduler Ns = Ns Sy auto Ns | Ns Sy on Ns | Ns Sy off
+Controls how I/O requests are added to the vdev queue when reading or
+writing to this vdev.
+This property can be set on leaf vdevs.
+The value of these properties do not persist across vdev replacement.
+.Bl -tag -compact -width "auto"
+.It Ar auto
+Let ZFS choose which scheduler it thinks will be best.
+Currently, the scheduler will queue I/O if the vdev is backed by a rotational
+block device or file, and not queue otherwise.
+.It Ar on
+Always adds I/O requests to the vdev queue.
+.It Ar off
+Never adds I/O requests to the vdev queue.
+This is not recommended for vdevs backed by spinning disks as it could
+result in starvation.
+.El
 .El
 .Ss User Properties
 In addition to the standard native properties, ZFS supports arbitrary user
