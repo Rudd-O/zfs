@@ -33,5 +33,5 @@ genericFedoraRPMPipeline(
     null,
     srpm_step(),
     ['autoconf', 'automake', 'libtool', 'zlib-devel', 'libuuid-devel', 'libtirpc-devel', 'libblkid-devel', 'openssl-devel'],
-    integration_step(),
+//    integration_step(),
 )

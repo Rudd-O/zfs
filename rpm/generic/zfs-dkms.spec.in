@@ -32,9 +32,9 @@ Requires(post): gcc, make, perl, diffutils
 
 # Hold back kernel upgrades if kernel is not supported by ZFS
 %if 0%{?rhel}%{?fedora}%{?mageia}%{?suse_version}%{?openEuler}
-Requires:       kernel-devel >= @ZFS_META_KVER_MIN@, kernel-devel <= @ZFS_META_KVER_MAX@.999
-Requires(post): kernel-devel >= @ZFS_META_KVER_MIN@, kernel-devel <= @ZFS_META_KVER_MAX@.999
-Conflicts:      kernel-devel < @ZFS_META_KVER_MIN@, kernel-devel > @ZFS_META_KVER_MAX@.999
+Requires:       kernel-devel >= @ZFS_META_KVER_MIN@, kernel-devel <= %{?qubes:1000:}@ZFS_META_KVER_MAX@.999
+Requires(post): kernel-devel >= @ZFS_META_KVER_MIN@, kernel-devel <= %{?qubes:1000:}@ZFS_META_KVER_MAX@.999
+Conflicts:      kernel-devel < @ZFS_META_KVER_MIN@, kernel-devel > %{?qubes:1000:}@ZFS_META_KVER_MAX@.999
 Requires:       kernel-uname-r >= @ZFS_META_KVER_MIN@, kernel-uname-r <= @ZFS_META_KVER_MAX@.999
 Requires(post): kernel-uname-r >= @ZFS_META_KVER_MIN@, kernel-uname-r <= @ZFS_META_KVER_MAX@.999
 Conflicts:      kernel-uname-r < @ZFS_META_KVER_MIN@, kernel-uname-r > @ZFS_META_KVER_MAX@.999
