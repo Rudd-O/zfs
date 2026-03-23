@@ -1,3 +1,4 @@
-["FEDORA_RELEASES": "43"]
-// fc39 needed for zfs-fedora-installer OS version.
+["FEDORA_RELEASES": "43 41"]
+// fc43 needed for zfs-fedora-installer OS version.
+// fc41 for Qubes
 // cannot use QUBES_RELEASES since zfs-fedora-installer will not test those
